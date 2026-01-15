@@ -3,13 +3,12 @@ using Microsoft.EntityFrameworkCore;
 
 namespace dotnet.Data
 {
-    public class MySQLDbContext : DbContext
+    public class PostgreSQLDbContext : DbContext
     {
-        public MySQLDbContext(DbContextOptions<MySQLDbContext> options) : base(options)
+        public PostgreSQLDbContext(DbContextOptions<PostgreSQLDbContext> options) : base(options)
         {
         }
 
-        // Thêm key bởi khi không sử dụng Id gốc ở Entity, EF Core không tự động nhận diện được
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             //modelBuilder.Entity<CourseNotification>()
@@ -21,7 +20,6 @@ namespace dotnet.Data
 
             base.OnModelCreating(modelBuilder);
         }
-
-        public DbSet<SetUp> SetUps { get; set; }
+        public DbSet<User> Users { get; set; }
     }
 }
