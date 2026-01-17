@@ -10,14 +10,14 @@ namespace dotnet.Services
 {
     public class AuthService
     {
-        private readonly PostgreSQLDbContext dbContext;
+        private readonly MySQLDbContext dbContext;
         private readonly IConfiguration configuration;
         private readonly IHttpContextAccessor httpContextAccessor;
 
-        public AuthService(PostgreSQLDbContext postgreSQLDbContext, IConfiguration configuration,
+        public AuthService(MySQLDbContext mySQLDbContext, IConfiguration configuration,
             IHttpContextAccessor httpContextAccessor)
         {
-            dbContext = postgreSQLDbContext;
+            dbContext = mySQLDbContext;
             this.configuration = configuration;
             this.httpContextAccessor = httpContextAccessor;
         }

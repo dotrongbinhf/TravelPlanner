@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
+using MongoDB.Driver;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
@@ -18,17 +19,19 @@ namespace dotnet.Controllers
     [Route("api/[controller]")]
     public class AuthController : ControllerBase
     {
-        private readonly PostgreSQLDbContext dbContext;
+        private readonly MySQLDbContext dbContext;
         private readonly IConfiguration configuration;
         private readonly IHttpContextAccessor httpContextAccessor;
         private readonly AuthService authService;
-        public AuthController(PostgreSQLDbContext postgreSQLDbContext, IConfiguration configuration,
-            IHttpContextAccessor httpContextAccessor, AuthService authService)
+        private readonly IMongoCollection<Place> placesCollection;
+        public AuthController(MySQLDbContext mySQLDbContext, IConfiguration configuration,
+            IHttpContextAccessor httpContextAccessor, AuthService authService, MongoDbService mongoDbService)
         {
-            dbContext = postgreSQLDbContext;
+            dbContext = mySQLDbContext;
             this.configuration = configuration;
             this.httpContextAccessor = httpContextAccessor;
             this.authService = authService;
+            placesCollection = mongoDbService.Database.GetCollection<Place>("Place");
         }
 
         [HttpGet]
@@ -36,8 +39,13 @@ namespace dotnet.Controllers
         public async Task<IActionResult> GetAllUser()
         {
             var users = await dbContext.Users.ToListAsync();
+            //var builder = Builders<Place>.Filter;
+            //var filters = new List<FilterDefinition<Place>>();
+            //filters.Add(builder.Eq(doc => doc.Id, id));
+            var results = await placesCollection.Find(FilterDefinition<Place>.Empty).ToListAsync();
+            return Ok(results);
 
-            return Ok(users);
+            //return Ok(users);
         }
 
         [HttpPost("login")]
