@@ -24,6 +24,7 @@ import { TokenStorage } from "@/utils/tokenStorage";
 import { AxiosError } from "axios";
 import toast from "react-hot-toast";
 import { NAV_ITEMS } from "@/constants/routes";
+import { cn } from "@/lib/utils";
 
 export default function Header() {
   const pathname = usePathname();
@@ -51,11 +52,6 @@ export default function Header() {
       router.push("/login");
     } catch (error) {
       console.error("Logout failed:", error);
-      // if (error instanceof AxiosError) {
-      //   toast.error(error.response?.data ?? "Unexpected Error");
-      // } else {
-      //   toast.error("Unexpected Logout Error");
-      // }
     }
   };
 
@@ -81,7 +77,12 @@ export default function Header() {
                   <NavigationMenuItem key={item.href}>
                     <Link href={item.href} legacyBehavior passHref>
                       <NavigationMenuLink
-                        className={navigationMenuTriggerStyle()}
+                        className={cn(
+                          navigationMenuTriggerStyle(),
+                          isActive(item.href)
+                            ? "!bg-blue-50 !text-blue-700"
+                            : ""
+                        )}
                         active={isActive(item.href)}
                       >
                         {item.label}
