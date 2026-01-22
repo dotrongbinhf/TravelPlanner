@@ -4,12 +4,12 @@
     {
         public Guid Id { get; set; }
         public Guid OwnerId { get; set; }
-        public string Title { get; set; } = string.Empty;
-        public string Description { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
         public string CoverImageUrl { get; set; } = string.Empty;
-        public DateTime StartTime { get; set; }
-        public DateTime EndTime { get; set; }
+        public DateTimeOffset StartTime { get; set; }
+        public DateTimeOffset EndTime { get; set; }
         public double Budget { get; set; }
+        public string CurrencyCode { get; set; } = "USD";
 
         public ICollection<ItineraryItem> ItineraryItems { get; set; } = new List<ItineraryItem>();
         public ICollection<ExpenseItem> ExpenseItems { get; set; } = new List<ExpenseItem>();

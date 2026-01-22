@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LogOut, Settings, User } from "lucide-react";
+import { LogOut, Settings, User, Plus } from "lucide-react";
+import { useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -19,23 +20,37 @@ import {
   NavigationMenuList,
   navigationMenuTriggerStyle,
 } from "@/components/ui/navigation-menu";
+import { CustomDialog } from "@/components/custom-dialog";
+import { DateRangePicker } from "@/components/date-range-picker";
+import { CurrencyInput } from "@/components/currency-input";
 import { logout } from "@/api/auth/auth";
 import { TokenStorage } from "@/utils/tokenStorage";
-import { AxiosError } from "axios";
 import toast from "react-hot-toast";
 import { NAV_ITEMS } from "@/constants/routes";
 import { cn } from "@/lib/utils";
+import { CreatePlanRequest } from "@/types/plan";
+import { AxiosError } from "axios";
+import { createPlan } from "@/api/plan/plan";
 
 export default function Header() {
   const pathname = usePathname();
   const router = useRouter();
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+
+  // Form state
+  const [planName, setPlanName] = useState("");
+  const [startDate, setStartDate] = useState<Date | null>(null);
+  const [endDate, setEndDate] = useState<Date | null>(null);
+  const [budget, setBudget] = useState("");
+  const [currency, setCurrency] = useState("USD");
 
   const user = {
-    name: "dotrongbinhf",
+    username: "dotrongbinhf",
+    name: "Do Trong Binh",
     avatar: "/images/auth/login-thumbnail.jpg",
   };
 
-  const isActive = (href: string) => pathname === href;
+  const isActive = (href: string) => pathname.includes(href);
 
   const getInitials = (name: string) => {
     const parts = name.trim().split(/\s+/);
@@ -55,9 +70,52 @@ export default function Header() {
     }
   };
 
+  const handleCreatePlan = async () => {
+    // Logic để tạo plan mới
+    const newPlan = {
+      name: planName,
+      startTime: startDate,
+      endTime: endDate,
+      budget: parseFloat(budget),
+      currencyCode: currency,
+    } as CreatePlanRequest;
+    // You can call your API here to create the plan using newPlan object
+    try {
+      const response = await createPlan(newPlan);
+      toast.success("Plan created successfully!");
+      router.replace("/plans/" + response.id);
+    } catch (error) {
+      console.error("Create plan failed:", error);
+      if (error instanceof AxiosError) {
+        toast.error(error.response?.data ?? "Unexpected Error");
+      } else {
+        toast.error("Unexpected Create Plan Error");
+      }
+    }
+
+    // Reset form
+    setPlanName("");
+    setStartDate(null);
+    setEndDate(null);
+    setBudget("");
+    setCurrency("USD");
+  };
+
+  const handleDialogClose = (open: boolean) => {
+    setIsDialogOpen(open);
+    if (!open) {
+      // Reset form when dialog closes
+      setPlanName("");
+      setStartDate(null);
+      setEndDate(null);
+      setBudget("");
+      setCurrency("USD");
+    }
+  };
+
   return (
     <header className="w-full bg-white shadow-sm border-b border-gray-200">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="w-full mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           <div className="flex gap-8 items-center">
             {/* Logo & Brand Name */}
@@ -81,7 +139,7 @@ export default function Header() {
                           navigationMenuTriggerStyle(),
                           isActive(item.href)
                             ? "!bg-blue-50 !text-blue-700"
-                            : ""
+                            : "",
                         )}
                         active={isActive(item.href)}
                       >
@@ -94,52 +152,140 @@ export default function Header() {
             </NavigationMenu>
           </div>
 
-          {/* User Profile Dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-100 transition-all duration-200 outline-none">
-                <span className="text-sm font-medium text-gray-700 hidden sm:block">
-                  {user.name}
-                </span>
-                <Avatar className="h-10 w-10 border-2 border-gray-200">
-                  <AvatarImage src={user.avatar} alt={user.name} />
-                  <AvatarFallback className="bg-blue-400 text-white">
-                    {getInitials(user.name)}
-                  </AvatarFallback>
-                </Avatar>
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem asChild>
-                <Link
-                  href="/profile"
-                  className="flex items-center gap-3 cursor-pointer"
+          <div className="flex items-center gap-2">
+            {/* New Plan Button */}
+            <button
+              onClick={() => setIsDialogOpen(true)}
+              className="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm px-3 py-3 rounded-lg flex items-center gap-2 transition-colors duration-200"
+            >
+              <Plus className="w-4 h-4" strokeWidth={3} />
+              New Plan
+            </button>
+
+            {/* User Profile Dropdown */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="cursor-pointer flex items-center gap-3 px-2 transition-all duration-200 outline-none">
+                  <Avatar className="h-10 w-10 border-1 border-gray-200">
+                    <AvatarImage src={user.avatar} alt={user.name} />
+                    <AvatarFallback className="bg-blue-400 text-white">
+                      {getInitials(user.name)}
+                    </AvatarFallback>
+                  </Avatar>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-60">
+                <DropdownMenuItem
+                  className="cursor-text focus:bg-transparent focus:text-inherit"
+                  onSelect={(e) => e.preventDefault()}
                 >
-                  <User className="w-4 h-4" />
-                  <span>Profile</span>
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link
-                  href="/settings"
-                  className="flex items-center gap-3 cursor-pointer"
+                  <div className="flex items-center gap-3 pointer-events-none">
+                    <Avatar className="h-10 w-10 border-1 border-gray-200">
+                      <AvatarImage src={user.avatar} alt={user.name} />
+                      <AvatarFallback className="bg-blue-400 text-white">
+                        {getInitials(user.name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex flex-col leading-tight pointer-events-auto">
+                      <span className="text-sm font-semibold text-gray-900 select-text">
+                        {user.username}
+                      </span>
+                      <span className="text-xs text-gray-500 select-text">
+                        {user.name || ""}
+                      </span>
+                    </div>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link
+                    href="/profile"
+                    className="flex items-center gap-3 cursor-pointer"
+                  >
+                    <User className="w-4 h-4" />
+                    <span>Profile</span>
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link
+                    href="/settings"
+                    className="flex items-center gap-3 cursor-pointer"
+                  >
+                    <Settings className="w-4 h-4" />
+                    <span>Settings</span>
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={handleLogout}
+                  className="text-red-600 focus:text-red-600 focus:bg-red-50 cursor-pointer flex items-center gap-3"
                 >
-                  <Settings className="w-4 h-4" />
-                  <span>Settings</span>
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={handleLogout}
-                className="text-red-600 focus:text-red-600 focus:bg-red-50 cursor-pointer flex items-center gap-3"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>Logout</span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                  <LogOut className="w-4 h-4" />
+                  <span>Logout</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
       </div>
+
+      {/* New Plan Dialog */}
+      <CustomDialog
+        open={isDialogOpen}
+        onOpenChange={handleDialogClose}
+        title="Create New Plan"
+        description="Fill in the details to create your new travel plan"
+        cancelLabel="Cancel"
+        confirmLabel="Create"
+        onConfirm={handleCreatePlan}
+        isDisabled={
+          planName.trim() === "" || !startDate || !endDate || budget === ""
+        }
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-medium text-gray-700">
+              Plan Name <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={planName}
+              onChange={(e) => setPlanName(e.target.value)}
+              placeholder="E.g. Hanoi Friendship"
+              className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium text-gray-700">
+              Travel Dates
+              {/* <span className="text-red-500">*</span> */}
+            </label>
+            <div className="mt-1">
+              <DateRangePicker
+                startDate={startDate}
+                endDate={endDate}
+                onChange={(start, end) => {
+                  setStartDate(start);
+                  setEndDate(end);
+                }}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium text-gray-700">Budget</label>
+            <div className="mt-1">
+              <CurrencyInput
+                value={budget}
+                currency={currency}
+                onValueChange={setBudget}
+                onCurrencyChange={setCurrency}
+              />
+            </div>
+          </div>
+        </div>
+      </CustomDialog>
     </header>
   );
 }

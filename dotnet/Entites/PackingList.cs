@@ -8,5 +8,6 @@
         public int Order { get; set; }
 
         public Plan Plan { get; set; }
+        public ICollection<PackingItem> PackingItems { get; set; } = new List<PackingItem>();
     }
 }

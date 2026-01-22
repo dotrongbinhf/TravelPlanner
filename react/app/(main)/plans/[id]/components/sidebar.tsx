@@ -1,6 +1,13 @@
 "use client";
 
-import { Calendar, Wallet, Backpack, Users, StickyNote } from "lucide-react";
+import {
+  Calendar,
+  Wallet,
+  Backpack,
+  Users,
+  StickyNote,
+  LayoutDashboard,
+} from "lucide-react";
 
 interface SidebarProps {
   activeSection: string;
@@ -8,6 +15,7 @@ interface SidebarProps {
 }
 
 export const sectionItems = [
+  { id: "overview", title: "Overview", icon: LayoutDashboard },
   { id: "itinerary", title: "Itinerary", icon: Calendar },
   { id: "budget", title: "Budget", icon: Wallet },
   { id: "packing-lists", title: "Packing Lists", icon: Backpack },

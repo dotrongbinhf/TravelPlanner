@@ -1,12 +1,15 @@
 "use client";
 
 import { useEffect, useCallback, useState, RefObject } from "react";
+import Overview from "./sections/overview";
 import Itinerary from "./sections/itinerary";
 import Budget from "./sections/budget";
 import PackingLists from "./sections/packing-lists";
 import Teammates from "./sections/teammates";
 import Notes from "./sections/notes";
 import { sectionItems } from "./sidebar";
+import { Plan } from "@/types/plan";
+import { pl } from "date-fns/locale";
 
 interface PlannerProps {
   readonly sectionRefs: RefObject<{
@@ -14,48 +17,15 @@ interface PlannerProps {
   }>;
   readonly scrollContainerRef: RefObject<HTMLDivElement | null>;
   readonly onSectionInView: (sectionId: string) => void;
+  readonly planData: Plan;
 }
 
 export default function Planner({
   sectionRefs,
   scrollContainerRef,
   onSectionInView,
+  planData,
 }: PlannerProps) {
-  const [spacerHeight, setSpacerHeight] = useState(0);
-  const [notesContainerRef, setNotesContainerRef] =
-    useState<HTMLDivElement | null>(null);
-
-  // Calculate spacer height for Notes section
-  useEffect(() => {
-    const calculateSpacerHeight = () => {
-      if (!notesContainerRef) return;
-
-      const viewportHeight = window.innerHeight;
-      const notesHeight = notesContainerRef.offsetHeight;
-
-      // h-screen - header - outside container Padding * 2 - sectionGap - notesHeight
-      const calculatedHeight = viewportHeight - 64 - 2 * 16 - 24 - notesHeight;
-
-      setSpacerHeight(Math.max(0, calculatedHeight));
-    };
-
-    calculateSpacerHeight();
-
-    // Recalculate on resize
-    window.addEventListener("resize", calculateSpacerHeight);
-
-    // Recalculate on changing content
-    const resizeObserver = new ResizeObserver(calculateSpacerHeight);
-    if (notesContainerRef) {
-      resizeObserver.observe(notesContainerRef);
-    }
-
-    return () => {
-      window.removeEventListener("resize", calculateSpacerHeight);
-      resizeObserver.disconnect();
-    };
-  }, [notesContainerRef]);
-
   const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -95,10 +65,24 @@ export default function Planner({
   return (
     <div
       ref={scrollContainerRef}
-      className="w-full h-full overflow-y-auto bg-white pr-4 custom-scrollbar"
+      className="w-full h-full overflow-y-auto pr-4 custom-scrollbar"
     >
       <div className="flex flex-col gap-6">
-        <div className="bg-white rounded-lg border-2 border-gray-200 p-6">
+        <div className="rounded-lg border-2 border-gray-200 p-6">
+          <Overview
+            ref={(el) => {
+              sectionRefs.current["overview"] = el;
+            }}
+            name={planData.name}
+            coverImageUrl={planData.coverImageUrl}
+            startTime={planData.startTime}
+            endTime={planData.endTime}
+            budget={planData.budget}
+            currencyCode={planData.currencyCode}
+          />
+        </div>
+
+        <div className="rounded-lg border-2 border-gray-200 p-6">
           <Itinerary
             ref={(el) => {
               sectionRefs.current["itinerary"] = el;
@@ -106,7 +90,7 @@ export default function Planner({
           />
         </div>
 
-        <div className="bg-white rounded-lg border-2 border-gray-200 p-6">
+        <div className="rounded-lg border-2 border-gray-200 p-6">
           <Budget
             ref={(el) => {
               sectionRefs.current["budget"] = el;
@@ -114,7 +98,7 @@ export default function Planner({
           />
         </div>
 
-        <div className="bg-white rounded-lg border-2 border-gray-200 p-6">
+        <div className="rounded-lg border-2 border-gray-200 p-6">
           <PackingLists
             ref={(el) => {
               sectionRefs.current["packing-lists"] = el;
@@ -122,7 +106,7 @@ export default function Planner({
           />
         </div>
 
-        <div className="bg-white rounded-lg border-2 border-gray-200 p-6">
+        <div className="rounded-lg border-2 border-gray-200 p-6">
           <Teammates
             ref={(el) => {
               sectionRefs.current["teammates"] = el;
@@ -130,10 +114,7 @@ export default function Planner({
           />
         </div>
 
-        <div
-          ref={setNotesContainerRef}
-          className="bg-white rounded-lg border-2 border-gray-200 p-6"
-        >
+        <div className="rounded-lg border-2 border-gray-200 p-6">
           <Notes
             ref={(el) => {
               sectionRefs.current["notes"] = el;
@@ -142,7 +123,7 @@ export default function Planner({
         </div>
 
         {/* Additional Spacer */}
-        <div style={{ height: spacerHeight }} aria-hidden="true" />
+        <div style={{ height: "100vh" }} aria-hidden="true" />
       </div>
     </div>
   );
