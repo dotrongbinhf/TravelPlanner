@@ -3,30 +3,23 @@
 import { cn } from "@/lib/utils";
 import { Note } from "@/types/note";
 import { CirclePlus } from "lucide-react";
-import { forwardRef, useEffect, useRef, useState } from "react";
+import { Dispatch, forwardRef, SetStateAction, useEffect, useRef, useState } from "react";
 import NoteCard from "./note-card";
+import { createNote, deleteNote, updateNote } from "@/api/note/note";
+import { CreateNoteRequest } from "@/api/note/types";
+import toast from "react-hot-toast";
+import { ConfirmDeleteModal } from "@/components/confirm-delete-modal";
 
 interface NotesProps {
-  className?: string;
+  planId: string;
+  notes: Note[];
+  updateNotes: (notes: Note[]) => void;
 }
 
 const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
-  { className },
+  { planId, notes, updateNotes },
   ref,
 ) {
-  const [notes, setNotes] = useState<Note[]>([
-    {
-      id: "1",
-      title: "Emergency Contact",
-      content:
-        "Remember to contact the local embassy in case of any emergencies.",
-    },
-    {
-      id: "2",
-      title: "Hotel Info",
-      content: "Check-in at 2PM. Front desk is available 24/7.",
-    },
-  ]);
 
   const [isAdding, setIsAdding] = useState(false);
   const [newTitle, setNewTitle] = useState("");
@@ -35,6 +28,10 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
+
+  // Delete confirmation modal state
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [noteToDelete, setNoteToDelete] = useState<Note | null>(null);
 
   const newNoteRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -47,14 +44,20 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
     setNewContent("");
   };
 
-  const handleConfirmAdd = () => {
+  const handleConfirmAdd = async () => {
     if (newTitle.trim() || newContent.trim()) {
-      const newNote: Note = {
-        id: Date.now().toString(),
+      const newCreateNoteRequest: CreateNoteRequest = {
         title: newTitle.trim() || "Untitled",
         content: newContent.trim(),
       };
-      setNotes((prev) => [...prev, newNote]);
+      try {
+        const newNote = await createNote(planId, newCreateNoteRequest);
+        updateNotes([...notes, newNote]);
+        toast.success("Created New Note");
+      } catch (error) {
+        console.error("Error creating note:", error);
+        toast.error("Failed to create note");
+      }
     }
     handleCancelAdd();
   };
@@ -65,8 +68,23 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
     setNewContent("");
   };
 
-  const handleDeleteNote = (noteId: string) => {
-    setNotes((prev) => prev.filter((note) => note.id !== noteId));
+  const handleDeleteNote = (note: Note) => {
+    setNoteToDelete(note);
+    setDeleteModalOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!noteToDelete) return;
+    try {
+      await deleteNote(noteToDelete.id);
+      updateNotes(notes.filter((note) => note.id !== noteToDelete.id));
+      toast.success("Note deleted successfully");
+    } catch (error) {
+      console.error("Error deleting note:", error);
+      toast.error("Failed to delete note");
+    } finally {
+      setNoteToDelete(null);
+    }
   };
 
   const handleEditNote = (note: Note) => {
@@ -77,8 +95,14 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
 
   const handleConfirmEdit = () => {
     if (editingId && (editTitle.trim() || editContent.trim())) {
-      setNotes((prev) =>
-        prev.map((note) =>
+      try {
+        updateNote(editingId, { title: editTitle.trim() || "Untitled", content: editContent.trim() });
+        toast.success("Updated Note");
+      } catch (error) {
+        console.error("Error updating note:", error);
+        toast.error("Failed to update note");
+      }
+      updateNotes(notes.map((note) =>
           note.id === editingId
             ? {
                 ...note,
@@ -86,8 +110,7 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
                 content: editContent.trim(),
               }
             : note,
-        ),
-      );
+      ));
     }
     handleCancelEdit();
   };
@@ -145,7 +168,7 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
       ref={ref}
       id="notes"
       data-section-id="notes"
-      className={cn(className, "flex flex-col gap-4")}
+      className="flex flex-col gap-4"
     >
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-gray-800">Notes</h2>
@@ -173,7 +196,7 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
             onConfirm={handleConfirmEdit}
             onCancel={handleCancelEdit}
             onEdit={() => handleEditNote(note)}
-            onDelete={() => handleDeleteNote(note.id)}
+            onDelete={() => handleDeleteNote(note)}
             titleInputRef={editTitleInputRef}
             containerRef={editNoteRef}
           />
@@ -193,6 +216,14 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
           />
         )}
       </div>
+
+      <ConfirmDeleteModal
+        open={deleteModalOpen}
+        onOpenChange={setDeleteModalOpen}
+        title="Delete Note"
+        description={`Are you sure you want to delete "${noteToDelete?.title || 'this note'}" ? This action cannot be undone !`}
+        onConfirm={handleConfirmDelete}
+      />
     </section>
   );
 });

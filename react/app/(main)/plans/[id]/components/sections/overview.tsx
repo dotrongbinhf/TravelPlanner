@@ -28,13 +28,12 @@ interface OverviewProps {
   endTime: Date;
   budget: number;
   currencyCode: string;
-  plan: Plan;
-  setPlan: Dispatch<SetStateAction<Plan>>;
+  setPlan: Dispatch<SetStateAction<Plan | null>>;
 }
 
 const Overview = forwardRef<HTMLDivElement, OverviewProps>(
   (
-    { planId, name, coverImageUrl, startTime, endTime, budget, currencyCode, plan, setPlan },
+    { planId, name, coverImageUrl, startTime, endTime, budget, currencyCode, setPlan },
     ref,
   ) => {
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -127,10 +126,13 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
       setIsUploading(true);
       try {
         const response = await updatePlanCoverImage(planId, selectedFile);
-        setPlan((prev) => ({
-          ...prev,
-          coverImageUrl: response.coverImageUrl,
-        }));
+        setPlan((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            coverImageUrl: response.coverImageUrl,
+          };
+        });
 
         if (previewUrl) {
           URL.revokeObjectURL(previewUrl);
@@ -169,7 +171,13 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
           const response = await updatePlanBasicInfo(planId, {
             name: editedName.trim(),
           });
-          setPlan({ ...plan, name: editedName.trim() });
+          setPlan((prev) => {
+            if (!prev) return null;
+            return {
+              ...prev,
+              name: editedName.trim(),
+            };
+          });
           toast.success("Updated Plan Name");
         } catch (error) {
           console.error("Update failed:", error);

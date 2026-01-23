@@ -6,7 +6,7 @@
         public Guid PlanId { get; set; }
         public Guid PlaceId { get; set; }
         public DateTime Date { get; set; }
-        public int Order { get; set; }
+        //public int Order { get; set; }
         public DateTime StartTime { get; set; }
         public DateTime EndTime { get; set; }
         public string? Note { get; set; }

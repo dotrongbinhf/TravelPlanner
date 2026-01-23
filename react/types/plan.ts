@@ -1,3 +1,6 @@
+import { Note } from "./note";
+import { PackingList } from "./packingList";
+
 export type Plan = {
   id: string;
   ownerId: string;
@@ -7,12 +10,6 @@ export type Plan = {
   endTime: Date;
   budget: number;
   currencyCode: string;
-};
-
-export type CreatePlanRequest = {
-  name: string;
-  startTime: Date;
-  endTime: Date;
-  budget: number;
-  currencyCode: string;
+  notes: Note[];
+  packingLists: PackingList[];
 };

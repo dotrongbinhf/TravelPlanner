@@ -28,9 +28,9 @@ import { TokenStorage } from "@/utils/tokenStorage";
 import toast from "react-hot-toast";
 import { NAV_ITEMS } from "@/constants/routes";
 import { cn } from "@/lib/utils";
-import { CreatePlanRequest } from "@/types/plan";
 import { AxiosError } from "axios";
 import { createPlan } from "@/api/plan/plan";
+import { CreatePlanRequest } from "@/api/plan/types";
 
 export default function Header() {
   const pathname = usePathname();

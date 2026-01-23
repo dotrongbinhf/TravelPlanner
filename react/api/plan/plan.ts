@@ -1,5 +1,6 @@
-import { CreatePlanRequest, Plan } from "@/types/plan";
+import { Plan } from "@/types/plan";
 import API from "@/utils/api";
+import { CreatePlanRequest } from "./types";
 
 const APP_CONFIG_URL = "/api/plan";
 

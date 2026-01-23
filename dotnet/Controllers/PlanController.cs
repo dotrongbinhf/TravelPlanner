@@ -42,7 +42,7 @@ namespace dotnet.Controllers
         }
 
         [HttpGet("{id:Guid}")]
-        public async Task<IActionResult> GetPlanById(Guid id)
+        public async Task<ActionResult<PlanDto>> GetPlanById(Guid id)
         {
             var userId = _currentUser.Id;
             if(userId == null)
@@ -50,12 +50,49 @@ namespace dotnet.Controllers
                 return Unauthorized();
             }
 
-            var result = await dbContext.Plans.Where(el => el.Id == id).FirstOrDefaultAsync();
+            var result = await dbContext.Plans
+                .Where(el => el.Id == id)
+                .Include(el => el.Notes)
+                .Include(el => el.PackingLists)
+                .ThenInclude(pl => pl.PackingItems)
+                .FirstOrDefaultAsync();
+
             if(result == null)
             {
                 return NotFound();
             }
-            return Ok(result);
+
+            return Ok(new PlanDto
+            {
+                Id = result.Id,
+                OwnerId = result.OwnerId,
+                Name = result.Name,
+                CoverImageUrl = result.CoverImageUrl,
+                StartTime = result.StartTime,
+                EndTime = result.EndTime,
+                Budget = result.Budget,
+                CurrencyCode = result.CurrencyCode,
+                Notes = result.Notes.Select(note => new Dtos.Note.NoteDto
+                {
+                    Id = note.Id,
+                    PlanId = note.PlanId,
+                    Title = note.Title,
+                    Content = note.Content
+                }).ToList(),
+                PackingLists = result.PackingLists.Select(pl => new Dtos.PackingList.PackingListDto
+                {
+                    Id = pl.Id,
+                    PlanId = pl.PlanId,
+                    Name = pl.Name,
+                    PackingItems = pl.PackingItems.Select(item => new Dtos.PackingItem.PackingItemDto
+                    {
+                        Id = item.Id,
+                        PackingListId = item.PackingListId,
+                        Name = item.Name,
+                        IsPacked = item.IsPacked
+                    }).ToList()
+                }).ToList()
+            });
         }
 
         [HttpPost]

@@ -1,4 +1,6 @@
-import { PackingList } from "@/types/packing-list";
+import { CheckIcon } from "@/components/ui/check";
+import { PackingList } from "@/types/packingList";
+import { PackingItem } from "@/types/packingItem";
 import {
   Check,
   Circle,
@@ -22,9 +24,9 @@ interface PackingListCardProps {
   onEdit?: () => void;
   onDelete?: () => void;
   onToggleItem?: (itemId: string) => void;
-  onAddItem?: (itemName: string) => void;
+  onAddItem?: (itemName: string) => Promise<void>;
   onEditItem?: (itemId: string, newName: string) => void;
-  onDeleteItem?: (itemId: string) => void;
+  onDeleteItem?: (item: PackingItem) => void;
   nameInputRef?: React.RefObject<HTMLInputElement | null>;
   containerRef?: React.RefObject<HTMLDivElement | null>;
 }
@@ -99,9 +101,9 @@ export default function PackingListCard({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [editingItemId]);
 
-  const handleConfirmAddItem = () => {
+  const handleConfirmAddItem = async () => {
     if (newItemName.trim() && onAddItem) {
-      onAddItem(newItemName.trim());
+      await onAddItem(newItemName.trim());
     }
     setIsAddingItem(false);
     setNewItemName("");
@@ -194,14 +196,14 @@ export default function PackingListCard({
       <div
         className={`flex flex-col gap-3 ${isItemsDisabled ? "opacity-50 cursor-not-allowed" : ""}`}
       >
-        {list?.items.map((item) => (
+        {list?.packingItems?.map((item) => (
           <div key={item.id}>
             {editingItemId === item.id ? (
               <div
                 ref={editItemContainerRef}
-                className="p-3 bg-gray-100 rounded-lg flex items-center gap-2 border-2 border-blue-400 border-dashed"
+                className="font-medium p-3 bg-gray-100 rounded-lg flex items-center gap-2 border-2 border-blue-400 border-dashed"
               >
-                {item.checked ? (
+                {item.isPacked ? (
                   <Check
                     className="text-white bg-[#2B7FFF] rounded-full p-1"
                     size={18}
@@ -242,17 +244,18 @@ export default function PackingListCard({
               </div>
             ) : (
               <div
-                className={`group/item p-3 bg-gray-100 rounded-lg flex items-center justify-between ${isItemsDisabled ? "pointer-events-none" : ""}`}
+                className={`font-medium group/item p-3 bg-gray-100 rounded-lg flex items-center justify-between ${isItemsDisabled ? "pointer-events-none" : ""}`}
               >
                 <div
                   className="flex items-center gap-2 cursor-pointer flex-1"
                   onClick={() => onToggleItem?.(item.id)}
                 >
-                  {item.checked ? (
-                    <Check
+                  {item.isPacked ? (
+                    <CheckIcon
                       className="text-white bg-[#2B7FFF] rounded-full p-1"
-                      size={18}
-                      strokeWidth={3}
+                      size={10}
+                      animateOnMount={true}
+                      disableHover={true}
                     />
                   ) : (
                     <Circle size={18} className="text-gray-400" />
@@ -270,7 +273,7 @@ export default function PackingListCard({
                   </button>
                   <button
                     className="cursor-pointer rounded-md p-1.5 bg-red-400 hover:bg-red-500 text-white"
-                    onClick={() => onDeleteItem?.(item.id)}
+                    onClick={() => onDeleteItem?.(item)}
                     title="Delete item"
                   >
                     <Trash2 size={14} />
@@ -285,7 +288,7 @@ export default function PackingListCard({
         {isAddingItem ? (
           <div
             ref={newItemContainerRef}
-            className={`p-3 bg-gray-100 rounded-lg flex items-center gap-2 border-2 border-blue-400 border-dashed ${isItemsDisabled ? "pointer-events-none" : ""}`}
+            className={`font-medium p-3 bg-gray-100 rounded-lg flex items-center gap-2 border-2 border-blue-400 border-dashed ${isItemsDisabled ? "pointer-events-none" : ""}`}
           >
             <Circle size={18} className="text-gray-400" />
             <input

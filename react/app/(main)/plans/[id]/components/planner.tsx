@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useCallback, useState, RefObject, SetStateAction, Dispatch } from "react";
+import {
+  useEffect,
+  useCallback,
+  useState,
+  RefObject,
+  SetStateAction,
+  Dispatch,
+} from "react";
 import Overview from "./sections/overview";
 import Itinerary from "./sections/itinerary";
 import Budget from "./sections/budget";
@@ -9,7 +16,8 @@ import Teammates from "./sections/teammates";
 import Notes from "./sections/notes";
 import { sectionItems } from "./sidebar";
 import { Plan } from "@/types/plan";
-import { pl } from "date-fns/locale";
+import { Note } from "@/types/note";
+import { PackingList } from "@/types/packingList";
 
 interface PlannerProps {
   readonly sectionRefs: RefObject<{
@@ -18,7 +26,7 @@ interface PlannerProps {
   readonly scrollContainerRef: RefObject<HTMLDivElement | null>;
   readonly onSectionInView: (sectionId: string) => void;
   readonly plan: Plan;
-  readonly setPlan: Dispatch<SetStateAction<Plan>>;
+  readonly setPlan: Dispatch<SetStateAction<Plan | null>>;
 }
 
 export default function Planner({
@@ -64,6 +72,26 @@ export default function Planner({
     };
   }, [handleScroll, scrollContainerRef]);
 
+  const updateNotes = (notes: Note[]) => {
+    setPlan((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        notes,
+      };
+    });
+  };
+
+  const updatePackingLists = (packingLists: PackingList[]) => {
+    setPlan((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        packingLists,
+      };
+    });
+  };
+
   return (
     <div
       ref={scrollContainerRef}
@@ -82,7 +110,6 @@ export default function Planner({
             endTime={new Date(plan.endTime)}
             budget={plan.budget}
             currencyCode={plan.currencyCode}
-            plan={plan}
             setPlan={setPlan}
           />
         </div>
@@ -108,6 +135,9 @@ export default function Planner({
             ref={(el) => {
               sectionRefs.current["packing-lists"] = el;
             }}
+            planId={plan.id}
+            packingLists={plan.packingLists}
+            updatePackingLists={updatePackingLists}
           />
         </div>
 
@@ -124,6 +154,9 @@ export default function Planner({
             ref={(el) => {
               sectionRefs.current["notes"] = el;
             }}
+            planId={plan.id}
+            notes={plan.notes}
+            updateNotes={updateNotes}
           />
         </div>
 

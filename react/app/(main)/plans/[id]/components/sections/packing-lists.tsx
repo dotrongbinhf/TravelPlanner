@@ -1,42 +1,52 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { PackingList } from "@/types/packing-list";
+import { PackingList } from "@/types/packingList";
 import { CirclePlus } from "lucide-react";
 import { forwardRef, useEffect, useRef, useState } from "react";
 import PackingListCard from "./packing-list-card";
+import {
+  createPackingList,
+  deletePackingList,
+  updatePackingList,
+} from "@/api/packinglist/packinglist";
+import {
+  createPackingItem,
+  deletePackingItem,
+  updatePackingItem,
+} from "@/api/packingItem/packingItem";
+import toast from "react-hot-toast";
+import { ConfirmDeleteModal } from "@/components/confirm-delete-modal";
+import { PackingItem } from "@/types/packingItem";
 
 interface PackingListsProps {
   className?: string;
+  planId: string;
+  packingLists: PackingList[];
+  updatePackingLists: (packingLists: PackingList[]) => void;
 }
 
 const PackingLists = forwardRef<HTMLDivElement, PackingListsProps>(
-  function PackingLists({ className }, ref) {
-    const [lists, setLists] = useState<PackingList[]>([
-      {
-        id: "1",
-        name: "Clothes",
-        items: [
-          { id: "1-1", name: "T-shirts", checked: true },
-          { id: "1-2", name: "Jeans", checked: false },
-          { id: "1-3", name: "Jacket", checked: false },
-        ],
-      },
-      {
-        id: "2",
-        name: "Electronics",
-        items: [
-          { id: "2-1", name: "Phone charger", checked: true },
-          { id: "2-2", name: "Laptop", checked: false },
-        ],
-      },
-    ]);
-
+  function PackingLists(
+    { className, planId, packingLists, updatePackingLists },
+    ref,
+  ) {
     const [isAdding, setIsAdding] = useState(false);
     const [newName, setNewName] = useState("");
 
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editName, setEditName] = useState("");
+
+    // Delete confirmation modal state for packing list
+    const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+    const [listToDelete, setListToDelete] = useState<PackingList | null>(null);
+
+    // Delete confirmation modal state for packing item
+    const [deleteItemModalOpen, setDeleteItemModalOpen] = useState(false);
+    const [itemToDelete, setItemToDelete] = useState<{
+      listId: string;
+      item: PackingItem;
+    } | null>(null);
 
     const newListRef = useRef<HTMLDivElement>(null);
     const nameInputRef = useRef<HTMLInputElement>(null);
@@ -48,14 +58,18 @@ const PackingLists = forwardRef<HTMLDivElement, PackingListsProps>(
       setNewName("");
     };
 
-    const handleConfirmAdd = () => {
+    const handleConfirmAdd = async () => {
       if (newName.trim()) {
-        const newList: PackingList = {
-          id: Date.now().toString(),
-          name: newName.trim(),
-          items: [],
-        };
-        setLists((prev) => [...prev, newList]);
+        try {
+          const newList = await createPackingList(planId, {
+            name: newName.trim(),
+          });
+          updatePackingLists([...packingLists, newList]);
+          toast.success("Created New Packing List");
+        } catch (error) {
+          console.error("Error creating packing list:", error);
+          toast.error("Failed to create packing list");
+        }
       }
       handleCancelAdd();
     };
@@ -65,8 +79,25 @@ const PackingLists = forwardRef<HTMLDivElement, PackingListsProps>(
       setNewName("");
     };
 
-    const handleDeleteList = (listId: string) => {
-      setLists((prev) => prev.filter((list) => list.id !== listId));
+    const handleDeleteList = (list: PackingList) => {
+      setListToDelete(list);
+      setDeleteModalOpen(true);
+    };
+
+    const handleConfirmDelete = async () => {
+      if (!listToDelete) return;
+      try {
+        await deletePackingList(listToDelete.id);
+        updatePackingLists(
+          packingLists.filter((list) => list.id !== listToDelete.id),
+        );
+        toast.success("Deleted Packing List");
+      } catch (error) {
+        console.error("Error deleting packing list:", error);
+        toast.error("Failed to delete packing list");
+      } finally {
+        setListToDelete(null);
+      }
     };
 
     const handleEditList = (list: PackingList) => {
@@ -74,13 +105,20 @@ const PackingLists = forwardRef<HTMLDivElement, PackingListsProps>(
       setEditName(list.name);
     };
 
-    const handleConfirmEdit = () => {
+    const handleConfirmEdit = async () => {
       if (editingId && editName.trim()) {
-        setLists((prev) =>
-          prev.map((list) =>
-            list.id === editingId ? { ...list, name: editName.trim() } : list,
-          ),
-        );
+        try {
+          await updatePackingList(editingId, { name: editName.trim() });
+          updatePackingLists(
+            packingLists.map((list) =>
+              list.id === editingId ? { ...list, name: editName.trim() } : list,
+            ),
+          );
+          toast.success("Updated Packing List");
+        } catch (error) {
+          console.error("Error updating packing list:", error);
+          toast.error("Failed to update packing list");
+        }
       }
       handleCancelEdit();
     };
@@ -90,73 +128,119 @@ const PackingLists = forwardRef<HTMLDivElement, PackingListsProps>(
       setEditName("");
     };
 
-    const handleToggleItem = (listId: string, itemId: string) => {
-      setLists((prev) =>
-        prev.map((list) =>
-          list.id === listId
-            ? {
-                ...list,
-                items: list.items.map((item) =>
-                  item.id === itemId
-                    ? { ...item, checked: !item.checked }
-                    : item,
-                ),
-              }
-            : list,
-        ),
-      );
+    // Item handlers with API calls
+    const handleToggleItem = async (listId: string, itemId: string) => {
+      const list = packingLists.find((l) => l.id === listId);
+      const item = list?.packingItems?.find((i) => i.id === itemId);
+      if (!item) return;
+
+      try {
+        await updatePackingItem(itemId, {
+          name: item.name,
+          isPacked: !item.isPacked,
+        });
+        updatePackingLists(
+          packingLists.map((list) =>
+            list.id === listId
+              ? {
+                  ...list,
+                  packingItems: list.packingItems.map((i) =>
+                    i.id === itemId ? { ...i, isPacked: !i.isPacked } : i,
+                  ),
+                }
+              : list,
+          ),
+        );
+        toast.success(item.isPacked ? "Unpacked Item" : "Packed Item");
+      } catch (error) {
+        console.error("Error toggling packing item:", error);
+        toast.error("Failed to update packing item");
+      }
     };
 
-    const handleAddItem = (listId: string, itemName: string) => {
-      setLists((prev) =>
-        prev.map((list) =>
-          list.id === listId
-            ? {
-                ...list,
-                items: [
-                  ...list.items,
-                  {
-                    id: `${listId}-${Date.now()}`,
-                    name: itemName,
-                    checked: false,
-                  },
-                ],
-              }
-            : list,
-        ),
-      );
+    const handleAddItem = async (listId: string, itemName: string) => {
+      try {
+        const newItem = await createPackingItem(listId, {
+          name: itemName.trim(),
+        });
+        updatePackingLists(
+          packingLists.map((list) =>
+            list.id === listId
+              ? {
+                  ...list,
+                  packingItems: [...(list.packingItems || []), newItem],
+                }
+              : list,
+          ),
+        );
+        toast.success("Created New Packing Item");
+      } catch (error) {
+        console.error("Error creating packing item:", error);
+        toast.error("Failed to create packing item");
+      }
     };
 
-    const handleEditItem = (
+    const handleEditItem = async (
       listId: string,
       itemId: string,
       newName: string,
     ) => {
-      setLists((prev) =>
-        prev.map((list) =>
-          list.id === listId
-            ? {
-                ...list,
-                items: list.items.map((item) =>
-                  item.id === itemId ? { ...item, name: newName } : item,
-                ),
-              }
-            : list,
-        ),
-      );
+      const list = packingLists.find((l) => l.id === listId);
+      const item = list?.packingItems?.find((i) => i.id === itemId);
+      if (!item) return;
+
+      try {
+        await updatePackingItem(itemId, {
+          name: newName.trim(),
+          isPacked: item.isPacked,
+        });
+        updatePackingLists(
+          packingLists.map((list) =>
+            list.id === listId
+              ? {
+                  ...list,
+                  packingItems: list.packingItems.map((i) =>
+                    i.id === itemId ? { ...i, name: newName.trim() } : i,
+                  ),
+                }
+              : list,
+          ),
+        );
+        toast.success("Updated Packing Item");
+      } catch (error) {
+        console.error("Error updating packing item:", error);
+        toast.error("Failed to update packing item");
+      }
     };
 
-    const handleDeleteItem = (listId: string, itemId: string) => {
-      setLists((prev) =>
-        prev.map((list) =>
-          list.id === listId
-            ? {
-                ...list,
-                items: list.items.filter((item) => item.id !== itemId),
-              }
-            : list,
-        ),
-      );
+    const handleDeleteItem = (listId: string, item: PackingItem) => {
+      setItemToDelete({ listId, item });
+      setDeleteItemModalOpen(true);
+    };
+
+    const handleConfirmDeleteItem = async () => {
+      if (!itemToDelete) return;
+      try {
+        await deletePackingItem(itemToDelete.item.id);
+        updatePackingLists(
+          packingLists.map((list) =>
+            list.id === itemToDelete.listId
+              ? {
+                  ...list,
+                  packingItems: list.packingItems.filter(
+                    (i) => i.id !== itemToDelete.item.id,
+                  ),
+                }
+              : list,
+          ),
+        );
+        toast.success("Deleted Packing Item");
+      } catch (error) {
+        console.error("Error deleting packing item:", error);
+        toast.error("Failed to delete packing item");
+      } finally {
+        setItemToDelete(null);
+      }
     };
 
     useEffect(() => {
@@ -224,23 +308,25 @@ const PackingLists = forwardRef<HTMLDivElement, PackingListsProps>(
         </div>
 
         <div className="flex flex-col gap-4">
-          {lists.map((list) => (
+          {packingLists.map((packingList) => (
             <PackingListCard
-              key={list.id}
-              list={list}
-              isEditing={editingId === list.id}
+              key={packingList.id}
+              list={packingList}
+              isEditing={editingId === packingList.id}
               name={editName}
               onNameChange={setEditName}
               onConfirm={handleConfirmEdit}
               onCancel={handleCancelEdit}
-              onEdit={() => handleEditList(list)}
-              onDelete={() => handleDeleteList(list.id)}
-              onToggleItem={(itemId) => handleToggleItem(list.id, itemId)}
-              onAddItem={(itemName) => handleAddItem(list.id, itemName)}
-              onEditItem={(itemId, newName) =>
-                handleEditItem(list.id, itemId, newName)
+              onEdit={() => handleEditList(packingList)}
+              onDelete={() => handleDeleteList(packingList)}
+              onToggleItem={(itemId) =>
+                handleToggleItem(packingList.id, itemId)
               }
-              onDeleteItem={(itemId) => handleDeleteItem(list.id, itemId)}
+              onAddItem={(itemName) => handleAddItem(packingList.id, itemName)}
+              onEditItem={(itemId, newName) =>
+                handleEditItem(packingList.id, itemId, newName)
+              }
+              onDeleteItem={(item) => handleDeleteItem(packingList.id, item)}
               nameInputRef={editNameInputRef}
               containerRef={editListRef}
             />
@@ -258,6 +344,22 @@ const PackingLists = forwardRef<HTMLDivElement, PackingListsProps>(
             />
           )}
         </div>
+
+        <ConfirmDeleteModal
+          open={deleteModalOpen}
+          onOpenChange={setDeleteModalOpen}
+          title="Delete Packing List"
+          description={`Are you sure you want to delete "${listToDelete?.name || "this list"}" ? This action cannot be undone !`}
+          onConfirm={handleConfirmDelete}
+        />
+
+        <ConfirmDeleteModal
+          open={deleteItemModalOpen}
+          onOpenChange={setDeleteItemModalOpen}
+          title="Delete Packing Item"
+          description={`Are you sure you want to delete "${itemToDelete?.item.name || "this item"}" ? This action cannot be undone !`}
+          onConfirm={handleConfirmDeleteItem}
+        />
       </section>
     );
   },
