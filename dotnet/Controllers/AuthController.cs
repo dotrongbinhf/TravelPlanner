@@ -1,7 +1,7 @@
 ﻿using dotnet.Data;
 using dotnet.Domains;
 using dotnet.Dtos.Auth;
-using dotnet.Services;
+using dotnet.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -20,18 +20,20 @@ namespace dotnet.Controllers
     public class AuthController : ControllerBase
     {
         private readonly MySQLDbContext dbContext;
-        private readonly IConfiguration configuration;
-        private readonly IHttpContextAccessor httpContextAccessor;
-        private readonly AuthService authService;
-        private readonly IMongoCollection<Place> placesCollection;
-        public AuthController(MySQLDbContext mySQLDbContext, IConfiguration configuration,
-            IHttpContextAccessor httpContextAccessor, AuthService authService, MongoDbService mongoDbService)
+        private readonly IMongoCollection<Place> _placesCollection;
+        private readonly ICurrentUser _currentUser;
+        private readonly ICookieService _cookieService;
+        private readonly IConfiguration _configuration;
+
+        public AuthController(MySQLDbContext mySQLDbContext, MongoDbService mongoDbService,
+            ICurrentUser currentUser, ICookieService cookieService,
+            IConfiguration configuration)
         {
             dbContext = mySQLDbContext;
-            this.configuration = configuration;
-            this.httpContextAccessor = httpContextAccessor;
-            this.authService = authService;
-            placesCollection = mongoDbService.Database.GetCollection<Place>("Place");
+            _placesCollection = mongoDbService.Database.GetCollection<Place>("Place");
+            _currentUser = currentUser;
+            _cookieService = cookieService;
+            _configuration = configuration;
         }
 
         [HttpGet]
@@ -42,7 +44,7 @@ namespace dotnet.Controllers
             //var builder = Builders<Place>.Filter;
             //var filters = new List<FilterDefinition<Place>>();
             //filters.Add(builder.Eq(doc => doc.Id, id));
-            var results = await placesCollection.Find(FilterDefinition<Place>.Empty).ToListAsync();
+            var results = await _placesCollection.Find(FilterDefinition<Place>.Empty).ToListAsync();
             return Ok(results);
 
             //return Ok(users);
@@ -69,13 +71,13 @@ namespace dotnet.Controllers
                 return Unauthorized("Wrong Password!");
             }
 
-            var accessToken = authService.GenerateAccessToken(user);
-            var refreshToken = authService.GenerateRefreshToken(user);
+            var accessToken = GenerateAccessToken(user);
+            var refreshToken = GenerateRefreshToken(user);
 
             user.RefreshToken = refreshToken;
                 await dbContext.SaveChangesAsync();
 
-            authService.AddRefreshTokenCookie("refreshToken", refreshToken);
+            _cookieService.AddRefreshTokenCookie("refreshToken", refreshToken);
 
             return Ok(new
             {
@@ -107,7 +109,7 @@ namespace dotnet.Controllers
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
             };
 
-            var accessToken = authService.GenerateAccessToken(user);
+            var accessToken = GenerateAccessToken(user);
             dbContext.Users.Add(user);
             await dbContext.SaveChangesAsync();
             return Ok(new { AccessToken = accessToken });
@@ -116,7 +118,7 @@ namespace dotnet.Controllers
         [HttpPost("refresh-token")]
         public async Task<IActionResult> RefreshToken()
         {
-            var refreshToken = authService.GetRefreshTokenCookie("refreshToken");
+            var refreshToken = _cookieService.GetRefreshTokenCookie("refreshToken");
 
             if (string.IsNullOrEmpty(refreshToken))
             {
@@ -129,7 +131,7 @@ namespace dotnet.Controllers
             var tokenHandler = new JwtSecurityTokenHandler();
             if (!tokenHandler.CanReadToken(refreshToken))
             {
-                authService.DeleteRefreshTokenCookie("refreshToken");
+                _cookieService.DeleteRefreshTokenCookie("refreshToken");
                 return Ok(new
                 {
                     AccessToken = ""
@@ -144,7 +146,7 @@ namespace dotnet.Controllers
 
                 if (string.IsNullOrEmpty(claimUserId))
                 {
-                    authService.DeleteRefreshTokenCookie("refreshToken");
+                    _cookieService.DeleteRefreshTokenCookie("refreshToken");
                     return Ok(new
                     {
                         AccessToken = ""
@@ -153,7 +155,7 @@ namespace dotnet.Controllers
 
                 if (expClaim <= DateTime.UtcNow)
                 {
-                    authService.DeleteRefreshTokenCookie("refreshToken");
+                    _cookieService.DeleteRefreshTokenCookie("refreshToken");
                     return Ok(new
                     {
                         AccessToken = ""
@@ -163,25 +165,25 @@ namespace dotnet.Controllers
                 var user = await dbContext.Users.FirstOrDefaultAsync(u => u.Id.ToString() == claimUserId);
                 if (user == null)
                 {
-                    authService.DeleteRefreshTokenCookie("refreshToken");
+                    _cookieService.DeleteRefreshTokenCookie("refreshToken");
                     throw new ApplicationException("User not found");
                 }
 
                 if (string.IsNullOrEmpty(user.RefreshToken) || user.RefreshToken != refreshToken)
                 {
-                    authService.DeleteRefreshTokenCookie("refreshToken");
+                    _cookieService.DeleteRefreshTokenCookie("refreshToken");
                     return Ok(new
                     {
                         AccessToken = ""
                     });
                 }
 
-                var newAccessToken = authService.GenerateAccessToken(user);
+                var newAccessToken = GenerateAccessToken(user);
                 return Ok(new { AccessToken = newAccessToken });
             }
             catch (Exception)
             {
-                authService.DeleteRefreshTokenCookie("refreshToken");
+                _cookieService.DeleteRefreshTokenCookie("refreshToken");
                 return Ok(new
                 {
                     AccessToken = ""
@@ -193,7 +195,7 @@ namespace dotnet.Controllers
         [HttpPost("logout")]
         public async Task<IActionResult> Logout()
         {
-            var refreshToken = authService.GetRefreshTokenCookie("refreshToken");
+            var refreshToken = _cookieService.GetRefreshTokenCookie("refreshToken");
             if (string.IsNullOrEmpty(refreshToken))
             {
                 return Ok("No refresh token found");
@@ -201,14 +203,14 @@ namespace dotnet.Controllers
             var tokenHandler = new JwtSecurityTokenHandler();
             if (!tokenHandler.CanReadToken(refreshToken))
             {
-                authService.DeleteRefreshTokenCookie("refreshToken");
+                _cookieService.DeleteRefreshTokenCookie("refreshToken");
                 return Ok("Invalid refresh token");
             }
             var tokenRead = tokenHandler.ReadJwtToken(refreshToken);
             var claimUserId = tokenRead.Payload.Claims.FirstOrDefault(c => c.Type == "nameid")?.Value;
             if (string.IsNullOrEmpty(claimUserId))
             {
-                authService.DeleteRefreshTokenCookie("refreshToken");
+                _cookieService.DeleteRefreshTokenCookie("refreshToken");
                 return Ok("Invalid refresh token");
             }
             var user = await dbContext.Users.FirstOrDefaultAsync(u => u.Id.ToString() == claimUserId);
@@ -217,8 +219,84 @@ namespace dotnet.Controllers
                 user.RefreshToken = "";
                 await dbContext.SaveChangesAsync();
             }
-            authService.DeleteRefreshTokenCookie("refreshToken");
+            _cookieService.DeleteRefreshTokenCookie("refreshToken");
             return Ok("Logged out successfully");
         }
+
+        #region Private Methods
+        private string GenerateAccessToken(User user)
+        {
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var accessTokenSecret = _configuration["Jwt:AccessTokenSecret"];
+            var tokenDescriptor = new SecurityTokenDescriptor
+            {
+                Subject = new ClaimsIdentity(new Claim[]
+                {
+                    new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                    new Claim(ClaimTypes.Name, user.Username),
+                    new Claim("jti", Guid.NewGuid().ToString()),
+                    new Claim("iat", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+                }),
+                Issuer = _configuration["Jwt:Issuer"],
+                Audience = _configuration["Jwt:Audience"],
+                Expires = DateTime.UtcNow.AddMinutes(_configuration.GetValue<int>("Jwt:AccessTokenExpirationInMinutes")),
+                NotBefore = DateTime.UtcNow,
+                SigningCredentials =
+                    new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(accessTokenSecret)),
+                    SecurityAlgorithms.HmacSha256Signature),
+            };
+            var token = tokenHandler.CreateToken(tokenDescriptor);
+            return tokenHandler.WriteToken(token);
+        }
+
+        private string GenerateRefreshToken(User user)
+        {
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var refreshTokenSecret = _configuration["Jwt:RefreshTokenSecret"];
+            var tokenDescriptor = new SecurityTokenDescriptor
+            {
+                Subject = new ClaimsIdentity(new Claim[]
+                {
+                    new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                    new Claim(ClaimTypes.Name, user.Username),
+                    new Claim("jti", Guid.NewGuid().ToString()),
+                    new Claim("iat", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
+                }),
+                Issuer = _configuration["Jwt:Issuer"],
+                Audience = _configuration["Jwt:Audience"],
+                Expires = DateTime.UtcNow.AddMinutes(_configuration.GetValue<int>("Jwt:RefreshTokenExpirationInMinutes")),
+                NotBefore = DateTime.UtcNow,
+                SigningCredentials =
+                    new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(refreshTokenSecret)),
+                    SecurityAlgorithms.HmacSha256Signature),
+            };
+            var token = tokenHandler.CreateToken(tokenDescriptor);
+            return tokenHandler.WriteToken(token);
+        }
+
+        private bool IsTokenExpire(string token)
+        {
+            var tokenHandler = new JwtSecurityTokenHandler();
+            if (tokenHandler.CanReadToken(token))
+            {
+                var tokenRead = tokenHandler.ReadJwtToken(token);
+                var expClaim = tokenRead.Payload.Expiration;
+
+                if (expClaim.HasValue)
+                {
+                    var expirationTime = DateTimeOffset.FromUnixTimeSeconds(expClaim.Value).UtcDateTime;
+                    if (expirationTime < DateTime.UtcNow)
+                    {
+                        return true;
+                    }
+
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        #endregion
     }
 }

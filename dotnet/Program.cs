@@ -1,4 +1,6 @@
 using dotnet.Data;
+using dotnet.Helpers;
+using dotnet.Interfaces;
 using dotnet.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -8,10 +10,15 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Add Configurations
+builder.Services.Configure<CloudinarySettings>(builder.Configuration.GetSection("CloudinarySettings"));
+
 // Add services to the container.
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<ICurrentUser, CurrentUser>();
+builder.Services.AddScoped<ICookieService, CookieService>();
 builder.Services.AddSingleton<MongoDbService>();
+builder.Services.AddScoped<ICloudinaryService, CloudinaryService>();
 
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle

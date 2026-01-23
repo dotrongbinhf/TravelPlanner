@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback, useState, RefObject } from "react";
+import { useEffect, useCallback, useState, RefObject, SetStateAction, Dispatch } from "react";
 import Overview from "./sections/overview";
 import Itinerary from "./sections/itinerary";
 import Budget from "./sections/budget";
@@ -17,14 +17,16 @@ interface PlannerProps {
   }>;
   readonly scrollContainerRef: RefObject<HTMLDivElement | null>;
   readonly onSectionInView: (sectionId: string) => void;
-  readonly planData: Plan;
+  readonly plan: Plan;
+  readonly setPlan: Dispatch<SetStateAction<Plan>>;
 }
 
 export default function Planner({
   sectionRefs,
   scrollContainerRef,
   onSectionInView,
-  planData,
+  plan,
+  setPlan,
 }: PlannerProps) {
   const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -70,15 +72,18 @@ export default function Planner({
       <div className="flex flex-col gap-6">
         <div className="rounded-lg border-2 border-gray-200 p-6">
           <Overview
+            planId={plan.id}
             ref={(el) => {
               sectionRefs.current["overview"] = el;
             }}
-            name={planData.name}
-            coverImageUrl={planData.coverImageUrl}
-            startTime={planData.startTime}
-            endTime={planData.endTime}
-            budget={planData.budget}
-            currencyCode={planData.currencyCode}
+            name={plan.name}
+            coverImageUrl={plan.coverImageUrl}
+            startTime={new Date(plan.startTime)}
+            endTime={new Date(plan.endTime)}
+            budget={plan.budget}
+            currencyCode={plan.currencyCode}
+            plan={plan}
+            setPlan={setPlan}
           />
         </div>
 

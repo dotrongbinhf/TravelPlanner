@@ -74,7 +74,8 @@ export default function PlanIdPage() {
           sectionRefs={sectionRefs}
           scrollContainerRef={scrollContainerRef}
           onSectionInView={handleSectionInView}
-          planData={plan}
+          plan={plan}
+          setPlan={setPlan}
         />
       </div>
 

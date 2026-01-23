@@ -1,7 +1,7 @@
 ﻿using dotnet.Data;
 using dotnet.Domains;
 using dotnet.Dtos.Plan;
-using dotnet.Services;
+using dotnet.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -16,29 +16,26 @@ namespace dotnet.Controllers
     public class PlanController : ControllerBase
     {
         private readonly MySQLDbContext dbContext;
-        private readonly IConfiguration configuration;
-        private readonly IHttpContextAccessor httpContextAccessor;
-        private readonly AuthService authService;
-        private readonly IMongoCollection<Place> placesCollection;
-        public PlanController(MySQLDbContext mySQLDbContext, IConfiguration configuration,
-            IHttpContextAccessor httpContextAccessor, AuthService authService, MongoDbService mongoDbService)
+        private readonly ICurrentUser _currentUser;
+        private readonly IMongoCollection<Place> _placesCollection;
+        private readonly ICloudinaryService _cloudinaryService;
+        public PlanController(MySQLDbContext mySQLDbContext, ICurrentUser currentUser,
+            MongoDbService mongoDbService, ICloudinaryService cloudinaryService)
         {
             dbContext = mySQLDbContext;
-            this.configuration = configuration;
-            this.httpContextAccessor = httpContextAccessor;
-            this.authService = authService;
-            placesCollection = mongoDbService.Database.GetCollection<Place>("Place");
+            _currentUser = currentUser;
+            _placesCollection = mongoDbService.Database.GetCollection<Place>("Place");
+            _cloudinaryService = cloudinaryService;
         }
 
         [HttpGet]
         public async Task<IActionResult> GetAllPlans()
         {
-            var userIdString = httpContextAccessor.HttpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if(userIdString == null)
+            var userId = _currentUser.Id;
+            if(userId == null)
             {
                 return Unauthorized();
             }
-            var userId = Guid.Parse(userIdString);
 
             var results = await dbContext.Plans.Where(el => el.OwnerId == userId).ToListAsync();
             return Ok(results);
@@ -47,12 +44,11 @@ namespace dotnet.Controllers
         [HttpGet("{id:Guid}")]
         public async Task<IActionResult> GetPlanById(Guid id)
         {
-            var userIdString = httpContextAccessor.HttpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if(userIdString == null)
+            var userId = _currentUser.Id;
+            if(userId == null)
             {
                 return Unauthorized();
             }
-            var userId = Guid.Parse(userIdString);
 
             var result = await dbContext.Plans.Where(el => el.Id == id).FirstOrDefaultAsync();
             if(result == null)
@@ -65,17 +61,16 @@ namespace dotnet.Controllers
         [HttpPost]
         public async Task<IActionResult> CreatePlan(CreatePlanRequest request)
         {
-            var userIdString = httpContextAccessor.HttpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if(userIdString == null)
+            var userId = _currentUser.Id;
+            if(userId == null)
             {
                 return Unauthorized();
             }
-            var userId = Guid.Parse(userIdString);
 
             var newPlan = new Plan
             {
                 Id = Guid.NewGuid(),
-                OwnerId = userId,
+                OwnerId = userId.Value,
                 Name = request.Name,
                 StartTime = request.StartTime,
                 EndTime = request.EndTime,
@@ -87,6 +82,52 @@ namespace dotnet.Controllers
             await dbContext.SaveChangesAsync();
 
             return CreatedAtAction(nameof(GetPlanById), new { id = newPlan.Id }, newPlan);
+        }
+
+        [HttpPatch("{id:Guid}")]
+        public async Task<IActionResult> UpdatePlan(Guid id, UpdatePlanRequest request)
+        {
+            var plan = await dbContext.Plans.FindAsync(id);
+            if (plan == null)
+            {
+                return NotFound();
+            }
+
+            plan.Name = request.Name ?? plan.Name;
+            plan.StartTime = request.StartTime ?? plan.StartTime;
+            plan.EndTime = request.EndTime ?? plan.EndTime;
+            plan.Budget = request.Budget ?? plan.Budget;
+            plan.CurrencyCode = request.CurrencyCode ?? plan.CurrencyCode;
+
+            await dbContext.SaveChangesAsync();
+
+            return Ok(plan);
+        }
+
+        [HttpPatch("{id:Guid}/cover-image")]
+        public async Task<IActionResult> UploadCoverImage(Guid id, IFormFile coverImage)
+        {
+            var plan = await dbContext.Plans
+                .FirstOrDefaultAsync(p => p.Id == id);
+
+            if (plan == null)
+            {
+                return NotFound();
+            }
+
+            var uploadResult = await _cloudinaryService.UploadImageAsync(coverImage, id.ToString());
+            if (uploadResult.Error != null)
+            {
+                return BadRequest(uploadResult.Error.Message);
+            }
+
+            plan.CoverImageUrl = uploadResult.SecureUrl.ToString();
+            await dbContext.SaveChangesAsync();
+
+            return Ok(new
+            {
+                coverImageUrl = plan.CoverImageUrl
+            });
         }
     }
 }

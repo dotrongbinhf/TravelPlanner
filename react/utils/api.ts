@@ -85,7 +85,7 @@ const errorHandler = async (error: any) => {
           setTimeout(() => {
             TokenStorage.removeAccessToken();
             window.location.href = "/login";
-          }, 10000);
+          }, 2000);
           return;
         }
       } catch (err) {
