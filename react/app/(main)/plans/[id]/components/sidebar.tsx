@@ -19,7 +19,7 @@ export const sectionItems = [
   { id: "itinerary", title: "Itinerary", icon: Calendar },
   { id: "budget", title: "Budget", icon: Wallet },
   { id: "packing-lists", title: "Packing Lists", icon: Backpack },
-  { id: "teammates", title: "Teammates", icon: Users },
+  { id: "teammates", title: "Participants", icon: Users },
   { id: "notes", title: "Notes", icon: StickyNote },
 ];
 

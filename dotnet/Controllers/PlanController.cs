@@ -54,7 +54,8 @@ namespace dotnet.Controllers
                 .Where(el => el.Id == id)
                 .Include(el => el.Notes)
                 .Include(el => el.PackingLists)
-                .ThenInclude(pl => pl.PackingItems)
+                    .ThenInclude(pl => pl.PackingItems)
+                .Include(el => el.ExpenseItems)
                 .FirstOrDefaultAsync();
 
             if(result == null)
@@ -91,6 +92,14 @@ namespace dotnet.Controllers
                         Name = item.Name,
                         IsPacked = item.IsPacked
                     }).ToList()
+                }).ToList(),
+                ExpenseItems = result.ExpenseItems.Select(ei => new Dtos.ExpenseItem.ExpenseItemDto
+                {
+                    Id = ei.Id,
+                    PlanId = ei.PlanId,
+                    Category = ei.Category,
+                    Name = ei.Name,
+                    Amount = ei.Amount,
                 }).ToList()
             });
         }

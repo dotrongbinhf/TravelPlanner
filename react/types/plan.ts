@@ -1,3 +1,4 @@
+import { Expense } from "./budget";
 import { Note } from "./note";
 import { PackingList } from "./packingList";
 
@@ -12,4 +13,5 @@ export type Plan = {
   currencyCode: string;
   notes: Note[];
   packingLists: PackingList[];
+  expenseItems: Expense[];
 };

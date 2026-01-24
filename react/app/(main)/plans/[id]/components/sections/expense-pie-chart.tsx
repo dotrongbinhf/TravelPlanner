@@ -1,13 +1,19 @@
-import { Expense, EXPENSE_CATEGORIES, ExpenseCategory } from "@/types/budget";
+import {
+  ExpenseItem,
+  EXPENSE_CATEGORIES,
+  ExpenseCategory,
+} from "@/types/budget";
 
 interface ExpensePieChartProps {
-  expenses: Expense[];
+  expenseItems: ExpenseItem[];
 }
 
-export default function ExpensePieChart({ expenses }: ExpensePieChartProps) {
+export default function ExpensePieChart({
+  expenseItems,
+}: ExpensePieChartProps) {
   // Group expenses by category
   const categoryTotals = EXPENSE_CATEGORIES.map((cat) => {
-    const total = expenses
+    const total = expenseItems
       .filter((e) => e.category === cat.value)
       .reduce((sum, e) => sum + e.amount, 0);
     return {
@@ -21,7 +27,7 @@ export default function ExpensePieChart({ expenses }: ExpensePieChartProps) {
   if (totalAmount === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-8 text-gray-400">
-        <div className="w-32 h-32 rounded-full border-4 border-dashed border-gray-300 flex items-center justify-center">
+        <div className="w-40 h-40 rounded-full border-4 border-dashed border-gray-300 flex items-center justify-center">
           <span className="text-sm">No data</span>
         </div>
       </div>
@@ -58,7 +64,7 @@ export default function ExpensePieChart({ expenses }: ExpensePieChartProps) {
       <div className="flex items-center gap-6">
         {/* Pie Chart */}
         <div
-          className="w-32 h-32 rounded-full"
+          className="w-40 h-40 rounded-full"
           style={{
             background: `conic-gradient(${gradientStops})`,
           }}

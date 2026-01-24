@@ -112,14 +112,14 @@ const Teammates = forwardRef<HTMLDivElement, TeammatesProps>(function Teammates(
       className={cn(className, "flex flex-col gap-4")}
     >
       <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-gray-800">Teammates</h2>
+        <h2 className="text-2xl font-bold text-gray-800">Participants</h2>
 
         <button
           className="cursor-pointer px-4 py-3 flex gap-2 items-center bg-green-400 hover:bg-green-500 text-white rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
           onClick={() => setIsInviteOpen(true)}
           disabled={editingId !== null}
         >
-          <UserPlus size={16} />
+          <UserPlus size={16} strokeWidth={3} />
           <span className="text-sm font-medium">Invite Teammate</span>
         </button>
       </div>

@@ -9,6 +9,7 @@ interface CurrencyInputProps {
   currency: string;
   onValueChange: (value: string) => void;
   onCurrencyChange: (currency: string) => void;
+  autoFocus?: boolean;
 }
 
 export function CurrencyInput({
@@ -16,6 +17,7 @@ export function CurrencyInput({
   currency,
   onValueChange,
   onCurrencyChange,
+  autoFocus = false,
 }: CurrencyInputProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
@@ -64,6 +66,7 @@ export function CurrencyInput({
         type="text"
         value={formatDisplayValue(value)}
         onChange={handleValueChange}
+        autoFocus={autoFocus}
         onFocus={() => setIsFocused(true)}
         onBlur={() => setIsFocused(false)}
         placeholder="0"

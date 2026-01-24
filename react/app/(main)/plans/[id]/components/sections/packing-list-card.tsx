@@ -5,7 +5,7 @@ import {
   Check,
   Circle,
   CircleCheck,
-  CirclePlus,
+  Plus,
   Pencil,
   Square,
   SquareCheck,
@@ -327,7 +327,7 @@ export default function PackingListCard({
             onClick={() => setIsAddingItem(true)}
             disabled={isItemsDisabled}
           >
-            <CirclePlus size={16} />
+            <Plus size={16} strokeWidth={3} />
             <span className="text-sm font-medium">Add an item</span>
           </button>
         )}

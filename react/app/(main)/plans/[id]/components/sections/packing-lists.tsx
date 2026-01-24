@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { PackingList } from "@/types/packingList";
-import { CirclePlus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { forwardRef, useEffect, useRef, useState } from "react";
 import PackingListCard from "./packing-list-card";
 import {
@@ -302,7 +302,7 @@ const PackingLists = forwardRef<HTMLDivElement, PackingListsProps>(
             onClick={handleAddList}
             disabled={isAdding || editingId !== null}
           >
-            <CirclePlus size={16} />
+            <Plus size={16} strokeWidth={3} />
             <span className="text-sm font-medium">Add a list</span>
           </button>
         </div>

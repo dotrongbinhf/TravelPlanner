@@ -2,8 +2,15 @@
 
 import { cn } from "@/lib/utils";
 import { Note } from "@/types/note";
-import { CirclePlus } from "lucide-react";
-import { Dispatch, forwardRef, SetStateAction, useEffect, useRef, useState } from "react";
+import { Plus } from "lucide-react";
+import {
+  Dispatch,
+  forwardRef,
+  SetStateAction,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import NoteCard from "./note-card";
 import { createNote, deleteNote, updateNote } from "@/api/note/note";
 import { CreateNoteRequest } from "@/api/note/types";
@@ -20,7 +27,6 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
   { planId, notes, updateNotes },
   ref,
 ) {
-
   const [isAdding, setIsAdding] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newContent, setNewContent] = useState("");
@@ -96,13 +102,17 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
   const handleConfirmEdit = () => {
     if (editingId && (editTitle.trim() || editContent.trim())) {
       try {
-        updateNote(editingId, { title: editTitle.trim() || "Untitled", content: editContent.trim() });
+        updateNote(editingId, {
+          title: editTitle.trim() || "Untitled",
+          content: editContent.trim(),
+        });
         toast.success("Updated Note");
       } catch (error) {
         console.error("Error updating note:", error);
         toast.error("Failed to update note");
       }
-      updateNotes(notes.map((note) =>
+      updateNotes(
+        notes.map((note) =>
           note.id === editingId
             ? {
                 ...note,
@@ -110,7 +120,8 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
                 content: editContent.trim(),
               }
             : note,
-      ));
+        ),
+      );
     }
     handleCancelEdit();
   };
@@ -178,7 +189,7 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
           onClick={handleAddNote}
           disabled={isAdding || editingId !== null}
         >
-          <CirclePlus size={16} />
+          <Plus size={16} strokeWidth={3} />
           <span className="text-sm font-medium">Add a note</span>
         </button>
       </div>
@@ -221,7 +232,7 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
         open={deleteModalOpen}
         onOpenChange={setDeleteModalOpen}
         title="Delete Note"
-        description={`Are you sure you want to delete "${noteToDelete?.title || 'this note'}" ? This action cannot be undone !`}
+        description={`Are you sure you want to delete "${noteToDelete?.title || "this note"}" ? This action cannot be undone !`}
         onConfirm={handleConfirmDelete}
       />
     </section>

@@ -18,6 +18,7 @@ import { sectionItems } from "./sidebar";
 import { Plan } from "@/types/plan";
 import { Note } from "@/types/note";
 import { PackingList } from "@/types/packingList";
+import { ExpenseItem } from "@/types/budget";
 
 interface PlannerProps {
   readonly sectionRefs: RefObject<{
@@ -92,6 +93,61 @@ export default function Planner({
     });
   };
 
+  const updateExpenseItems = (expenseItems: ExpenseItem[]) => {
+    setPlan((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        expenseItems,
+      };
+    });
+  };
+
+  const updateBudgetAndCurrencyCode = (
+    budget: number,
+    currencyCode: string,
+  ) => {
+    setPlan((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        budget,
+        currencyCode,
+      };
+    });
+  };
+
+  const updatePlanName = (name: string) => {
+    setPlan((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        name,
+      };
+    });
+  };
+
+  const updatePlanCoverImageUrl = (coverImageUrl: string) => {
+    setPlan((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        coverImageUrl,
+      };
+    });
+  };
+
+  const updatePlanDuration = (startTime: Date, endTime: Date) => {
+    setPlan((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        startTime,
+        endTime,
+      };
+    });
+  };
+
   return (
     <div
       ref={scrollContainerRef}
@@ -110,7 +166,8 @@ export default function Planner({
             endTime={new Date(plan.endTime)}
             budget={plan.budget}
             currencyCode={plan.currencyCode}
-            setPlan={setPlan}
+            updatePlanName={updatePlanName}
+            updatePlanCoverImageUrl={updatePlanCoverImageUrl}
           />
         </div>
 
@@ -127,6 +184,12 @@ export default function Planner({
             ref={(el) => {
               sectionRefs.current["budget"] = el;
             }}
+            planId={plan.id}
+            totalBudget={plan.budget}
+            currencyCode={plan.currencyCode}
+            expenseItems={plan.expenseItems}
+            updateExpenseItems={updateExpenseItems}
+            updateBudgetAndCurrencyCode={updateBudgetAndCurrencyCode}
           />
         </div>
 

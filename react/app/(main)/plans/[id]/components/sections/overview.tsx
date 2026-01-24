@@ -1,6 +1,13 @@
 "use client";
 
-import { forwardRef, useState, useRef, useEffect, Dispatch, SetStateAction } from "react";
+import {
+  forwardRef,
+  useState,
+  useRef,
+  useEffect,
+  Dispatch,
+  SetStateAction,
+} from "react";
 import {
   Calendar,
   Users,
@@ -28,12 +35,23 @@ interface OverviewProps {
   endTime: Date;
   budget: number;
   currencyCode: string;
-  setPlan: Dispatch<SetStateAction<Plan | null>>;
+  updatePlanName: (name: string) => void;
+  updatePlanCoverImageUrl: (coverImageUrl: string) => void;
 }
 
 const Overview = forwardRef<HTMLDivElement, OverviewProps>(
   (
-    { planId, name, coverImageUrl, startTime, endTime, budget, currencyCode, setPlan },
+    {
+      planId,
+      name,
+      coverImageUrl,
+      startTime,
+      endTime,
+      budget,
+      currencyCode,
+      updatePlanName,
+      updatePlanCoverImageUrl,
+    },
     ref,
   ) => {
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -126,13 +144,7 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
       setIsUploading(true);
       try {
         const response = await updatePlanCoverImage(planId, selectedFile);
-        setPlan((prev) => {
-          if (!prev) return null;
-          return {
-            ...prev,
-            coverImageUrl: response.coverImageUrl,
-          };
-        });
+        updatePlanCoverImageUrl(response.coverImageUrl);
 
         if (previewUrl) {
           URL.revokeObjectURL(previewUrl);
@@ -171,13 +183,7 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
           const response = await updatePlanBasicInfo(planId, {
             name: editedName.trim(),
           });
-          setPlan((prev) => {
-            if (!prev) return null;
-            return {
-              ...prev,
-              name: editedName.trim(),
-            };
-          });
+          updatePlanName(editedName.trim());
           toast.success("Updated Plan Name");
         } catch (error) {
           console.error("Update failed:", error);
@@ -215,9 +221,7 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
             "relative w-full h-64 md:h-80 rounded-lg overflow-hidden bg-gray-200 group",
             !coverImageUrl && !previewUrl && "cursor-pointer",
           )}
-          onClick={
-            !coverImageUrl && !previewUrl ? handleEditClick : undefined
-          }
+          onClick={!coverImageUrl && !previewUrl ? handleEditClick : undefined}
         >
           {previewUrl ? (
             <img
@@ -369,7 +373,9 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
           <div className="flex items-center gap-2">
             <Wallet size={20} className="text-amber-600 flex-shrink-0" />
             <span className="text-sm">
-              <span className="font-semibold">{budget.toLocaleString(getLocaleFromCurrencyCode(currencyCode))}</span>{" "}
+              <span className="font-semibold">
+                {budget.toLocaleString(getLocaleFromCurrencyCode(currencyCode))}
+              </span>{" "}
               {currencyCode}
             </span>
           </div>

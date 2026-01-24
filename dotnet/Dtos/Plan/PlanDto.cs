@@ -1,4 +1,5 @@
 ﻿using dotnet.Domains;
+using dotnet.Dtos.ExpenseItem;
 using dotnet.Dtos.Note;
 using dotnet.Dtos.PackingList;
 
@@ -17,6 +18,7 @@ namespace dotnet.Dtos.Plan
 
         public ICollection<NoteDto> Notes { get; set; } = new List<NoteDto>();
         public ICollection<PackingListDto> PackingLists { get; set; } = new List<PackingListDto>();
+        public ICollection<ExpenseItemDto> ExpenseItems { get; set; } = new List<ExpenseItemDto>();
 
     }
 }
