@@ -4,6 +4,7 @@ using dotnet.Interfaces;
 using dotnet.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace dotnet.Controllers
 {
@@ -45,6 +46,29 @@ namespace dotnet.Controllers
                 Email = user.Email
             };
             return Ok(userDto);
+        }
+
+        [HttpGet("find")]
+        public async Task<ActionResult<UserDto>> FindUserByNameOrUsername([FromQuery] string query)
+        {
+            var users = await dbContext.Users
+                .Where(u => u.Username.Contains(query) || u.Name.Contains(query))
+                .ToListAsync();
+            if (users == null)
+            {
+                return NotFound();
+            }
+
+            var results = users.Where(user => user.Id != _currentUser.Id)
+                .Select(user => new UserDto
+            {
+                Id = user.Id,
+                Username = user.Username,
+                Name = user.Name,
+                AvatarUrl = user.AvatarUrl,
+                Email = user.Email
+            }).ToList();
+            return Ok(results);
         }
 
         [HttpPatch("me")]

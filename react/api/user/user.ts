@@ -33,3 +33,12 @@ export const updateAvatar = async (image: File) => {
   );
   return res.data;
 };
+
+export const findUserByNameOrUsername = async (query: string) => {
+  const res = await API.get<User[]>(`${USER_API_URL}/find`, {
+    params: {
+      query,
+    },
+  });
+  return res.data;
+};

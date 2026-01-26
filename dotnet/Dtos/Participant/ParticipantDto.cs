@@ -1,16 +1,16 @@
 ﻿using dotnet.Enums;
 
-namespace dotnet.Domains
+namespace dotnet.Dtos.Participant
 {
-    public class Participant : BaseAuditableEntity
+    public class ParticipantDto
     {
         public Guid Id { get; set; }
         public Guid UserId { get; set; }
         public Guid PlanId { get; set; }
         public PlanRole Role { get; set; }
         public InvitationStatus Status { get; set; }
-
-        public Plan Plan { get; set; }
-        public User User { get; set; }
+        public string? Name { get; set; }
+        public string? Username { get; set; }
+        public string? AvatarUrl { get; set; }
     }
 }

@@ -343,6 +343,12 @@ const PackingLists = forwardRef<HTMLDivElement, PackingListsProps>(
               containerRef={newListRef}
             />
           )}
+
+          {packingLists.length === 0 && !isAdding && (
+            <div className="p-6 bg-gray-50 rounded-lg text-center text-gray-400 text-sm">
+              No packing lists added yet. Click "Add a list" to get started.
+            </div>
+          )}
         </div>
 
         <ConfirmDeleteModal

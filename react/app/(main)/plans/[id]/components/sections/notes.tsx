@@ -84,7 +84,7 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
     try {
       await deleteNote(noteToDelete.id);
       updateNotes(notes.filter((note) => note.id !== noteToDelete.id));
-      toast.success("Note deleted successfully");
+      toast.success("Deleted Note");
     } catch (error) {
       console.error("Error deleting note:", error);
       toast.error("Failed to delete note");
@@ -225,6 +225,12 @@ const Notes = forwardRef<HTMLDivElement, NotesProps>(function Notes(
             titleInputRef={titleInputRef}
             containerRef={newNoteRef}
           />
+        )}
+
+        {notes.length === 0 && !isAdding && (
+          <div className="p-6 bg-gray-50 rounded-lg text-center text-gray-400 text-sm">
+            No notes added yet. Click "Add a note" to get started.
+          </div>
         )}
       </div>
 

@@ -79,10 +79,10 @@ namespace dotnet.Controllers
 
             _cookieService.AddRefreshTokenCookie("refreshToken", refreshToken);
 
-            return Ok(new
+            return Ok(new LoginResponse
             {
                 AccessToken = accessToken,
-                Username = user.Username
+                Username = user.Username,
             });
         }
 

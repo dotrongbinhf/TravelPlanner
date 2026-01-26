@@ -84,6 +84,7 @@ const ChangePassword = forwardRef<HTMLDivElement>(
                 className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-400"
               />
               <button
+                tabIndex={-1}
                 type="button"
                 onClick={() => setShowcurrentPassword(!showcurrentPassword)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
@@ -108,6 +109,7 @@ const ChangePassword = forwardRef<HTMLDivElement>(
                 className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-400"
               />
               <button
+                tabIndex={-1}
                 type="button"
                 onClick={() => setShowNewPassword(!showNewPassword)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
@@ -136,6 +138,7 @@ const ChangePassword = forwardRef<HTMLDivElement>(
                 }`}
               />
               <button
+                tabIndex={-1}
                 type="button"
                 onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"

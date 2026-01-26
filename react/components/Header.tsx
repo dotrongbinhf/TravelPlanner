@@ -84,6 +84,7 @@ export default function Header() {
     try {
       await logout();
       TokenStorage.removeAccessToken();
+      setUser(null);
       router.push("/login");
     } catch (error) {
       console.error("Logout failed:", error);
@@ -102,7 +103,7 @@ export default function Header() {
     // You can call your API here to create the plan using newPlan object
     try {
       const response = await createPlan(newPlan);
-      toast.success("Plan created successfully!");
+      toast.success("Plan Created Successfully!");
       router.replace("/plans/" + response.id);
     } catch (error) {
       console.error("Create plan failed:", error);

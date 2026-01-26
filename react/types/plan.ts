@@ -1,6 +1,7 @@
-import { Expense } from "./budget";
+import { ExpenseItem } from "./budget";
 import { Note } from "./note";
 import { PackingList } from "./packingList";
+import { Participant } from "./participant";
 
 export type Plan = {
   id: string;
@@ -13,5 +14,6 @@ export type Plan = {
   currencyCode: string;
   notes: Note[];
   packingLists: PackingList[];
-  expenseItems: Expense[];
+  expenseItems: ExpenseItem[];
+  participants: Participant[];
 };

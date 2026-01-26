@@ -41,6 +41,7 @@ namespace dotnet.Controllers
             return Ok(results);
         }
 
+
         [HttpGet("{id:Guid}")]
         public async Task<ActionResult<PlanDto>> GetPlanById(Guid id)
         {
@@ -56,6 +57,8 @@ namespace dotnet.Controllers
                 .Include(el => el.PackingLists)
                     .ThenInclude(pl => pl.PackingItems)
                 .Include(el => el.ExpenseItems)
+                .Include(el => el.Participants)
+                    .ThenInclude(p => p.User)
                 .FirstOrDefaultAsync();
 
             if(result == null)
@@ -100,6 +103,17 @@ namespace dotnet.Controllers
                     Category = ei.Category,
                     Name = ei.Name,
                     Amount = ei.Amount,
+                }).ToList(),
+                Participants = result.Participants.Select(p => new Dtos.Participant.ParticipantDto
+                {
+                    Id = p.Id,
+                    UserId = p.UserId,
+                    PlanId = p.PlanId,
+                    Role = p.Role,
+                    Status = p.Status,
+                    Name = p.User.Name,
+                    Username = p.User.Username,
+                    AvatarUrl = p.User.AvatarUrl
                 }).ToList()
             });
         }
@@ -125,9 +139,40 @@ namespace dotnet.Controllers
             };
 
             await dbContext.Plans.AddAsync(newPlan);
+
+            var participant = new Participant
+            {
+                Id = Guid.NewGuid(),
+                PlanId = newPlan.Id,
+                UserId = userId.Value,
+                Role = Enums.PlanRole.Owner,
+                Status = Enums.InvitationStatus.Accepted
+            };
+            await dbContext.Participants.AddAsync(participant);
+
             await dbContext.SaveChangesAsync();
 
-            return CreatedAtAction(nameof(GetPlanById), new { id = newPlan.Id }, newPlan);
+            return CreatedAtAction(nameof(GetPlanById), new { id = newPlan.Id }, new PlanDto
+            {
+                Id = newPlan.Id,
+                OwnerId = newPlan.OwnerId,
+                Name = request.Name,
+                StartTime = request.StartTime,
+                EndTime = request.EndTime,
+                Budget = request.Budget,
+                CurrencyCode = request.CurrencyCode,
+                Participants = new List<Dtos.Participant.ParticipantDto>
+                {
+                    new Dtos.Participant.ParticipantDto
+                    {
+                        Id = participant.Id,
+                        UserId = participant.UserId,
+                        PlanId = participant.PlanId,
+                        Role = participant.Role,
+                        Status = participant.Status
+                    }
+                }
+            });
         }
 
         [HttpPatch("{id:Guid}")]

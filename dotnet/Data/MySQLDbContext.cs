@@ -15,8 +15,8 @@ namespace dotnet.Data
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
-            //modelBuilder.Entity<CourseNotification>()
-            //    .HasKey(cn => new { cn.CourseId, cn.NotificationId });
+            //modelBuilder.Entity<Participant>()
+            //    .HasKey(pa => new { pa.UserId, pa.PlanId });
 
             //modelBuilder.Entity<Course>()
             //    .HasIndex(c => new { c.InstructorId, c.Title })

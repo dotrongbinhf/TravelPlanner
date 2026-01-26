@@ -18,6 +18,7 @@ import { sectionItems } from "./sidebar";
 import { Plan } from "@/types/plan";
 import { Note } from "@/types/note";
 import { PackingList } from "@/types/packingList";
+import { Participant } from "@/types/participant";
 import { ExpenseItem } from "@/types/budget";
 
 interface PlannerProps {
@@ -99,6 +100,16 @@ export default function Planner({
       return {
         ...prev,
         expenseItems,
+      };
+    });
+  };
+
+  const updateParticipants = (participants: Participant[]) => {
+    setPlan((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        participants,
       };
     });
   };
@@ -209,6 +220,8 @@ export default function Planner({
             ref={(el) => {
               sectionRefs.current["teammates"] = el;
             }}
+            participants={plan.participants}
+            onUpdate={updateParticipants}
           />
         </div>
 

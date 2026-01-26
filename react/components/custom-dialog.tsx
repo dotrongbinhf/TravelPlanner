@@ -18,7 +18,7 @@ interface CustomDialogProps {
   description?: string;
   children: React.ReactNode;
   cancelLabel?: string;
-  confirmLabel?: string;
+  confirmLabel?: React.ReactNode;
   onCancel?: () => void;
   onConfirm?: () => void;
   cancelClassName?: string;

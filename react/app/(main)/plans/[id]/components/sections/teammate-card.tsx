@@ -1,4 +1,3 @@
-import { Teammate, TeammateRole, TEAMMATE_ROLES } from "@/types/teammate";
 import { Check, Pencil, Trash2, X } from "lucide-react";
 import {
   DropdownMenu,
@@ -8,12 +7,16 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { getResizedImageUrl } from "@/utils/image";
+import { Participant } from "@/types/participant";
+import { InvitationStatus, PlanRole } from "@/api/participant/types";
+import { TEAMMATE_ROLES } from "@/constants/participant";
 
 interface TeammateCardProps {
-  teammate: Teammate;
+  teammate: Participant;
   isEditing: boolean;
-  editRole: TeammateRole;
-  onRoleChange: (role: TeammateRole) => void;
+  editRole: PlanRole;
+  onRoleChange: (role: PlanRole) => void;
   onConfirm: () => void;
   onCancel: () => void;
   onEdit: () => void;
@@ -21,6 +24,17 @@ interface TeammateCardProps {
   isOwner?: boolean;
   containerRef?: React.RefObject<HTMLDivElement | null>;
 }
+
+export const getRoleBadgeColor = (role: PlanRole) => {
+  switch (role) {
+    case PlanRole.Owner:
+      return "bg-purple-100 text-purple-700 hover:bg-purple-100";
+    case PlanRole.Editor:
+      return "bg-blue-100 text-blue-700 hover:bg-blue-100";
+    case PlanRole.Viewer:
+      return "bg-blue-100 text-blue-700 hover:bg-blue-100";
+  }
+};
 
 export default function TeammateCard({
   teammate,
@@ -34,32 +48,25 @@ export default function TeammateCard({
   isOwner = false,
   containerRef,
 }: TeammateCardProps) {
-  const getInitials = (name: string) => {
-    return name
-      .split(" ")
-      .map((n) => n[0])
-      .join("")
-      .toUpperCase()
-      .slice(0, 2);
-  };
+  const getInitials = (name?: string, username?: string) => {
+    const displayName = name?.trim() || username?.trim() || "";
+    if (!displayName) return "U";
 
-  const getRoleBadgeColor = (role: TeammateRole) => {
-    switch (role) {
-      case "owner":
-        return "bg-purple-100 text-purple-700 hover:bg-purple-100";
-      case "editor":
-        return "bg-blue-100 text-blue-700 hover:bg-blue-100";
-      case "viewer":
-        return "bg-gray-100 text-gray-700 hover:bg-gray-100";
+    const parts = displayName.split(/\s+/);
+    if (parts.length === 1) {
+      return parts[0].slice(0, 2).toUpperCase();
     }
+    return (parts[0][0] + parts[1][0]).toUpperCase();
   };
 
-  const getStatusBadgeColor = (status: "active" | "pending") => {
+  const getStatusBadgeColor = (status: InvitationStatus) => {
     switch (status) {
-      case "active":
+      case InvitationStatus.Accepted:
         return "bg-green-100 text-green-700 hover:bg-green-100";
-      case "pending":
+      case InvitationStatus.Pending:
         return "bg-yellow-100 text-yellow-700 hover:bg-yellow-100";
+      case InvitationStatus.Declined:
+        return "bg-red-100 text-red-700 hover:bg-red-100";
     }
   };
 
@@ -71,17 +78,20 @@ export default function TeammateCard({
       >
         <div className="flex items-center gap-3">
           <Avatar className="h-10 w-10">
-            <AvatarImage src={teammate.avatar} alt={teammate.name} />
+            <AvatarImage
+              src={getResizedImageUrl(teammate.avatarUrl ?? "", 256, 256)}
+              alt={teammate.name}
+            />
             <AvatarFallback className="bg-blue-500 text-white text-sm">
-              {getInitials(teammate.name)}
+              {getInitials(teammate.name, teammate.username)}
             </AvatarFallback>
           </Avatar>
 
           <div className="flex flex-col">
             <span className="text-sm font-medium text-gray-700">
-              {teammate.name}
+              {teammate.username}
             </span>
-            <span className="text-xs text-gray-500">{teammate.email}</span>
+            <span className="text-xs text-gray-500">{teammate.name}</span>
           </div>
         </div>
 
@@ -93,15 +103,17 @@ export default function TeammateCard({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {TEAMMATE_ROLES.filter((r) => r.value !== "owner").map((role) => (
-                <DropdownMenuItem
-                  key={role.value}
-                  onClick={() => onRoleChange(role.value)}
-                  className="cursor-pointer"
-                >
-                  {role.label}
-                </DropdownMenuItem>
-              ))}
+              {TEAMMATE_ROLES.filter((r) => r.value !== PlanRole.Owner).map(
+                (role) => (
+                  <DropdownMenuItem
+                    key={role.value}
+                    onClick={() => onRoleChange(role.value)}
+                    className="cursor-pointer"
+                  >
+                    {role.label}
+                  </DropdownMenuItem>
+                ),
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
 
@@ -130,21 +142,26 @@ export default function TeammateCard({
     <div className="group p-3 bg-gray-100 rounded-lg flex items-center justify-between">
       <div className="flex items-center gap-3">
         <Avatar className="h-10 w-10">
-          <AvatarImage src={teammate.avatar} alt={teammate.name} />
+          <AvatarImage
+            src={getResizedImageUrl(teammate.avatarUrl ?? "", 256, 256)}
+            alt={teammate.name}
+          />
           <AvatarFallback className="bg-blue-500 text-white text-sm">
-            {getInitials(teammate.name)}
+            {getInitials(teammate.name, teammate.username)}
           </AvatarFallback>
         </Avatar>
 
         <div className="flex flex-col">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-gray-700">
-              {teammate.name}
+              {teammate.name
+                ? `${teammate.name} (${teammate.username})`
+                : teammate.username}
             </span>
-            {teammate.status === "pending" && (
+            {teammate.status === InvitationStatus.Pending && (
               <Badge
                 variant="secondary"
-                className={getStatusBadgeColor("pending")}
+                className={getStatusBadgeColor(InvitationStatus.Pending)}
               >
                 Pending
               </Badge>
@@ -163,13 +180,13 @@ export default function TeammateCard({
 
       {!isOwner && (
         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button
+          {/* <button
             className="cursor-pointer rounded-md p-1.5 bg-yellow-400 hover:bg-yellow-500 text-white"
             onClick={onEdit}
             title="Edit role"
           >
             <Pencil size={14} />
-          </button>
+          </button> */}
           <button
             className="cursor-pointer rounded-md p-1.5 bg-red-400 hover:bg-red-500 text-white"
             onClick={onDelete}

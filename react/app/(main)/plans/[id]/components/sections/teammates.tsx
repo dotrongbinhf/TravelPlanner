@@ -1,83 +1,114 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { Teammate, TeammateRole, User } from "@/types/teammate";
+import { Participant } from "@/types/participant";
 import { UserPlus } from "lucide-react";
 import { forwardRef, useEffect, useRef, useState } from "react";
 import TeammateCard from "./teammate-card";
 import InviteTeammateDialog from "./invite-teammate-dialog";
+import {
+  deleteParticipant,
+  inviteTeammate,
+} from "@/api/participant/participant";
+import toast from "react-hot-toast";
+import { useParams } from "next/navigation";
+import {
+  InvitationStatus,
+  InviteTeammateRequest,
+  PlanRole,
+} from "@/api/participant/types";
+import { User } from "@/types/user";
+import { ConfirmDeleteModal } from "@/components/confirm-delete-modal";
 
 interface TeammatesProps {
   className?: string;
+  participants: Participant[];
+  onUpdate: (participants: Participant[]) => void;
 }
 
 const Teammates = forwardRef<HTMLDivElement, TeammatesProps>(function Teammates(
-  { className },
+  { className, participants, onUpdate },
   ref,
 ) {
-  const [teammates, setTeammates] = useState<Teammate[]>([
-    {
-      id: "owner-1",
-      name: "John Doe",
-      email: "john@example.com",
-      role: "owner",
-      status: "active",
-    },
-    {
-      id: "t1",
-      name: "Jane Smith",
-      email: "jane@example.com",
-      role: "editor",
-      status: "active",
-    },
-    {
-      id: "t2",
-      name: "Mike Wilson",
-      email: "mike@example.com",
-      role: "viewer",
-      status: "pending",
-    },
-  ]);
+  const params = useParams();
+  const planId = params.id as string;
 
   const [isInviteOpen, setIsInviteOpen] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editRole, setEditRole] = useState<TeammateRole>("viewer");
+  const [editRole, setEditRole] = useState<PlanRole>(PlanRole.Viewer);
+
+  // Delete modal state
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [participantToDelete, setParticipantToDelete] =
+    useState<Participant | null>(null);
+
   const editCardRef = useRef<HTMLDivElement>(null);
 
-  const handleInvite = (user: User, role: TeammateRole) => {
-    const newTeammate: Teammate = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      avatar: user.avatar,
-      role,
-      status: "pending",
-    };
-    setTeammates((prev) => [...prev, newTeammate]);
+  const handleInvite = async (user: User, role: PlanRole) => {
+    try {
+      const newParticipant = await inviteTeammate(planId, {
+        userId: user.id,
+        role,
+      } as InviteTeammateRequest);
+
+      const participantWithUserInfo: Participant = {
+        ...newParticipant,
+        name: user.name,
+        username: user.username,
+        avatarUrl: user.avatarUrl,
+      };
+
+      const newParticipants = [...participants, participantWithUserInfo];
+      onUpdate(newParticipants);
+      toast.success("Sent Invitation");
+    } catch (error) {
+      console.error("Failed to invite teammate:", error);
+      toast.error("Failed to send invitation.");
+    }
   };
 
-  const handleEditTeammate = (teammate: Teammate) => {
+  const handleEditTeammate = (teammate: Participant) => {
     setEditingId(teammate.id);
     setEditRole(teammate.role);
   };
 
   const handleConfirmEdit = () => {
     if (editingId) {
-      setTeammates((prev) =>
-        prev.map((t) => (t.id === editingId ? { ...t, role: editRole } : t)),
+      const updatedParticipants = participants.map((t) =>
+        t.id === editingId ? { ...t, role: editRole } : t,
       );
+      onUpdate(updatedParticipants);
     }
     handleCancelEdit();
   };
 
   const handleCancelEdit = () => {
     setEditingId(null);
-    setEditRole("viewer");
+    setEditRole(PlanRole.Viewer);
   };
 
-  const handleDeleteTeammate = (teammateId: string) => {
-    setTeammates((prev) => prev.filter((t) => t.id !== teammateId));
+  const handleDeleteTeammate = (participant: Participant) => {
+    setParticipantToDelete(participant);
+    setDeleteModalOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!participantToDelete) return;
+
+    try {
+      await deleteParticipant(participantToDelete.id);
+      const updatedParticipants = participants.filter(
+        (t) => t.id !== participantToDelete.id,
+      );
+      onUpdate(updatedParticipants);
+      toast.success("Removed Participant");
+    } catch (error) {
+      console.error("Failed to delete participant:", error);
+      toast.error("Failed to remove participant.");
+    } finally {
+      setParticipantToDelete(null);
+    }
   };
 
   useEffect(() => {
@@ -96,11 +127,19 @@ const Teammates = forwardRef<HTMLDivElement, TeammatesProps>(function Teammates(
   }, [editingId]);
 
   // Sort teammates: owner first, then by status (active before pending)
-  const sortedTeammates = [...teammates].sort((a, b) => {
-    if (a.role === "owner") return -1;
-    if (b.role === "owner") return 1;
-    if (a.status === "active" && b.status === "pending") return -1;
-    if (a.status === "pending" && b.status === "active") return 1;
+  const sortedTeammates = [...participants].sort((a, b) => {
+    if (a.role === PlanRole.Owner) return -1;
+    if (b.role === PlanRole.Owner) return 1;
+    if (
+      a.status === InvitationStatus.Accepted &&
+      b.status === InvitationStatus.Pending
+    )
+      return -1;
+    if (
+      a.status === InvitationStatus.Pending &&
+      b.status === InvitationStatus.Accepted
+    )
+      return 1;
     return 0;
   });
 
@@ -135,8 +174,8 @@ const Teammates = forwardRef<HTMLDivElement, TeammatesProps>(function Teammates(
             onConfirm={handleConfirmEdit}
             onCancel={handleCancelEdit}
             onEdit={() => handleEditTeammate(teammate)}
-            onDelete={() => handleDeleteTeammate(teammate.id)}
-            isOwner={teammate.role === "owner"}
+            onDelete={() => handleDeleteTeammate(teammate)}
+            isOwner={teammate.role === PlanRole.Owner}
             containerRef={editCardRef}
           />
         ))}
@@ -146,7 +185,19 @@ const Teammates = forwardRef<HTMLDivElement, TeammatesProps>(function Teammates(
         open={isInviteOpen}
         onOpenChange={setIsInviteOpen}
         onInvite={handleInvite}
-        existingTeammateIds={teammates.map((t) => t.id)}
+        existingTeammateIds={participants.map((t) => t.userId)}
+      />
+
+      <ConfirmDeleteModal
+        open={deleteModalOpen}
+        onOpenChange={setDeleteModalOpen}
+        title="Remove Participant"
+        description={`Are you sure you want to remove ${
+          participantToDelete?.name
+            ? `"${participantToDelete.name}" (${participantToDelete.username})`
+            : `"${participantToDelete?.username}"`
+        } from plan ?`}
+        onConfirm={handleConfirmDelete}
       />
     </section>
   );

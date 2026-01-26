@@ -2,6 +2,7 @@
 using dotnet.Dtos.ExpenseItem;
 using dotnet.Dtos.Note;
 using dotnet.Dtos.PackingList;
+using dotnet.Dtos.Participant;
 
 namespace dotnet.Dtos.Plan
 {
@@ -19,6 +20,7 @@ namespace dotnet.Dtos.Plan
         public ICollection<NoteDto> Notes { get; set; } = new List<NoteDto>();
         public ICollection<PackingListDto> PackingLists { get; set; } = new List<PackingListDto>();
         public ICollection<ExpenseItemDto> ExpenseItems { get; set; } = new List<ExpenseItemDto>();
+        public ICollection<ParticipantDto> Participants { get; set; } = new List<ParticipantDto>();
 
     }
 }
