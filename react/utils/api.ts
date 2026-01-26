@@ -81,20 +81,20 @@ const errorHandler = async (error: any) => {
           return axios(originalRequest);
         } else {
           failedQueue = [];
-          toast.error("Phiên đăng nhập đã hết hạn!");
+          toast.error("Login session expired!");
           setTimeout(() => {
             TokenStorage.removeAccessToken();
             window.location.href = "/login";
-          }, 2000);
+          }, 3000);
           return;
         }
       } catch (err) {
         processQueue(err, null);
-        toast.error("Phiên đăng nhập đã hết hạn!");
+        toast.error("Login session expired!");
         setTimeout(() => {
           TokenStorage.removeAccessToken();
           window.location.href = "/login";
-        }, 10000);
+        }, 3000);
         return Promise.reject(error);
       } finally {
         isRefreshing = false;

@@ -161,7 +161,7 @@ namespace dotnet.Controllers
                 return NotFound();
             }
 
-            var uploadResult = await _cloudinaryService.UploadImageAsync(coverImage, id.ToString());
+            var uploadResult = await _cloudinaryService.UploadImageAsync(coverImage, id.ToString(), "Plans_Cover");
             if (uploadResult.Error != null)
             {
                 return BadRequest(uploadResult.Error.Message);

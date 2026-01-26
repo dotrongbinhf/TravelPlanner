@@ -9,5 +9,8 @@
         public string Name { get; set; } = string.Empty;
         public string AvatarUrl { get; set; } = string.Empty;
         public string Email { get; set; } = string.Empty;
+        
+        public ICollection<Plan> Plans { get; set; } = new List<Plan>();
+        public ICollection<Participant> Participations { get; set; } = new List<Participant>();
     }
 }

@@ -20,7 +20,7 @@ namespace dotnet.Services
             _cloudinary = new Cloudinary(acc);
         }
 
-        public async Task<ImageUploadResult> UploadImageAsync(IFormFile file, string publicId)
+        public async Task<ImageUploadResult> UploadImageAsync(IFormFile file, string publicId, string folderName)
         {
             var uploadResult = new ImageUploadResult();
             if (file.Length > 0)
@@ -29,7 +29,7 @@ namespace dotnet.Services
                 var uploadParams = new ImageUploadParams
                 {
                     File = new FileDescription(file.FileName, stream),
-                    Folder = "Plan_Covers",
+                    Folder = folderName,
                     PublicId = publicId,
                     Overwrite = true,
                     //Invalidate = true,

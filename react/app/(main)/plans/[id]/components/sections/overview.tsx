@@ -26,6 +26,14 @@ import { AxiosError } from "axios";
 import { updatePlanBasicInfo, updatePlanCoverImage } from "@/api/plan/plan";
 import { Plan } from "@/types/plan";
 import { getLocaleFromCurrencyCode } from "@/utils/curency";
+import {
+  AdvancedImage,
+  responsive,
+  placeholder,
+  lazyload,
+} from "@cloudinary/react";
+import { Cloudinary } from "@cloudinary/url-gen";
+import { getResizedImageUrl } from "@/utils/image";
 
 interface OverviewProps {
   planId: string;
@@ -64,6 +72,14 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
     const [editedName, setEditedName] = useState(name);
     const nameInputRef = useRef<HTMLInputElement>(null);
     const nameContainerRef = useRef<HTMLDivElement>(null);
+
+    const cld = new Cloudinary({
+      cloud: {
+        cloudName: "dejauxt7c",
+      },
+    });
+
+    const cIdImg = cld.image(`Plans_Cover/${planId}`);
 
     useEffect(() => {
       if (isEditingName && nameInputRef.current) {
@@ -231,11 +247,22 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
             />
           ) : coverImageUrl ? (
             <img
-              src={coverImageUrl}
+              src={getResizedImageUrl(coverImageUrl, 1024)}
               alt="Current Cover"
               className="absolute inset-0 w-full h-full object-cover"
             />
           ) : (
+            // <AdvancedImage
+            //   cldImg={cIdImg}
+            //   plugins={[
+            //     responsive({
+            //       steps: [200, 400, 600, 800, 1000, 1200, 1400, 1600],
+            //     }),
+            //     lazyload(),
+            //     placeholder(),
+            //   ]}
+            //   className="absolute inset-0 w-full h-full object-cover"
+            // />
             <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-600 bg-gradient-to-br from-gray-200 to-gray-300">
               <Camera size={56} className="text-gray-500" />
               <p className="mt-3 text-sm font-medium">No cover image</p>

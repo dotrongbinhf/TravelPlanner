@@ -10,7 +10,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { is } from "date-fns/locale";
 
 interface CustomDialogProps {
   open: boolean;

@@ -68,7 +68,7 @@ namespace dotnet.Controllers
 
             if (!BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
             {
-                return Unauthorized("Wrong Password!");
+                return BadRequest("Wrong Password!");
             }
 
             var accessToken = GenerateAccessToken(user);

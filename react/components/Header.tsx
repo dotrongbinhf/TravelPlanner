@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LogOut, Settings, User, Plus } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -31,11 +31,15 @@ import { cn } from "@/lib/utils";
 import { AxiosError } from "axios";
 import { createPlan } from "@/api/plan/plan";
 import { CreatePlanRequest } from "@/api/plan/types";
+import { useAppContext } from "@/contexts/AppContext";
+import { getUserProfile } from "@/api/user/user";
+import { getResizedImageUrl } from "@/utils/image";
 
 export default function Header() {
   const pathname = usePathname();
   const router = useRouter();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const { user, setUser } = useAppContext();
 
   // Form state
   const [planName, setPlanName] = useState("");
@@ -44,16 +48,32 @@ export default function Header() {
   const [budget, setBudget] = useState("");
   const [currency, setCurrency] = useState("USD");
 
-  const user = {
-    username: "dotrongbinhf",
-    name: "Do Trong Binh",
-    avatar: "/images/auth/login-thumbnail.jpg",
-  };
+  // Fetch user profile on mount if not already loaded
+  useEffect(() => {
+    const fetchUserProfile = async () => {
+      if (!user) {
+        try {
+          const response = await getUserProfile();
+          setUser(response);
+        } catch (error) {
+          console.error("Failed to fetch user profile:", error);
+        }
+      }
+    };
+    fetchUserProfile();
+  }, [user, setUser]);
 
   const isActive = (href: string) => pathname.includes(href);
 
-  const getInitials = (name: string) => {
-    const parts = name.trim().split(/\s+/);
+  const getInitials = (
+    name: string | undefined | null,
+    username: string | undefined | null,
+  ) => {
+    // Use name if available, otherwise fall back to username
+    const displayName = name?.trim() || username?.trim() || "";
+    if (!displayName) return "Avatar";
+
+    const parts = displayName.split(/\s+/);
     if (parts.length === 1) {
       return parts[0].slice(0, 2).toUpperCase();
     }
@@ -166,10 +186,14 @@ export default function Header() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="cursor-pointer flex items-center gap-3 px-2 transition-all duration-200 outline-none">
-                  <Avatar className="h-10 w-10 border-1 border-gray-200">
-                    <AvatarImage src={user.avatar} alt={user.name} />
+                  <Avatar className="h-10 w-10 border-2 border-gray-200">
+                    <AvatarImage
+                      src={getResizedImageUrl(user?.avatarUrl ?? "", 256, 256)}
+                      alt={user?.name || user?.username}
+                      className="object-cover"
+                    />
                     <AvatarFallback className="bg-blue-400 text-white">
-                      {getInitials(user.name)}
+                      {getInitials(user?.name, user?.username)}
                     </AvatarFallback>
                   </Avatar>
                 </button>
@@ -180,18 +204,26 @@ export default function Header() {
                   onSelect={(e) => e.preventDefault()}
                 >
                   <div className="flex items-center gap-3 pointer-events-none">
-                    <Avatar className="h-10 w-10 border-1 border-gray-200">
-                      <AvatarImage src={user.avatar} alt={user.name} />
+                    <Avatar className="h-10 w-10 border-2 border-gray-200">
+                      <AvatarImage
+                        src={getResizedImageUrl(
+                          user?.avatarUrl ?? "",
+                          256,
+                          256,
+                        )}
+                        alt={user?.name || user?.username}
+                        className="object-cover"
+                      />
                       <AvatarFallback className="bg-blue-400 text-white">
-                        {getInitials(user.name)}
+                        {getInitials(user?.name, user?.username)}
                       </AvatarFallback>
                     </Avatar>
                     <div className="flex flex-col leading-tight pointer-events-auto">
                       <span className="text-sm font-semibold text-gray-900 select-text">
-                        {user.username}
+                        {user?.username}
                       </span>
                       <span className="text-xs text-gray-500 select-text">
-                        {user.name || ""}
+                        {user?.name ?? ""}
                       </span>
                     </div>
                   </div>
