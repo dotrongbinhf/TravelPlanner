@@ -82,7 +82,14 @@ namespace dotnet.Controllers
             return Ok(new LoginResponse
             {
                 AccessToken = accessToken,
-                Username = user.Username,
+                User = new Dtos.User.UserDto
+                {
+                    Id = user.Id,
+                    Username = user.Username,
+                    Name = user.Name,
+                    AvatarUrl = user.AvatarUrl,
+                    Email = user.Email,
+                }
             });
         }
 
@@ -112,7 +119,18 @@ namespace dotnet.Controllers
             var accessToken = GenerateAccessToken(user);
             dbContext.Users.Add(user);
             await dbContext.SaveChangesAsync();
-            return Ok(new { AccessToken = accessToken });
+            return Ok(new RegisterResponse
+            {
+                AccessToken = accessToken,
+                User = new Dtos.User.UserDto
+                {
+                    Id = user.Id,
+                    Username = user.Username,
+                    Name = user.Name,
+                    AvatarUrl = user.AvatarUrl,
+                    Email = user.Email,
+                }
+            });
         }
 
         [HttpPost("refresh-token")]

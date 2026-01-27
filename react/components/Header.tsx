@@ -33,7 +33,7 @@ import { createPlan } from "@/api/plan/plan";
 import { CreatePlanRequest } from "@/api/plan/types";
 import { useAppContext } from "@/contexts/AppContext";
 import { getUserProfile } from "@/api/user/user";
-import { getResizedImageUrl } from "@/utils/image";
+import { getInitials, getResizedImageUrl } from "@/utils/image";
 
 export default function Header() {
   const pathname = usePathname();
@@ -61,30 +61,14 @@ export default function Header() {
       }
     };
     fetchUserProfile();
-  }, [user, setUser]);
+  }, [user]);
 
   const isActive = (href: string) => pathname.includes(href);
-
-  const getInitials = (
-    name: string | undefined | null,
-    username: string | undefined | null,
-  ) => {
-    // Use name if available, otherwise fall back to username
-    const displayName = name?.trim() || username?.trim() || "";
-    if (!displayName) return "Avatar";
-
-    const parts = displayName.split(/\s+/);
-    if (parts.length === 1) {
-      return parts[0].slice(0, 2).toUpperCase();
-    }
-    return (parts[0][0] + parts[1][0]).toUpperCase();
-  };
 
   const handleLogout = async () => {
     try {
       await logout();
       TokenStorage.removeAccessToken();
-      setUser(null);
       router.push("/login");
     } catch (error) {
       console.error("Logout failed:", error);
@@ -177,10 +161,10 @@ export default function Header() {
             {/* New Plan Button */}
             <button
               onClick={() => setIsDialogOpen(true)}
-              className="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm px-3 py-3 rounded-lg flex items-center gap-2 transition-colors duration-200"
+              className="cursor-pointer bg-blue-500 hover:bg-blue-600 text-white font-semibold text-sm px-3 py-3 rounded-lg flex items-center gap-2 transition-colors duration-200"
             >
               <Plus className="w-4 h-4" strokeWidth={3} />
-              New Plan
+              Create New Plan
             </button>
 
             {/* User Profile Dropdown */}

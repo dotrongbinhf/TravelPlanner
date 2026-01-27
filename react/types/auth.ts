@@ -1,3 +1,5 @@
+import { User } from "./user";
+
 export type LoginRequest = {
   username: string;
   password: string;
@@ -5,9 +7,7 @@ export type LoginRequest = {
 
 export type LoginResponse = {
   accessToken: string;
-  username: string;
-  name: string;
-  avatarUrl: string;
+  user: User;
 };
 
 export type RegisterRequest = {
@@ -17,6 +17,7 @@ export type RegisterRequest = {
 
 export type RegisterResponse = {
   accessToken: string;
+  user: User;
 };
 
 export type RefreshTokenResponse = {

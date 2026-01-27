@@ -7,7 +7,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { getResizedImageUrl } from "@/utils/image";
+import { getInitials, getResizedImageUrl } from "@/utils/image";
 import { Participant } from "@/types/participant";
 import { InvitationStatus, PlanRole } from "@/api/participant/types";
 import { TEAMMATE_ROLES } from "@/constants/participant";
@@ -48,17 +48,6 @@ export default function TeammateCard({
   isOwner = false,
   containerRef,
 }: TeammateCardProps) {
-  const getInitials = (name?: string, username?: string) => {
-    const displayName = name?.trim() || username?.trim() || "";
-    if (!displayName) return "U";
-
-    const parts = displayName.split(/\s+/);
-    if (parts.length === 1) {
-      return parts[0].slice(0, 2).toUpperCase();
-    }
-    return (parts[0][0] + parts[1][0]).toUpperCase();
-  };
-
   const getStatusBadgeColor = (status: InvitationStatus) => {
     switch (status) {
       case InvitationStatus.Accepted:

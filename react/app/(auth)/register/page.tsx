@@ -1,6 +1,7 @@
 "use client";
 
 import { register } from "@/api/auth/auth";
+import { useAppContext } from "@/contexts/AppContext";
 import { TokenStorage } from "@/utils/tokenStorage";
 import { AxiosError } from "axios";
 import { Eye, EyeOff } from "lucide-react";
@@ -18,12 +19,15 @@ export default function Register() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [confirmPasswordMatch, setConfirmPasswordMatch] = useState(false);
 
+  const { user, setUser } = useAppContext();
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     try {
       const response = await register({ username, password });
       TokenStorage.setAccessToken(response.accessToken);
+      setUser(response.user);
       toast.success("Registration successful!");
       router.replace("/");
     } catch (error) {
@@ -38,7 +42,7 @@ export default function Register() {
 
   useEffect(() => {
     setConfirmPasswordMatch(
-      password.length > 0 && password === confirmPassword
+      password.length > 0 && password === confirmPassword,
     );
   }, [password, confirmPassword]);
 

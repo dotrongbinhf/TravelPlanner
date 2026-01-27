@@ -1,6 +1,7 @@
 "use client";
 
 import { login } from "@/api/auth/auth";
+import { useAppContext } from "@/contexts/AppContext";
 import { TokenStorage } from "@/utils/tokenStorage";
 import { AxiosError } from "axios";
 import { Eye, EyeOff } from "lucide-react";
@@ -14,6 +15,7 @@ export default function Login() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const { user, setUser } = useAppContext();
 
   // useEffect(() => {
   //   if (TokenStorage.getAccessToken()) {
@@ -28,6 +30,7 @@ export default function Login() {
     try {
       const response = await login({ username, password });
       TokenStorage.setAccessToken(response.accessToken);
+      setUser(response.user);
       toast.success("Login successful!");
       router.replace("/");
     } catch (error) {

@@ -1,13 +1,12 @@
 "use client";
 
-import { getAllUsers } from "@/api/auth/auth";
 import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 
 export default function Home() {
+  const router = useRouter();
   useEffect(() => {
-    getAllUsers().then((users) => {
-      console.log("All Users:", users);
-    });
+    router.push("/plans");
   }, []);
 
   return (

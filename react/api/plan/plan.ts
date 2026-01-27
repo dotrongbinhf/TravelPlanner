@@ -1,6 +1,7 @@
 import { Plan } from "@/types/plan";
 import API from "@/utils/api";
 import { CreatePlanRequest } from "./types";
+import { PaginatedResult } from "@/types/paginated";
 
 const APP_CONFIG_URL = "/api/plan";
 
@@ -39,5 +40,40 @@ export const updatePlanCoverImage = async (planId: string, image: File) => {
       },
     },
   );
+  return response.data;
+};
+
+export const getMyPlans = async (page: number = 1, pageSize: number = 10) => {
+  const response = await API.get<PaginatedResult<Plan>>(
+    `${APP_CONFIG_URL}/mine`,
+    { params: { page, pageSize } },
+  );
+  return response.data;
+};
+
+export const getSharedPlans = async (
+  page: number = 1,
+  pageSize: number = 10,
+) => {
+  const response = await API.get<PaginatedResult<Plan>>(
+    `${APP_CONFIG_URL}/shared`,
+    { params: { page, pageSize } },
+  );
+  return response.data;
+};
+
+export const getPendingInvitations = async (
+  page: number = 1,
+  pageSize: number = 10,
+) => {
+  const response = await API.get<PaginatedResult<Plan>>(
+    `${APP_CONFIG_URL}/pending`,
+    { params: { page, pageSize } },
+  );
+  return response.data;
+};
+
+export const deletePlan = async (planId: string) => {
+  const response = await API.delete(`${APP_CONFIG_URL}/${planId}`);
   return response.data;
 };

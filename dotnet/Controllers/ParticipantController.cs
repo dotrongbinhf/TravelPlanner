@@ -117,16 +117,16 @@ namespace dotnet.Controllers
         [HttpDelete("{id:Guid}")]
         public async Task<IActionResult> DeleteParticipant(Guid id)
         {
-            var participant = await dbContext.Participants
+            var participantToRemove = await dbContext.Participants
                 .Include(p => p.Plan)
                 .FirstOrDefaultAsync(p => p.Id == id);
 
-            if (participant == null)
+            if (participantToRemove == null)
             {
                 return NotFound("Participant not found");
             }
 
-            if (participant.Role == Enums.PlanRole.Owner)
+            if (participantToRemove.Role == Enums.PlanRole.Owner)
             {
                 return BadRequest("Cannot remove plan owner");
             }
@@ -137,12 +137,12 @@ namespace dotnet.Controllers
                 return Unauthorized();
             }
 
-            if (participant.Plan.OwnerId != currentUserId)
+            if (participantToRemove.Plan.OwnerId != currentUserId && participantToRemove.UserId != currentUserId)
             {
-                return Forbid("Only plan owner can remove participants");
+                return Forbid("Only plan owner can remove other participants");
             }
 
-            dbContext.Participants.Remove(participant);
+            dbContext.Participants.Remove(participantToRemove);
             await dbContext.SaveChangesAsync();
 
             return NoContent();

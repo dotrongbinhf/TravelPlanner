@@ -9,6 +9,7 @@ namespace dotnet.Dtos.Participant
         public Guid PlanId { get; set; }
         public PlanRole Role { get; set; }
         public InvitationStatus Status { get; set; }
+        // UserInfo
         public string? Name { get; set; }
         public string? Username { get; set; }
         public string? AvatarUrl { get; set; }

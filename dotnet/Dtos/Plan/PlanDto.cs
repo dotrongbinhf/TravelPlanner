@@ -3,6 +3,7 @@ using dotnet.Dtos.ExpenseItem;
 using dotnet.Dtos.Note;
 using dotnet.Dtos.PackingList;
 using dotnet.Dtos.Participant;
+using dotnet.Dtos.User;
 
 namespace dotnet.Dtos.Plan
 {
@@ -17,10 +18,12 @@ namespace dotnet.Dtos.Plan
         public double Budget { get; set; }
         public string CurrencyCode { get; set; } = "USD";
 
-        public ICollection<NoteDto> Notes { get; set; } = new List<NoteDto>();
-        public ICollection<PackingListDto> PackingLists { get; set; } = new List<PackingListDto>();
-        public ICollection<ExpenseItemDto> ExpenseItems { get; set; } = new List<ExpenseItemDto>();
-        public ICollection<ParticipantDto> Participants { get; set; } = new List<ParticipantDto>();
+        // Pending and Shared Sections
+        public Guid? ParticipantId { get; set; }
 
+        public ICollection<NoteDto>? Notes { get; set; }
+        public ICollection<PackingListDto>? PackingLists { get; set; }
+        public ICollection<ExpenseItemDto>? ExpenseItems { get; set; }
+        public ICollection<ParticipantDto>? Participants { get; set; }
     }
 }

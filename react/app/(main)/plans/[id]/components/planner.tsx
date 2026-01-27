@@ -198,7 +198,7 @@ export default function Planner({
             planId={plan.id}
             totalBudget={plan.budget}
             currencyCode={plan.currencyCode}
-            expenseItems={plan.expenseItems}
+            expenseItems={plan.expenseItems ?? []}
             updateExpenseItems={updateExpenseItems}
             updateBudgetAndCurrencyCode={updateBudgetAndCurrencyCode}
           />
@@ -210,7 +210,7 @@ export default function Planner({
               sectionRefs.current["packing-lists"] = el;
             }}
             planId={plan.id}
-            packingLists={plan.packingLists}
+            packingLists={plan.packingLists ?? []}
             updatePackingLists={updatePackingLists}
           />
         </div>
@@ -220,7 +220,7 @@ export default function Planner({
             ref={(el) => {
               sectionRefs.current["teammates"] = el;
             }}
-            participants={plan.participants}
+            participants={plan.participants ?? []}
             onUpdate={updateParticipants}
           />
         </div>
@@ -231,7 +231,7 @@ export default function Planner({
               sectionRefs.current["notes"] = el;
             }}
             planId={plan.id}
-            notes={plan.notes}
+            notes={plan.notes ?? []}
             updateNotes={updateNotes}
           />
         </div>

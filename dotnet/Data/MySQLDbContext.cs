@@ -18,8 +18,8 @@ namespace dotnet.Data
             //modelBuilder.Entity<Participant>()
             //    .HasKey(pa => new { pa.UserId, pa.PlanId });
 
-            //modelBuilder.Entity<Course>()
-            //    .HasIndex(c => new { c.InstructorId, c.Title })
+            //modelBuilder.Entity<Participant>()
+            //    .HasIndex(pa => new { pa.UserId, pa.PlanId })
             //    .IsUnique();
 
             base.OnModelCreating(modelBuilder);

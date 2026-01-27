@@ -12,8 +12,10 @@ export type Plan = {
   endTime: Date;
   budget: number;
   currencyCode: string;
-  notes: Note[];
-  packingLists: PackingList[];
-  expenseItems: ExpenseItem[];
-  participants: Participant[];
+
+  participantId?: string;
+  notes?: Note[];
+  packingLists?: PackingList[];
+  expenseItems?: ExpenseItem[];
+  participants?: Participant[];
 };

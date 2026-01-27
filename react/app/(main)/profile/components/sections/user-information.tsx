@@ -34,15 +34,6 @@ const UserInformation = forwardRef<HTMLDivElement, UserInformationProps>(
       setEditEmail(user.email);
     }, [user]);
 
-    const getInitials = (name: string) => {
-      if (!name) return "U";
-      const parts = name.trim().split(/\s+/);
-      if (parts.length === 1) {
-        return parts[0].slice(0, 2).toUpperCase();
-      }
-      return (parts[0][0] + parts[1][0]).toUpperCase();
-    };
-
     const hasChanges = editName !== user.name || editEmail !== user.email;
 
     const handleCancel = () => {

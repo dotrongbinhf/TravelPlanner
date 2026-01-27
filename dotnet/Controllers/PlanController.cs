@@ -220,5 +220,196 @@ namespace dotnet.Controllers
                 coverImageUrl = plan.CoverImageUrl
             });
         }
+
+        [HttpGet("mine")]
+        public async Task<ActionResult<Helpers.PaginatedResult<PlanDto>>> GetMyPlans(int page = 1, int pageSize = 10)
+        {
+            var userId = _currentUser.Id;
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var query = dbContext.Plans.Where(p => p.OwnerId == userId)
+                .Include(p => p.Participants)
+                    .ThenInclude(participant => participant.User);
+            var totalCount = await query.CountAsync();
+            var plans = await query
+                .OrderByDescending(p => p.StartTime)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .Select(p => new PlanDto
+                {
+                    Id = p.Id,
+                    OwnerId = p.OwnerId,
+                    Name = p.Name,
+                    CoverImageUrl = p.CoverImageUrl,
+                    StartTime = p.StartTime,
+                    EndTime = p.EndTime,
+                    Budget = p.Budget,
+                    CurrencyCode = p.CurrencyCode,
+                    Participants = p.Participants.Select(participant => new Dtos.Participant.ParticipantDto
+                    {
+                        Id = participant.Id,
+                        UserId = participant.UserId,
+                        PlanId = participant.PlanId,
+                        Role = participant.Role,
+                        Status = participant.Status,
+                        Name = participant.User.Name,
+                        Username = participant.User.Username,
+                        AvatarUrl = participant.User.AvatarUrl
+                    }).ToList()
+                })
+                .ToListAsync();
+
+            return Ok(new Helpers.PaginatedResult<PlanDto>
+            {
+                Items = plans,
+                TotalCount = totalCount,
+                Page = page,
+                PageSize = pageSize
+            });
+        }
+
+        [HttpGet("shared")]
+        public async Task<ActionResult<Helpers.PaginatedResult<PlanDto>>> GetSharedPlans(int page = 1, int pageSize = 10)
+        {
+            var userId = _currentUser.Id;
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var query = dbContext.Participants
+                .Where(p => p.UserId == userId && p.Status == Enums.InvitationStatus.Accepted && p.Role != Enums.PlanRole.Owner)
+                .Include(p => p.Plan)
+                    .ThenInclude(plan => plan.Participants)
+                        .ThenInclude(participant => participant.User);
+
+            var totalCount = await query.CountAsync();
+            var plans = await query
+                .OrderByDescending(p => p.Plan.StartTime)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
+
+            var results = plans
+                .Select(p => new PlanDto
+                {
+                    Id = p.Plan.Id,
+                    OwnerId = p.Plan.OwnerId,
+                    Name = p.Plan.Name,
+                    CoverImageUrl = p.Plan.CoverImageUrl,
+                    StartTime = p.Plan.StartTime,
+                    EndTime = p.Plan.EndTime,
+                    Budget = p.Plan.Budget,
+                    CurrencyCode = p.Plan.CurrencyCode,
+                    Participants = p.Plan.Participants.Select(participant => new Dtos.Participant.ParticipantDto
+                    {
+                        Id = participant.Id,
+                        UserId = participant.UserId,
+                        PlanId = participant.PlanId,
+                        Role = participant.Role,
+                        Status = participant.Status,
+                        Name = participant.User.Name,
+                        Username = participant.User.Username,
+                        AvatarUrl = participant.User.AvatarUrl
+                    }).ToList(),
+                    ParticipantId = p.Plan.Participants
+                        .FirstOrDefault(participant => participant.UserId == userId)?.Id
+                })
+                .ToList();
+
+            return Ok(new Helpers.PaginatedResult<PlanDto>
+            {
+                Items = results,
+                TotalCount = totalCount,
+                Page = page,
+                PageSize = pageSize
+            });
+        }
+
+        [HttpGet("pending")]
+        public async Task<ActionResult<Helpers.PaginatedResult<PlanDto>>> GetPendingInvitations(int page = 1, int pageSize = 10)
+        {
+            var userId = _currentUser.Id;
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var query = dbContext.Participants
+                .Where(p => p.UserId == userId && p.Status == Enums.InvitationStatus.Pending)
+                .Include(p => p.Plan)
+                    .ThenInclude(plan => plan.Participants)
+                        .ThenInclude(participant => participant.User);
+
+            var totalCount = await query.CountAsync();
+            var plans = await query
+                .OrderByDescending(p => p.CreatedAt)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
+
+            var results = plans
+                .Select(p => new PlanDto
+                {
+                    Id = p.Plan.Id,
+                    OwnerId = p.Plan.OwnerId,
+                    Name = p.Plan.Name,
+                    CoverImageUrl = p.Plan.CoverImageUrl,
+                    StartTime = p.Plan.StartTime,
+                    EndTime = p.Plan.EndTime,
+                    Budget = p.Plan.Budget,
+                    CurrencyCode = p.Plan.CurrencyCode,
+                    Participants = p.Plan.Participants.Select(participant => new Dtos.Participant.ParticipantDto
+                    {
+                        Id = participant.Id,
+                        UserId = participant.UserId,
+                        PlanId = participant.PlanId,
+                        Role = participant.Role,
+                        Status = participant.Status,
+                        Name = participant.User.Name,
+                        Username = participant.User.Username,
+                        AvatarUrl = participant.User.AvatarUrl
+                    }).ToList()
+                }).ToList();
+
+            return Ok(new Helpers.PaginatedResult<PlanDto>
+            {
+                Items = results,
+                TotalCount = totalCount,
+                Page = page,
+                PageSize = pageSize
+            });
+        }
+
+        [HttpDelete("{id:Guid}")]
+        public async Task<IActionResult> DeletePlan(Guid id)
+        {
+            var userId = _currentUser.Id;
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            var plan = await dbContext.Plans.FirstOrDefaultAsync(p => p.Id == id);
+
+            if (plan == null)
+            {
+                return NotFound("Plan not found");
+            }
+
+            if (plan.OwnerId != userId)
+            {
+                return Forbid("Only the owner can delete this plan");
+            }
+
+            dbContext.Plans.Remove(plan);
+
+            await dbContext.SaveChangesAsync();
+
+            return NoContent();
+        }
     }
 }

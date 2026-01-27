@@ -6,7 +6,7 @@ import { CustomDialog } from "@/components/custom-dialog";
 import { Badge } from "@/components/ui/badge";
 import { findUserByNameOrUsername } from "@/api/user/user";
 import toast from "react-hot-toast";
-import { getResizedImageUrl } from "@/utils/image";
+import { getInitials, getResizedImageUrl } from "@/utils/image";
 import { User } from "@/types/user";
 import { PlanRole } from "@/api/participant/types";
 
@@ -29,17 +29,6 @@ export default function InviteTeammateDialog({
   const [hasSearched, setHasSearched] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [selectedRole, setSelectedRole] = useState<PlanRole>(PlanRole.Viewer);
-
-  const getInitials = (name?: string, username?: string) => {
-    const displayName = name?.trim() || username?.trim() || "";
-    if (!displayName) return "U";
-
-    const parts = displayName.split(/\s+/);
-    if (parts.length === 1) {
-      return parts[0].slice(0, 2).toUpperCase();
-    }
-    return (parts[0][0] + parts[1][0]).toUpperCase();
-  };
 
   const handleSearch = async () => {
     setSelectedUser(null);
