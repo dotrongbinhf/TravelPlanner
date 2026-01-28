@@ -1,7 +1,7 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
-namespace dotnet.Domains
+namespace dotnet.Entites
 {
     public class Place : BaseAuditableEntity
     {

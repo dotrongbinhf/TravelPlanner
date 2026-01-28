@@ -1,6 +1,6 @@
 ﻿using dotnet.Enums;
 
-namespace dotnet.Domains
+namespace dotnet.Entites
 {
     public class Participant : BaseAuditableEntity
     {

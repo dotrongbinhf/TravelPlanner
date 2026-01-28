@@ -1,5 +1,6 @@
 ﻿using dotnet.Data;
 using dotnet.Dtos.PackingList;
+using dotnet.Entites;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -52,7 +53,7 @@ namespace dotnet.Controllers
             {
                 return NotFound();
             }
-            var packingList = new Domains.PackingList
+            var packingList = new PackingList
             {
                 Id = Guid.NewGuid(),
                 PlanId = planId,

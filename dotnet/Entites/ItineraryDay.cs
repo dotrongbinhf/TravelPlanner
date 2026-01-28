@@ -1,13 +1,13 @@
 ﻿namespace dotnet.Entites
 {
-    public class Note : BaseAuditableEntity
+    public class ItineraryDay : BaseAuditableEntity
     {
         public Guid Id { get; set; }
         public Guid PlanId { get; set; }
+        public int Order { get; set; }
         public string Title { get; set; } = string.Empty;
-        public string Content { get; set; } = string.Empty;
-        //public int Order { get; set; }
 
         public Plan Plan { get; set; }
+        public ICollection<ItineraryItem> ItineraryItems { get; set; } = new List<ItineraryItem>();
     }
 }

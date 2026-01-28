@@ -1,4 +1,4 @@
-﻿using dotnet.Domains;
+﻿using dotnet.Entites;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
@@ -32,6 +32,7 @@ namespace dotnet.Data
         public DbSet<PackingList> PackingLists { get; set; }
         public DbSet<PackingItem> PackingItems { get; set; }
         public DbSet<Note> Notes { get; set; }
+        public DbSet<ItineraryDay> ItineraryDays { get; set; }
 
         public override int SaveChanges()
         {

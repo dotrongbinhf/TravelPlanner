@@ -1,4 +1,4 @@
-﻿namespace dotnet.Domains
+﻿namespace dotnet.Entites
 {
     public class PackingList : BaseAuditableEntity
     {

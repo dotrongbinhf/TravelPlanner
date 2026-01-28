@@ -1,5 +1,5 @@
 ﻿using dotnet.Data;
-using dotnet.Domains;
+using dotnet.Entites;
 using dotnet.Dtos.Auth;
 using dotnet.Interfaces;
 using Microsoft.AspNetCore.Authorization;

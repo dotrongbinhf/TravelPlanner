@@ -1,9 +1,10 @@
-﻿using dotnet.Domains;
+﻿using dotnet.Entites;
 using dotnet.Dtos.ExpenseItem;
 using dotnet.Dtos.Note;
 using dotnet.Dtos.PackingList;
 using dotnet.Dtos.Participant;
 using dotnet.Dtos.User;
+using dotnet.Dtos.ItineraryDay;
 
 namespace dotnet.Dtos.Plan
 {
@@ -25,5 +26,6 @@ namespace dotnet.Dtos.Plan
         public ICollection<PackingListDto>? PackingLists { get; set; }
         public ICollection<ExpenseItemDto>? ExpenseItems { get; set; }
         public ICollection<ParticipantDto>? Participants { get; set; }
+        public ICollection<ItineraryDayDto>? ItineraryDays { get; set; }
     }
 }

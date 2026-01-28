@@ -1,5 +1,6 @@
 ﻿using dotnet.Data;
 using dotnet.Dtos.Participant;
+using dotnet.Entites;
 using dotnet.Enums;
 using dotnet.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -66,13 +67,13 @@ namespace dotnet.Controllers
                 return BadRequest("User is already a participant or has a pending invitation.");
             }
 
-            var participant = new Domains.Participant
+            var participant = new Participant
             {
                 Id = Guid.NewGuid(),
                 PlanId = planId,
                 UserId = request.UserId,
                 Role = request.Role,
-                Status = Enums.InvitationStatus.Pending
+                Status = InvitationStatus.Pending
             };
 
             await dbContext.Participants.AddAsync(participant);

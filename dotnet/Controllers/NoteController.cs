@@ -1,5 +1,6 @@
 ﻿using dotnet.Data;
 using dotnet.Dtos.Note;
+using dotnet.Entites;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -42,7 +43,7 @@ namespace dotnet.Controllers
                 return NotFound();
             }
             
-            var note = new Domains.Note
+            var note = new Note
             {
                 Id = Guid.NewGuid(),
                 PlanId = planId,

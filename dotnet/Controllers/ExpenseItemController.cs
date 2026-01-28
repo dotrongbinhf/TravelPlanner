@@ -1,5 +1,5 @@
 ﻿using dotnet.Data;
-using dotnet.Domains;
+using dotnet.Entites;
 using dotnet.Dtos.ExpenseItem;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;

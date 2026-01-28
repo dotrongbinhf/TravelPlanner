@@ -1,4 +1,4 @@
-﻿namespace dotnet.Domains
+﻿namespace dotnet.Entites
 {
     public class User : BaseAuditableEntity
     {
@@ -11,6 +11,6 @@
         public string Email { get; set; } = string.Empty;
         
         public ICollection<Plan> Plans { get; set; } = new List<Plan>();
-        public ICollection<Participant> Participations { get; set; } = new List<Participant>();
+        public ICollection<Participant> Participants { get; set; } = new List<Participant>();
     }
 }

@@ -1,4 +1,4 @@
-﻿namespace dotnet.Domains
+﻿namespace dotnet.Entites
 {
     public class Plan : BaseAuditableEntity
     {
@@ -11,7 +11,8 @@
         public double Budget { get; set; }
         public string CurrencyCode { get; set; } = "USD";
 
-        public ICollection<ItineraryItem> ItineraryItems { get; set; } = new List<ItineraryItem>();
+        public User Owner { get; set; }
+        public ICollection<ItineraryDay> ItineraryDays { get; set; } = new List<ItineraryDay>();
         public ICollection<ExpenseItem> ExpenseItems { get; set; } = new List<ExpenseItem>();
         public ICollection<PackingList> PackingLists { get; set; } = new List<PackingList>();
         public ICollection<Note> Notes { get; set; } = new List<Note>();
