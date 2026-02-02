@@ -9,6 +9,8 @@ import { Plan } from "@/types/plan";
 import { getPlanById } from "@/api/plan/plan";
 import { AxiosError } from "axios";
 import toast from "react-hot-toast";
+import { APIProvider } from "@vis.gl/react-google-maps";
+import { ItineraryItem } from "@/types/itineraryItem";
 
 export default function PlanIdPage() {
   const params = useParams();
@@ -58,30 +60,52 @@ export default function PlanIdPage() {
     setActiveSection(sectionId);
   };
 
+  const handleItineraryItemUpdate = (newItem: ItineraryItem) => {
+    setPlan((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        itineraryDays: prev.itineraryDays?.map((d) =>
+          d.id === newItem.itineraryDayId
+            ? {
+                ...d,
+                itineraryItems: [...(d.itineraryItems || []), newItem],
+              }
+            : d,
+        ),
+      };
+    });
+  };
+
   if (!plan) return null;
 
   return (
     <div className="w-full flex p-4 gap-4">
-      <div className="flex-[2] flex-shrink-0 h-full">
-        <Sidebar
-          activeSection={activeSection}
-          onSectionClick={handleSectionClick}
-        />
-      </div>
+      <APIProvider apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? ""}>
+        <div className="w-[200px] flex-shrink-0 h-full hidden lg:block">
+          <Sidebar
+            activeSection={activeSection}
+            onSectionClick={handleSectionClick}
+          />
+        </div>
 
-      <div className="flex-[5] h-full min-w-0">
-        <Planner
-          sectionRefs={sectionRefs}
-          scrollContainerRef={scrollContainerRef}
-          onSectionInView={handleSectionInView}
-          plan={plan}
-          setPlan={setPlan}
-        />
-      </div>
+        <div className="flex-[4] h-full min-w-0">
+          <Planner
+            sectionRefs={sectionRefs}
+            scrollContainerRef={scrollContainerRef}
+            onSectionInView={handleSectionInView}
+            plan={plan}
+            setPlan={setPlan}
+          />
+        </div>
 
-      <div className="flex-[5] h-full min-w-0">
-        <GoogleMapIntegration />
-      </div>
+        <div className="flex-[5] h-full min-w-0">
+          <GoogleMapIntegration
+            plan={plan}
+            onItineraryUpdate={handleItineraryItemUpdate}
+          />
+        </div>
+      </APIProvider>
     </div>
   );
 }

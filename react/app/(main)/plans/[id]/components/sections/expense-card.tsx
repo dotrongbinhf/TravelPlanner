@@ -70,7 +70,7 @@ export default function ExpenseCard({
     return (
       <div
         ref={containerRef}
-        className="p-3 bg-gray-100 rounded-lg flex items-start justify-between border-2 border-blue-400 border-dashed"
+        className="p-3 bg-gray-100 rounded-lg flex items-start justify-between border-2 border-blue-400"
       >
         <div className="flex items-center gap-3 flex-1 overflow-hidden">
           {/* Visual Dot */}

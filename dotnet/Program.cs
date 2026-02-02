@@ -20,7 +20,11 @@ builder.Services.AddScoped<ICookieService, CookieService>();
 builder.Services.AddSingleton<MongoDbService>();
 builder.Services.AddScoped<ICloudinaryService, CloudinaryService>();
 
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters.Add(new TimeOnlyJsonConverter());
+    });
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

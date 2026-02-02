@@ -1,5 +1,5 @@
 ﻿using dotnet.Data;
-using dotnet.Domains;
+using dotnet.Entites;
 using dotnet.Dtos.Plan;
 using dotnet.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -41,7 +41,7 @@ namespace dotnet.Controllers
             return Ok(results);
         }
 
-
+        // Get Plan Detailed in Plans/{id} pages
         [HttpGet("{id:Guid}")]
         public async Task<ActionResult<PlanDto>> GetPlanById(Guid id)
         {
@@ -59,12 +59,25 @@ namespace dotnet.Controllers
                 .Include(el => el.ExpenseItems)
                 .Include(el => el.Participants)
                     .ThenInclude(p => p.User)
+                .Include(el => el.ItineraryDays)
+                    .ThenInclude(iday => iday.ItineraryItems)
                 .FirstOrDefaultAsync();
 
             if(result == null)
             {
                 return NotFound();
             }
+
+            var placeIds = result.ItineraryDays
+                .SelectMany(iday => iday.ItineraryItems)
+                .Select(ii => ii.PlaceId)
+                .Distinct()
+                .ToList();
+
+            var placesDict = await _placesCollection
+                .Find(p => placeIds.Contains(p.PlaceId))
+                .ToListAsync()
+                .ContinueWith(t => t.Result.ToDictionary(p => p.PlaceId, p => p));
 
             return Ok(new PlanDto
             {
@@ -114,7 +127,26 @@ namespace dotnet.Controllers
                     Name = p.User.Name,
                     Username = p.User.Username,
                     AvatarUrl = p.User.AvatarUrl
-                }).ToList()
+                }).ToList(),
+                ItineraryDays = result.ItineraryDays
+                    .OrderBy(iday => iday.Order)
+                    .Select(iday => new Dtos.ItineraryDay.ItineraryDayDto
+                    {
+                        Id = iday.Id,
+                        PlanId = iday.PlanId,
+                        Order = iday.Order,
+                        Title = iday.Title,
+                        ItineraryItems = iday.ItineraryItems
+                            .OrderBy(ii => ii.StartTime)
+                            .Select(ii => new Dtos.ItineraryItem.ItineraryItemDto
+                            {
+                                Id = ii.Id,
+                                ItineraryDayId = ii.ItineraryDayId,
+                                Place = placesDict.GetValueOrDefault(ii.PlaceId), // Not Null
+                                StartTime = ii.StartTime,
+                                EndTime = ii.EndTime
+                            }).ToList()
+                    }).ToList()
             });
         }
 
@@ -150,6 +182,19 @@ namespace dotnet.Controllers
             };
             await dbContext.Participants.AddAsync(participant);
 
+            var dateCount = (newPlan.EndTime - newPlan.StartTime).Days + 1;
+            var itineraryDays = new List<ItineraryDay>(dateCount);
+            for (int i = 0; i < dateCount; i++)
+            {
+                itineraryDays.Add(new ItineraryDay
+                {
+                    Id = Guid.NewGuid(),
+                    PlanId = newPlan.Id,
+                    Order = i,
+                });
+            }
+            await dbContext.ItineraryDays.AddRangeAsync(itineraryDays);
+
             await dbContext.SaveChangesAsync();
 
             return CreatedAtAction(nameof(GetPlanById), new { id = newPlan.Id }, new PlanDto
@@ -175,24 +220,108 @@ namespace dotnet.Controllers
             });
         }
 
+        // Handle updating plan details and adjusting itinerary days with itinerary items as well
         [HttpPatch("{id:Guid}")]
         public async Task<IActionResult> UpdatePlan(Guid id, UpdatePlanRequest request)
         {
-            var plan = await dbContext.Plans.FindAsync(id);
+            var plan = await dbContext.Plans
+                .Where(el => el.Id == id)
+                .Include(el => el.ItineraryDays)
+                    .ThenInclude(iday => iday.ItineraryItems)
+                .FirstOrDefaultAsync();
             if (plan == null)
             {
                 return NotFound();
             }
 
             plan.Name = request.Name ?? plan.Name;
-            plan.StartTime = request.StartTime ?? plan.StartTime;
-            plan.EndTime = request.EndTime ?? plan.EndTime;
             plan.Budget = request.Budget ?? plan.Budget;
             plan.CurrencyCode = request.CurrencyCode ?? plan.CurrencyCode;
 
+            var existingItineraryDays = plan.ItineraryDays;
+            var newItineraryDays = existingItineraryDays.ToList();
+
+            if (request.StartTime != null || request.EndTime != null)
+            {
+                var newStartTime = request.StartTime ?? plan.StartTime;
+                var newEndTime = request.EndTime ?? plan.EndTime;
+                if (newEndTime < newStartTime)
+                {
+                    return BadRequest("EndTime cannot be earlier than StartTime");
+                }
+                var newDateCount = (newEndTime - newStartTime).Days + 1;
+
+                if (newDateCount > existingItineraryDays.Count)
+                {
+                    var daysToAdd = new List<ItineraryDay>();
+                    for (int i = existingItineraryDays.Count; i < newDateCount; i++)
+                    {
+                        daysToAdd.Add(new ItineraryDay
+                        {
+                            Id = Guid.NewGuid(),
+                            PlanId = plan.Id,
+                            Order = i,
+                        });
+                    }
+                    await dbContext.ItineraryDays.AddRangeAsync(daysToAdd);
+                    newItineraryDays = existingItineraryDays
+                        .Concat(daysToAdd)
+                        .ToList();
+                } else if(newDateCount < existingItineraryDays.Count)
+                {
+                    var daysToRemove = existingItineraryDays
+                        .Where(iday => iday.Order >= newDateCount)
+                        .ToList();
+                    dbContext.ItineraryDays.RemoveRange(daysToRemove);
+
+                    newItineraryDays = existingItineraryDays
+                        .Where(iday => iday.Order < newDateCount)
+                        .ToList();
+                }
+
+                plan.StartTime = request.StartTime ?? plan.StartTime;
+                plan.EndTime = request.EndTime ?? plan.EndTime;
+            }
+
             await dbContext.SaveChangesAsync();
 
-            return Ok(plan);
+            var placeIds = newItineraryDays
+                .SelectMany(iday => iday.ItineraryItems)
+                .Select(ii => ii.PlaceId)
+                .Distinct()
+                .ToList();
+
+            var placesDict = await _placesCollection
+                .Find(p => placeIds.Contains(p.PlaceId))
+                .ToListAsync()
+                .ContinueWith(t => t.Result.ToDictionary(p => p.PlaceId, p => p));
+
+            return Ok(new PlanDto
+            {
+                Id = plan.Id,
+                OwnerId = plan.OwnerId,
+                Name = plan.Name,
+                CoverImageUrl = plan.CoverImageUrl,
+                StartTime = plan.StartTime,
+                EndTime = plan.EndTime,
+                Budget = plan.Budget,
+                CurrencyCode = plan.CurrencyCode,
+                ItineraryDays = newItineraryDays.Select(iday => new Dtos.ItineraryDay.ItineraryDayDto
+                {
+                    Id = iday.Id,
+                    PlanId = iday.PlanId,
+                    Order = iday.Order,
+                    Title = iday.Title,
+                    ItineraryItems = iday.ItineraryItems.Select(ii => new Dtos.ItineraryItem.ItineraryItemDto
+                    {
+                        Id = ii.Id,
+                        ItineraryDayId = ii.ItineraryDayId,
+                        Place = placesDict.GetValueOrDefault(ii.PlaceId),
+                        StartTime = ii.StartTime,
+                        EndTime = ii.EndTime
+                    }).ToList()
+                }).ToList()
+            });
         }
 
         [HttpPatch("{id:Guid}/cover-image")]

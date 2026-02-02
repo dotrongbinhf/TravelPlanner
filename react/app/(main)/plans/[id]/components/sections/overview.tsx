@@ -34,6 +34,7 @@ import {
 } from "@cloudinary/react";
 import { Cloudinary } from "@cloudinary/url-gen";
 import { getResizedImageUrl } from "@/utils/image";
+import { formatDateRange } from "@/utils/date";
 
 interface OverviewProps {
   planId: string;
@@ -41,6 +42,8 @@ interface OverviewProps {
   coverImageUrl?: string;
   startTime: Date;
   endTime: Date;
+  participantCount: number;
+  placesCount: number;
   budget: number;
   currencyCode: string;
   updatePlanName: (name: string) => void;
@@ -55,6 +58,8 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
       coverImageUrl,
       startTime,
       endTime,
+      participantCount,
+      placesCount,
       budget,
       currencyCode,
       updatePlanName,
@@ -158,30 +163,39 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
       if (!selectedFile) return;
 
       setIsUploading(true);
-      try {
-        const response = await updatePlanCoverImage(planId, selectedFile);
-        updatePlanCoverImageUrl(response.coverImageUrl);
+      const promise = updatePlanCoverImage(planId, selectedFile).then(
+        (response) => {
+          updatePlanCoverImageUrl(response.coverImageUrl);
 
-        if (previewUrl) {
-          URL.revokeObjectURL(previewUrl);
-        }
-        setPreviewUrl(null);
-        setSelectedFile(null);
-        if (fileInputRef.current) {
-          fileInputRef.current.value = "";
-        }
+          if (previewUrl) {
+            URL.revokeObjectURL(previewUrl);
+          }
+          setPreviewUrl(null);
+          setSelectedFile(null);
+          if (fileInputRef.current) {
+            fileInputRef.current.value = "";
+          }
+          return response;
+        },
+      );
 
-        toast.success("Updated Cover Image");
-      } catch (error) {
-        console.error("Update Cover Image Failed:", error);
-        if (error instanceof AxiosError) {
-          toast.error(error.response?.data?.message ?? "Update Failed");
-        } else {
-          toast.error("Unexpected Error");
-        }
-      } finally {
-        setIsUploading(false);
-      }
+      await toast
+        .promise(promise, {
+          loading: "Updating Cover Image...",
+          success: "Updated Cover Image",
+          error: (error) => {
+            console.error("Update Cover Image Failed:", error);
+            if (error instanceof AxiosError) {
+              return error.response?.data?.message ?? "Update Failed";
+            }
+            return "Unexpected Error";
+          },
+        })
+        .catch((error) => {
+          console.error("Update Cover Image Failed:", error);
+        });
+
+      setIsUploading(false);
     };
 
     const handleEditClick = () => {
@@ -234,7 +248,7 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
         {/* Cover Image */}
         <button
           className={cn(
-            "relative w-full h-64 md:h-80 rounded-lg overflow-hidden bg-gray-200 group",
+            "relative w-full h-48 md:h-56 lg:h-64 xl:h-72 2xl:h-80 rounded-lg overflow-hidden bg-gray-200 border border-gray-100 group",
             !coverImageUrl && !previewUrl && "cursor-pointer",
           )}
           onClick={!coverImageUrl && !previewUrl ? handleEditClick : undefined}
@@ -376,12 +390,12 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
         )}
 
         {/* Overview Stats */}
-        <div className="flex flex-wrap items-center justify-between gap-y-3 text-gray-700">
+        <div className="flex flex-wrap items-center justify-between gap-y-3 gap-x-1 text-gray-700">
           {/* Date */}
           <div className="flex items-center gap-2">
             <Calendar size={20} className="text-blue-600 flex-shrink-0" />
             <span className="text-sm">
-              {formatDate(startTime)} - {formatDate(endTime)}
+              {formatDateRange(startTime, endTime)}
               {/* <span className="text-gray-500 ml-1">
                 ({calculateDays(startTime, endTime)} days)
               </span> */}
@@ -392,7 +406,8 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
           <div className="flex items-center gap-2">
             <Users size={20} className="text-green-600 flex-shrink-0" />
             <span className="text-sm">
-              <span className="font-semibold">1</span> participant
+              <span className="font-semibold">{participantCount}</span>{" "}
+              {participantCount > 1 ? "participants" : "participant"}
             </span>
           </div>
 
@@ -411,7 +426,8 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
           <div className="flex items-center gap-2">
             <MapPin size={20} className="text-red-600 flex-shrink-0" />
             <span className="text-sm">
-              <span className="font-semibold">15</span> places
+              <span className="font-semibold">{placesCount}</span>{" "}
+              {placesCount > 1 ? "places" : "place"}
             </span>
           </div>
         </div>

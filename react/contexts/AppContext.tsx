@@ -1,13 +1,19 @@
 "use client";
 
-import { createContext, useContext, useState } from "react";
+import {
+  createContext,
+  Dispatch,
+  SetStateAction,
+  useContext,
+  useState,
+} from "react";
 import { User } from "@/types/user";
 
 interface AppContextProps {
   accessToken: string | null;
   setAccessToken: (token: string | null) => void;
   user: User | null;
-  setUser: (user: User | null) => void;
+  setUser: Dispatch<SetStateAction<User | null>>;
 }
 
 const AppContext = createContext<AppContextProps | undefined>(undefined);

@@ -20,6 +20,7 @@ import { Note } from "@/types/note";
 import { PackingList } from "@/types/packingList";
 import { Participant } from "@/types/participant";
 import { ExpenseItem } from "@/types/budget";
+import { ItineraryDay } from "@/types/itineraryDay";
 
 interface PlannerProps {
   readonly sectionRefs: RefObject<{
@@ -148,13 +149,24 @@ export default function Planner({
     });
   };
 
-  const updatePlanDuration = (startTime: Date, endTime: Date) => {
+  const updatePlanDuration = (startTime: Date | null, endTime: Date | null) => {
+    if (!startTime || !endTime) return;
     setPlan((prev) => {
       if (!prev) return null;
       return {
         ...prev,
         startTime,
         endTime,
+      };
+    });
+  };
+
+  const updateItineraryDays = (itineraryDays: ItineraryDay[]) => {
+    setPlan((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        itineraryDays,
       };
     });
   };
@@ -175,6 +187,14 @@ export default function Planner({
             coverImageUrl={plan.coverImageUrl}
             startTime={new Date(plan.startTime)}
             endTime={new Date(plan.endTime)}
+            participantCount={plan?.participants?.length ?? 1}
+            placesCount={
+              plan?.itineraryDays?.reduce(
+                (count, itineraryDay) =>
+                  count + itineraryDay.itineraryItems.length,
+                0,
+              ) ?? 0
+            }
             budget={plan.budget}
             currencyCode={plan.currencyCode}
             updatePlanName={updatePlanName}
@@ -187,6 +207,12 @@ export default function Planner({
             ref={(el) => {
               sectionRefs.current["itinerary"] = el;
             }}
+            planId={plan.id}
+            startTime={new Date(plan.startTime)}
+            endTime={new Date(plan.endTime)}
+            itineraryDays={plan.itineraryDays ?? []}
+            onChange={updatePlanDuration}
+            onItineraryDaysUpdate={updateItineraryDays}
           />
         </div>
 

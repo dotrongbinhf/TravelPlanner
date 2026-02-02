@@ -95,8 +95,7 @@ const UserInformation = forwardRef<HTMLDivElement, UserInformationProps>(
       if (!selectedFile) return;
 
       setIsUploading(true);
-      try {
-        const response = await updateAvatar(selectedFile);
+      const promise = updateAvatar(selectedFile).then((response) => {
         updateUser({ ...user, avatarUrl: response.avatarUrl });
 
         if (previewUrl) {
@@ -107,18 +106,26 @@ const UserInformation = forwardRef<HTMLDivElement, UserInformationProps>(
         if (fileInputRef.current) {
           fileInputRef.current.value = "";
         }
+        return response;
+      });
 
-        toast.success("Updated Avatar");
-      } catch (error) {
-        console.error("Update Avatar Failed:", error);
-        if (error instanceof AxiosError) {
-          toast.error(error.response?.data?.message ?? "Update Failed");
-        } else {
-          toast.error("Unexpected Error");
-        }
-      } finally {
-        setIsUploading(false);
-      }
+      await toast
+        .promise(promise, {
+          loading: "Updating Avatar...",
+          success: "Updated Avatar",
+          error: (error) => {
+            console.error("Update Avatar Failed:", error);
+            if (error instanceof AxiosError) {
+              return error.response?.data?.message ?? "Update Failed";
+            }
+            return "Unexpected Error";
+          },
+        })
+        .catch((error) => {
+          console.error("Update Avatar Failed:", error);
+        });
+
+      setIsUploading(false);
     };
 
     const handleEditClick = () => {

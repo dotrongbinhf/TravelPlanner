@@ -76,7 +76,6 @@ export default function Header() {
   };
 
   const handleCreatePlan = async () => {
-    // Logic để tạo plan mới
     const newPlan = {
       name: planName,
       startTime: startDate,
@@ -84,19 +83,27 @@ export default function Header() {
       budget: parseFloat(budget),
       currencyCode: currency,
     } as CreatePlanRequest;
-    // You can call your API here to create the plan using newPlan object
-    try {
-      const response = await createPlan(newPlan);
-      toast.success("Plan Created Successfully!");
+
+    const promise = createPlan(newPlan).then((response) => {
       router.replace("/plans/" + response.id);
-    } catch (error) {
-      console.error("Create plan failed:", error);
-      if (error instanceof AxiosError) {
-        toast.error(error.response?.data ?? "Unexpected Error");
-      } else {
-        toast.error("Unexpected Create Plan Error");
-      }
-    }
+      return response;
+    });
+
+    await toast
+      .promise(promise, {
+        loading: "Creating Plan...",
+        success: "Created Plan",
+        error: (error) => {
+          console.error("Create plan failed:", error);
+          if (error instanceof AxiosError) {
+            return error.response?.data ?? "Unexpected Error";
+          }
+          return "Unexpected Create Plan Error";
+        },
+      })
+      .catch((error) => {
+        console.error("Create plan failed:", error);
+      });
 
     // Reset form
     setPlanName("");

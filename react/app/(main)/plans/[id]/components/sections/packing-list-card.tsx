@@ -323,7 +323,7 @@ export default function PackingListCard({
           </div>
         ) : (
           <button
-            className={`cursor-pointer px-4 py-3 flex gap-2 items-center justify-center bg-green-400 hover:bg-green-500 text-white rounded-lg transition-colors duration-200 ${isItemsDisabled ? "pointer-events-none" : ""}`}
+            className={`cursor-pointer px-4 py-3 flex gap-2 items-center justify-center rounded-lg border border-2 border-dashed border-gray-300 text-gray-500 hover:border-green-400 hover:text-green-500 hover:bg-green-50 transition-all duration-200 ${isItemsDisabled ? "pointer-events-none" : ""}`}
             onClick={() => setIsAddingItem(true)}
             disabled={isItemsDisabled}
           >

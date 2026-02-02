@@ -56,7 +56,7 @@ export default function ProfilePage() {
 
   return (
     <div className="w-full flex p-4 gap-4">
-      <div className="flex-[2] flex-shrink-0 h-full">
+      <div className="w-[200px] flex-shrink-0 h-full hidden lg:block">
         <ProfileSidebar
           activeSection={activeSection}
           onSectionClick={handleSectionClick}
