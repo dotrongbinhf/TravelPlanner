@@ -3,7 +3,7 @@
     public class CreateItineraryItemRequest
     {
         public string PlaceId { get; set; }
-        public TimeOnly StartTime { get; set; }
-        public TimeOnly EndTime { get; set; }
+        public TimeOnly? StartTime { get; set; }
+        public TimeOnly? EndTime { get; set; }
     }
 }

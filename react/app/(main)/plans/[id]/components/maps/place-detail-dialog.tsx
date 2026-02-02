@@ -42,10 +42,12 @@ import { createItineraryItem } from "@/api/itineraryItem/itineraryItem";
 import { ItineraryItem } from "@/types/itineraryItem";
 import { AxiosError } from "axios";
 import toast from "react-hot-toast";
-import ItineraryItemEditor from "./sections/itinerary-item-editor";
+import ItineraryItemEditor from "../sections/itinerary-item-editor";
 
 interface PlaceDetailDialogProps {
   placeId: string;
+  existingPlace?: Place | null;
+  hideAddButton?: boolean;
   onClose: () => void;
   plan: Plan | null;
   onAddItem: (item: ItineraryItem) => void;
@@ -53,6 +55,8 @@ interface PlaceDetailDialogProps {
 
 export default function PlaceDetailDialog({
   placeId,
+  existingPlace,
+  hideAddButton = false,
   onClose,
   plan,
   onAddItem,
@@ -122,6 +126,12 @@ export default function PlaceDetailDialog({
   };
 
   useEffect(() => {
+    // If existingPlace is provided, use it directly
+    if (existingPlace) {
+      setPlace(existingPlace);
+      return;
+    }
+
     if (!placeId) return;
 
     const fetchPlace = async () => {
@@ -138,7 +148,7 @@ export default function PlaceDetailDialog({
     };
 
     fetchPlace();
-  }, [placeId]);
+  }, [placeId, existingPlace]);
 
   // Calculate rating distribution
   const totalReviews = place?.reviewCount || 0;
@@ -423,7 +433,7 @@ export default function PlaceDetailDialog({
                               <p className="text-sm text-gray-600 leading-relaxed">
                                 {review.description}
                               </p>
-                              {review.images && review.images.length > 0 && (
+                              {/* {review.images && review.images.length > 0 && (
                                 <div className="flex gap-2 mt-3 overflow-x-auto pb-2">
                                   {review.images.map((img, idx) => (
                                     <img
@@ -434,7 +444,7 @@ export default function PlaceDetailDialog({
                                     />
                                   ))}
                                 </div>
-                              )}
+                              )} */}
                             </div>
                           ))
                         ) : (
@@ -451,12 +461,14 @@ export default function PlaceDetailDialog({
                     <Button variant="outline" onClick={onClose}>
                       Close
                     </Button>
-                    <Button
-                      onClick={() => setIsOpenDialog(true)}
-                      className="bg-primary hover:bg-primary/90 text-white shadow-lg shadow-primary/20"
-                    >
-                      <Plus className="w-4 h-4 mr-2" /> Add to Itinerary
-                    </Button>
+                    {!hideAddButton && (
+                      <Button
+                        onClick={() => setIsOpenDialog(true)}
+                        className="bg-primary hover:bg-primary/90 text-white shadow-lg shadow-primary/20"
+                      >
+                        <Plus className="w-4 h-4 mr-2" /> Add to Itinerary
+                      </Button>
+                    )}
 
                     {plan?.startTime && plan?.itineraryDays && (
                       <CustomDialog

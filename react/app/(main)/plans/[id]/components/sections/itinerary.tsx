@@ -1,7 +1,7 @@
 "use client";
 
 import { DateRangePicker } from "@/components/date-range-picker";
-import { forwardRef } from "react";
+import { forwardRef, useEffect } from "react";
 import { updatePlanBasicInfo } from "@/api/plan/plan";
 import toast from "react-hot-toast";
 import { ItineraryDay } from "@/types/itineraryDay";
@@ -11,6 +11,7 @@ import {
   deleteItineraryDay,
 } from "@/api/itineraryDay/itineraryDay";
 import { ItineraryItem } from "@/types/itineraryItem";
+import { useItineraryContext } from "../../../../../../contexts/ItineraryContext";
 
 interface ItineraryProps {
   className?: string;
@@ -156,6 +157,32 @@ const Itinerary = forwardRef<HTMLDivElement, ItineraryProps>(function Itinerary(
     }
   };
 
+  // Scroll to selected item
+  const { selectedPlace } = useItineraryContext();
+  useEffect(() => {
+    if (
+      selectedPlace.isFromItinerary &&
+      selectedPlace.dayIndex !== null &&
+      selectedPlace.itemIndex !== null &&
+      selectedPlace.triggerSource === "map"
+    ) {
+      const sortedDays = [...itineraryDays].sort((a, b) => a.order - b.order);
+      const day = sortedDays[selectedPlace.dayIndex];
+      if (day) {
+        const sortedItems = [...(day.itineraryItems || [])].sort((a, b) =>
+          (a.startTime ?? "").localeCompare(b.startTime ?? ""),
+        );
+        const item = sortedItems[selectedPlace.itemIndex];
+        if (item) {
+          const element = document.getElementById(`itinerary-item-${item.id}`);
+          if (element) {
+            element.scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+        }
+      }
+    }
+  }, [selectedPlace, itineraryDays]);
+
   return (
     <section
       ref={ref}
@@ -178,11 +205,12 @@ const Itinerary = forwardRef<HTMLDivElement, ItineraryProps>(function Itinerary(
       <div className="flex flex-col gap-6">
         {itineraryDays
           .sort((a, b) => a.order - b.order)
-          .map((day) => (
+          .map((day, index) => (
             <ItineraryDayCard
               key={day.id}
               allItineraryDays={itineraryDays}
               itineraryDay={day}
+              dayIndex={index}
               planStartTime={startTime || new Date()}
               onEditTitle={handleUpdateDayTitle}
               onAddItem={handleAddItem}

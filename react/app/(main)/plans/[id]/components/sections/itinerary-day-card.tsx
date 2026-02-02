@@ -1,5 +1,5 @@
 import { ItineraryDay } from "@/types/itineraryDay";
-import { Check, MapPin, Pencil, Plus, X, Clock, Trash } from "lucide-react";
+import { Check, Pencil, Plus, X, Clock, Trash } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -12,17 +12,21 @@ import {
 } from "@/api/itineraryItem/itineraryItem";
 import toast from "react-hot-toast";
 import { AxiosError } from "axios";
-import { TimePicker, TimePickerType } from "@/components/time-picker";
+
 import { Button } from "@/components/ui/button";
 import { ConfirmDeleteModal } from "@/components/confirm-delete-modal";
 import { CustomDialog } from "@/components/custom-dialog";
 import ItineraryItemEditor from "./itinerary-item-editor";
 import ItineraryItemCard from "./itinerary-item-card";
 import ActionMenu from "@/components/action-menu";
+import { useItineraryContext } from "../../../../../../contexts/ItineraryContext";
+import { getDayColor } from "../../../../../../constants/day-colors";
+import ItineraryItemCardSkeleton from "./itinerary-item-card-skeleton";
 
 interface ItineraryDayCardProps {
   allItineraryDays: ItineraryDay[];
   itineraryDay: ItineraryDay;
+  dayIndex: number;
   planStartTime: Date;
   onEditTitle: (dayId: string, newTitle: string) => Promise<void>;
   onAddItem: (item: ItineraryItem) => void;
@@ -34,6 +38,7 @@ interface ItineraryDayCardProps {
 export default function ItineraryDayCard({
   allItineraryDays,
   itineraryDay,
+  dayIndex,
   planStartTime,
   onEditTitle,
   onAddItem,
@@ -41,15 +46,14 @@ export default function ItineraryDayCard({
   onDeleteItem,
   onDeleteDay,
 }: ItineraryDayCardProps) {
+  const { selectedPlace, selectPlaceFromItinerary, clearPlaceSelection } =
+    useItineraryContext();
+  const dayColor = getDayColor(dayIndex);
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(itineraryDay.title);
 
   const [isOpenAutocomplete, setIsOpenAutocomplete] = useState(false);
-  const [creatingItem, setCreatingItem] = useState<{
-    place: google.maps.places.PlaceResult;
-    startTime: Date;
-    endTime: Date;
-  } | null>(null);
+  const [isAddingItem, setIsAddingItem] = useState(false);
 
   const [editingItem, setEditingItem] = useState<ItineraryItem | null>(null);
   const [itemToDelete, setItemToDelete] = useState<ItineraryItem | null>(null);
@@ -107,52 +111,33 @@ export default function ItineraryDayCard({
     setIsOpenAutocomplete(true);
   };
 
-  const handlePlaceSelect = (place: google.maps.places.PlaceResult | null) => {
-    if (!place) return;
+  const handlePlaceSelect = async (
+    prediction: google.maps.places.AutocompletePrediction,
+  ) => {
+    if (!prediction.place_id) return;
     setIsOpenAutocomplete(false);
-
-    // Default start time to 09:00 or current time if today
-    // For simplicity, just use 09:00 and 10:00
-    const start = new Date(date);
-    start.setHours(9, 0, 0, 0);
-    const end = new Date(date);
-    end.setHours(10, 0, 0, 0);
-
-    setCreatingItem({
-      place,
-      startTime: start,
-      endTime: end,
-    });
-  };
-
-  const handleCancelCreateItineraryItem = () => {
-    setCreatingItem(null);
-  };
-
-  const handleConfirmCreateItineraryItem = async () => {
-    if (!creatingItem) return;
-    if (!creatingItem.place.place_id) {
-      toast.error("Invalid place selected");
-      return;
-    }
+    setIsAddingItem(true);
 
     try {
       const response = await createItineraryItem(itineraryDay.id, {
-        placeId: creatingItem.place.place_id,
-        startTime: format(creatingItem.startTime, "HH:mm"),
-        endTime: format(creatingItem.endTime, "HH:mm"),
+        placeId: prediction.place_id,
       });
 
       onAddItem(response);
-      toast.success("Itinerary item added successfully");
-      setCreatingItem(null);
+      toast.success("Added to itinerary");
+
+      // Select the newly added item
+      const itemsCount = itineraryDay.itineraryItems?.length ?? 0;
+      selectPlaceFromItinerary(response, dayIndex, itemsCount, "list");
     } catch (error) {
       console.error("Error creating itinerary item:", error);
       if (error instanceof AxiosError) {
-        toast.error(error.response?.data?.message ?? "Failed to create item");
+        toast.error(error.response?.data?.message ?? "Failed to add item");
       } else {
-        toast.error("Failed to create item");
+        toast.error("Failed to add item");
       }
+    } finally {
+      setIsAddingItem(false);
     }
   };
 
@@ -177,8 +162,9 @@ export default function ItineraryDayCard({
     setEditingItem(newItineraryItem);
   };
 
-  const convertTimeOnlyStringToDate = (timeOnlyString: string) => {
-    const [hours, minutes] = timeOnlyString.split(":");
+  const convertTimeOnlyStringToDate = (time?: string): Date | undefined => {
+    if (!time) return undefined;
+    const [hours, minutes] = time.split(":");
     const date = new Date();
     date.setHours(parseInt(hours), parseInt(minutes), 0, 0);
     return date;
@@ -186,8 +172,8 @@ export default function ItineraryDayCard({
 
   const handleConfirmUpdateItineraryItem = async (
     itineraryDayId: string,
-    startTime: string,
-    endTime: string,
+    startTime?: string,
+    endTime?: string,
   ) => {
     if (!editingItem) return;
 
@@ -213,6 +199,7 @@ export default function ItineraryDayCard({
     try {
       await deleteItineraryItem(itemToDelete.id);
       onDeleteItem(itemToDelete.id, itineraryDay.id);
+      clearPlaceSelection();
       toast.success("Item deleted successfully");
       setItemToDelete(null);
     } catch (error) {
@@ -315,71 +302,30 @@ export default function ItineraryDayCard({
       {/* Items List */}
       <div className="flex flex-col gap-3">
         {[...(itineraryDay.itineraryItems || [])]
-          .sort((a, b) => a.startTime.localeCompare(b.startTime))
-          .map((item) => (
+          .sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""))
+          .map((item, index, sortedItems) => (
             <ItineraryItemCard
               key={item.id}
               item={item}
+              orderNumber={index + 1}
+              dayColor={dayColor}
+              isFirst={index === 0}
+              isLast={index === sortedItems.length - 1}
+              isActive={
+                selectedPlace.placeId === item.place.placeId &&
+                selectedPlace.dayIndex === dayIndex
+              }
               onEdit={() => setEditingItem(item)}
               onDelete={() => setItemToDelete(item)}
+              onClick={() => selectPlaceFromItinerary(item, dayIndex, index)}
             />
           ))}
+
+        {isAddingItem && <ItineraryItemCardSkeleton />}
       </div>
 
       <div className="flex flex-col gap-2 relative">
-        {creatingItem ? (
-          <div className="flex flex-col gap-4 p-4 border rounded-lg bg-blue-50/50 border-blue-100 mt-2">
-            <div className="flex items-center gap-2 text-blue-700 font-medium">
-              <MapPin size={18} />
-              <span className="truncate">
-                {creatingItem.place.name ||
-                  creatingItem.place.formatted_address}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <TimePicker
-                label="Start Time"
-                value={creatingItem.startTime}
-                onChange={(date) =>
-                  date &&
-                  setCreatingItem((prev) =>
-                    prev ? { ...prev, startTime: date } : null,
-                  )
-                }
-                type={TimePickerType.START}
-              />
-              <TimePicker
-                label="End Time"
-                value={creatingItem.endTime}
-                onChange={(date) =>
-                  date &&
-                  setCreatingItem((prev) =>
-                    prev ? { ...prev, endTime: date } : null,
-                  )
-                }
-                type={TimePickerType.END}
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 mt-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleCancelCreateItineraryItem}
-              >
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleConfirmCreateItineraryItem}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
-              >
-                Add Item
-              </Button>
-            </div>
-          </div>
-        ) : isOpenAutocomplete ? (
+        {isOpenAutocomplete ? (
           <div className="relative z-10">
             <PlaceAutocomplete
               onPlaceSelect={handlePlaceSelect}

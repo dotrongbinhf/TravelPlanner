@@ -89,34 +89,42 @@ namespace dotnet.Controllers
                 EndTime = result.EndTime,
                 Budget = result.Budget,
                 CurrencyCode = result.CurrencyCode,
-                Notes = result.Notes.Select(note => new Dtos.Note.NoteDto
+                Notes = result.Notes
+                    .OrderBy(note => note.CreatedAt)
+                    .Select(note => new Dtos.Note.NoteDto
                 {
                     Id = note.Id,
                     PlanId = note.PlanId,
                     Title = note.Title,
                     Content = note.Content
                 }).ToList(),
-                PackingLists = result.PackingLists.Select(pl => new Dtos.PackingList.PackingListDto
-                {
-                    Id = pl.Id,
-                    PlanId = pl.PlanId,
-                    Name = pl.Name,
-                    PackingItems = pl.PackingItems.Select(item => new Dtos.PackingItem.PackingItemDto
+                PackingLists = result.PackingLists
+                    .OrderBy(list => list.CreatedAt)
+                    .Select(pl => new Dtos.PackingList.PackingListDto
                     {
-                        Id = item.Id,
-                        PackingListId = item.PackingListId,
-                        Name = item.Name,
-                        IsPacked = item.IsPacked
-                    }).ToList()
-                }).ToList(),
-                ExpenseItems = result.ExpenseItems.Select(ei => new Dtos.ExpenseItem.ExpenseItemDto
-                {
-                    Id = ei.Id,
-                    PlanId = ei.PlanId,
-                    Category = ei.Category,
-                    Name = ei.Name,
-                    Amount = ei.Amount,
-                }).ToList(),
+                        Id = pl.Id,
+                        PlanId = pl.PlanId,
+                        Name = pl.Name,
+                        PackingItems = pl.PackingItems
+                            .OrderBy(item => item.CreatedAt)
+                            .Select(item => new Dtos.PackingItem.PackingItemDto
+                            {
+                                Id = item.Id,
+                                PackingListId = item.PackingListId,
+                                Name = item.Name,
+                                IsPacked = item.IsPacked
+                            }).ToList()
+                    }).ToList(),
+                ExpenseItems = result.ExpenseItems
+                    .OrderBy(ei => ei.CreatedAt)
+                    .Select(ei => new Dtos.ExpenseItem.ExpenseItemDto
+                    {
+                        Id = ei.Id,
+                        PlanId = ei.PlanId,
+                        Category = ei.Category,
+                        Name = ei.Name,
+                        Amount = ei.Amount,
+                    }).ToList(),
                 Participants = result.Participants.Select(p => new Dtos.Participant.ParticipantDto
                 {
                     Id = p.Id,
@@ -263,20 +271,21 @@ namespace dotnet.Controllers
                             Order = i,
                         });
                     }
-                    await dbContext.ItineraryDays.AddRangeAsync(daysToAdd);
                     newItineraryDays = existingItineraryDays
                         .Concat(daysToAdd)
                         .ToList();
+                    await dbContext.ItineraryDays.AddRangeAsync(daysToAdd);
                 } else if(newDateCount < existingItineraryDays.Count)
                 {
                     var daysToRemove = existingItineraryDays
                         .Where(iday => iday.Order >= newDateCount)
                         .ToList();
-                    dbContext.ItineraryDays.RemoveRange(daysToRemove);
 
                     newItineraryDays = existingItineraryDays
                         .Where(iday => iday.Order < newDateCount)
                         .ToList();
+
+                    dbContext.ItineraryDays.RemoveRange(daysToRemove);
                 }
 
                 plan.StartTime = request.StartTime ?? plan.StartTime;

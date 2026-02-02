@@ -1,10 +1,15 @@
+"use client";
+
 import { useMapsLibrary } from "@vis.gl/react-google-maps";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { Input } from "@/components/ui/input";
 import { Loader2, MapPin } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface PlaceAutocompleteProps {
-  onPlaceSelect: (place: google.maps.places.PlaceResult | null) => void;
+  onPlaceSelect: (
+    prediction: google.maps.places.AutocompletePrediction,
+  ) => void;
   onClose?: () => void;
 }
 
@@ -23,8 +28,10 @@ export default function PlaceAutocomplete({
     google.maps.places.AutocompletePrediction[]
   >([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState(0);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!placesLibrary) return;
@@ -57,14 +64,20 @@ export default function PlaceAutocomplete({
         setIsLoading(false);
         if (status === google.maps.places.PlacesServiceStatus.OK && results) {
           setPredictions(results);
+          setSelectedIndex(0); // Reset selection when predictions change
         } else {
           setPredictions([]);
         }
       });
-    }, 300);
+    }, 500);
 
     return () => clearTimeout(timer);
   }, [value, placesService, sessionToken]);
+
+  // Reset selection when predictions change
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [predictions]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -82,12 +95,54 @@ export default function PlaceAutocomplete({
     };
   }, [onClose]);
 
+  const handleSelect = useCallback(
+    (prediction: google.maps.places.AutocompletePrediction) => {
+      onPlaceSelect(prediction);
+      setValue("");
+      setPredictions([]);
+      onClose?.();
+    },
+    [onPlaceSelect, onClose],
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (predictions.length === 0) return;
+
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          setSelectedIndex((prev) =>
+            prev < predictions.length - 1 ? prev + 1 : prev,
+          );
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          setSelectedIndex((prev) => (prev > 0 ? prev - 1 : prev));
+          break;
+        case "Enter":
+          e.preventDefault();
+          if (predictions[selectedIndex]) {
+            handleSelect(predictions[selectedIndex]);
+          }
+          break;
+        case "Escape":
+          e.preventDefault();
+          onClose?.();
+          break;
+      }
+    },
+    [predictions, selectedIndex, handleSelect, onClose],
+  );
+
   return (
     <div className="relative w-full" ref={containerRef}>
       <div className="relative">
         <Input
+          ref={inputRef}
           value={value}
           onChange={(e) => setValue(e.target.value)}
+          onKeyDown={handleKeyDown}
           placeholder="Search for a place..."
           className="w-full pr-8 h-12 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
           autoFocus
@@ -101,16 +156,24 @@ export default function PlaceAutocomplete({
 
       {predictions.length > 0 && (
         <ul className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-auto">
-          {predictions.map((prediction) => (
+          {predictions.map((prediction, index) => (
             <li
               key={prediction.place_id}
-              className="px-4 py-3 hover:bg-gray-100 cursor-pointer flex items-center gap-2 text-sm"
-              onClick={() => {
-                // Future selection logic
-                console.log("Selected", prediction);
-              }}
+              className={cn(
+                "px-4 py-3 cursor-pointer flex items-center gap-2 text-sm transition-colors",
+                index === selectedIndex
+                  ? "bg-blue-50 text-blue-700"
+                  : "hover:bg-gray-100",
+              )}
+              onClick={() => handleSelect(prediction)}
+              onMouseEnter={() => setSelectedIndex(index)}
             >
-              <MapPin className="h-4 w-4 text-gray-400 shrink-0" />
+              <MapPin
+                className={cn(
+                  "h-4 w-4 shrink-0",
+                  index === selectedIndex ? "text-blue-500" : "text-gray-400",
+                )}
+              />
               <span className="truncate">{prediction.description}</span>
             </li>
           ))}

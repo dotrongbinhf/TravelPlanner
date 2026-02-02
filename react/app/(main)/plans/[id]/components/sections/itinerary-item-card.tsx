@@ -1,32 +1,80 @@
 import { ItineraryItem } from "@/types/itineraryItem";
-import { Clock, MapPin, Pencil, Star, Trash } from "lucide-react";
+import { Clock, MapPin, Pencil, Star, Trash, Home, Flag } from "lucide-react";
 import ActionMenu from "@/components/action-menu";
+import { cn } from "@/lib/utils";
+import MarkerPin from "../maps/marker-pin";
 
 interface ItineraryItemCardProps {
   item: ItineraryItem;
+  orderNumber: number;
+  dayColor: string;
+  isFirst: boolean;
+  isLast: boolean;
+  isActive: boolean;
   onEdit: () => void;
   onDelete: () => void;
+  onClick: () => void;
 }
 
 export default function ItineraryItemCard({
   item,
+  orderNumber,
+  dayColor,
+  isFirst,
+  isLast,
+  isActive,
   onEdit,
   onDelete,
+  onClick,
 }: ItineraryItemCardProps) {
   const { place, startTime, endTime } = item;
 
   return (
-    <div className="flex flex-col gap-1 w-full relative group/card">
+    <div
+      id={`itinerary-item-${item.id}`}
+      className="flex flex-col gap-1 w-full relative group/card"
+    >
       {/* Time Header */}
-      <div className="flex items-center gap-1.5 text-xs font-semibold text-blue-600 bg-blue-50 w-fit px-2 py-1 rounded-md mb-1">
+      <button
+        className="cursor-pointer flex items-center gap-1.5 text-xs font-semibold text-blue-600 bg-blue-50 w-fit px-2 py-1 rounded-md mb-1"
+        onClick={onEdit}
+        title="Click to edit"
+      >
         <Clock size={12} className="shrink-0" />
+        {/* Add time change to button to edit when start and end time is not set */}
         <span>
-          {startTime} - {endTime}
+          {startTime && endTime ? `${startTime} - ${endTime}` : "Add time"}
         </span>
-      </div>
+      </button>
 
       {/* Place Card */}
-      <div className="flex gap-2 p-2 rounded-lg border border-gray-100 bg-white hover:border-gray-200 hover:shadow-sm transition-all relative">
+      <div
+        className={cn(
+          "flex gap-2 p-2 rounded-lg border border-2 bg-white transition-all relative cursor-pointer",
+          isActive
+            ? "ring-2 ring-offset-1 shadow-md"
+            : "border-gray-100 hover:border-gray-200 hover:shadow-sm",
+        )}
+        style={{
+          borderColor: isActive ? dayColor : undefined,
+          boxShadow: isActive ? `0 0 0 3px ${dayColor}40` : undefined,
+        }}
+        onClick={onClick}
+      >
+        {/* Order Number Badge */}
+        {/* Order Number Badge */}
+        <div className="absolute -top-3 -left-3 z-20 filter drop-shadow-md">
+          <MarkerPin width={24} height={34} color={dayColor}>
+            {isFirst ? (
+              <Home size={12} strokeWidth={3} />
+            ) : isLast ? (
+              <Flag size={12} strokeWidth={3} />
+            ) : (
+              <span className="text-xs font-bold">{orderNumber}</span>
+            )}
+          </MarkerPin>
+        </div>
+
         <div className="absolute top-2 right-2 z-10 opacity-0 group-hover/card:opacity-100 has-[[data-state=open]]:opacity-100 transition-opacity">
           <ActionMenu
             options={[

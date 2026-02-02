@@ -4,6 +4,6 @@ export type ItineraryItem = {
   id: string;
   itineraryDayId: string;
   place: Place;
-  startTime: string; // TimeOnly HH:mm
-  endTime: string; // TimeOnly
+  startTime?: string; // TimeOnly HH:mm (optional)
+  endTime?: string; // TimeOnly (optional)
 };

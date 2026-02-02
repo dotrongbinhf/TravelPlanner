@@ -35,13 +35,15 @@ namespace dotnet.Controllers
                 Id = packingList.Id,
                 PlanId = packingList.PlanId,
                 Name = packingList.Name,
-                PackingItems = packingList.PackingItems.Select(item => new Dtos.PackingItem.PackingItemDto
-                {
-                    Id = item.Id,
-                    PackingListId = item.PackingListId,
-                    Name = item.Name,
-                    IsPacked = item.IsPacked
-                }).ToList()
+                PackingItems = packingList.PackingItems
+                    .OrderBy(item => item.CreatedAt)
+                    .Select(item => new Dtos.PackingItem.PackingItemDto
+                    {
+                        Id = item.Id,
+                        PackingListId = item.PackingListId,
+                        Name = item.Name,
+                        IsPacked = item.IsPacked
+                    }).ToList()
             });
         }
 
@@ -85,13 +87,15 @@ namespace dotnet.Controllers
                 Id = packingList.Id,
                 PlanId = packingList.PlanId,
                 Name = packingList.Name,
-                PackingItems = packingList.PackingItems.Select(item => new Dtos.PackingItem.PackingItemDto
-                {
-                    Id = item.Id,
-                    PackingListId = item.PackingListId,
-                    Name = item.Name,
-                    IsPacked = item.IsPacked
-                }).ToList()
+                PackingItems = packingList.PackingItems
+                    .OrderBy(item => item.CreatedAt)
+                    .Select(item => new Dtos.PackingItem.PackingItemDto
+                    {
+                        Id = item.Id,
+                        PackingListId = item.PackingListId,
+                        Name = item.Name,
+                        IsPacked = item.IsPacked
+                    }).ToList()
             });
         }
 

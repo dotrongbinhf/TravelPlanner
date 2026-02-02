@@ -11,6 +11,7 @@ import { AxiosError } from "axios";
 import toast from "react-hot-toast";
 import { APIProvider } from "@vis.gl/react-google-maps";
 import { ItineraryItem } from "@/types/itineraryItem";
+import { ItineraryProvider } from "../../../../contexts/ItineraryContext";
 
 export default function PlanIdPage() {
   const params = useParams();
@@ -82,29 +83,31 @@ export default function PlanIdPage() {
   return (
     <div className="w-full flex p-4 gap-4">
       <APIProvider apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? ""}>
-        <div className="w-[200px] flex-shrink-0 h-full hidden lg:block">
-          <Sidebar
-            activeSection={activeSection}
-            onSectionClick={handleSectionClick}
-          />
-        </div>
+        <ItineraryProvider totalDays={plan.itineraryDays?.length ?? 0}>
+          <div className="w-[200px] flex-shrink-0 h-full hidden lg:block">
+            <Sidebar
+              activeSection={activeSection}
+              onSectionClick={handleSectionClick}
+            />
+          </div>
 
-        <div className="flex-[4] h-full min-w-0">
-          <Planner
-            sectionRefs={sectionRefs}
-            scrollContainerRef={scrollContainerRef}
-            onSectionInView={handleSectionInView}
-            plan={plan}
-            setPlan={setPlan}
-          />
-        </div>
+          <div className="flex-[4] h-full min-w-0">
+            <Planner
+              sectionRefs={sectionRefs}
+              scrollContainerRef={scrollContainerRef}
+              onSectionInView={handleSectionInView}
+              plan={plan}
+              setPlan={setPlan}
+            />
+          </div>
 
-        <div className="flex-[5] h-full min-w-0">
-          <GoogleMapIntegration
-            plan={plan}
-            onItineraryUpdate={handleItineraryItemUpdate}
-          />
-        </div>
+          <div className="flex-[5] h-full min-w-0">
+            <GoogleMapIntegration
+              plan={plan}
+              onItineraryUpdate={handleItineraryItemUpdate}
+            />
+          </div>
+        </ItineraryProvider>
       </APIProvider>
     </div>
   );
