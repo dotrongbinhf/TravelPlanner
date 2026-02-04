@@ -34,6 +34,8 @@ interface ItineraryContextValue {
   // Map display options
   showMarkers: boolean;
   setShowMarkers: (show: boolean) => void;
+  showDirections: boolean;
+  setShowDirections: (show: boolean) => void;
   filterMode: "all" | "byDay";
   setFilterMode: (mode: "all" | "byDay") => void;
   selectedDayIndex: number;
@@ -72,6 +74,7 @@ export function ItineraryProvider({
 
   // Map display options
   const [showMarkers, setShowMarkers] = useState(true);
+  const [showDirections, setShowDirections] = useState(false);
   const [filterMode, setFilterMode] = useState<"all" | "byDay">("byDay");
   const [selectedDayIndex, setSelectedDayIndex] = useState(0);
 
@@ -82,12 +85,15 @@ export function ItineraryProvider({
     }
   }, []);
 
-  const handleSetFilterMode = useCallback((mode: "all" | "byDay") => {
-    setFilterMode(mode);
-    if (mode === "byDay") {
-      setShowMarkers(true);
-    }
-  }, []);
+  const handleSetFilterMode = useCallback(
+    (mode: "all" | "byDay") => {
+      setFilterMode(mode);
+      if (mode === "byDay" && !showDirections) {
+        setShowMarkers(true);
+      }
+    },
+    [showDirections],
+  );
 
   const selectPlaceFromItinerary = useCallback(
     (
@@ -141,6 +147,8 @@ export function ItineraryProvider({
     clearPlaceSelection,
     showMarkers,
     setShowMarkers: handleSetShowMarkers,
+    showDirections,
+    setShowDirections,
     filterMode,
     setFilterMode: handleSetFilterMode,
     selectedDayIndex,

@@ -1,16 +1,22 @@
 "use client";
 
 import { Map, Marker, useMap } from "@vis.gl/react-google-maps";
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import PlaceDetailDialog from "./maps/place-detail-dialog";
 import ItineraryMarker from "./maps/itinerary-marker";
 import MapMenu from "./maps/map-menu";
 import ItineraryDayNavigator from "./maps/itineraryDay-navigator";
-import { useItineraryContext } from "../../../../../contexts/ItineraryContext";
-import { getDayColor } from "../../../../../constants/day-colors";
+import DirectionsRenderer from "./maps/directions-renderer";
+import {
+  getRouteBetweenTwoItems,
+  getRoutesByDayId,
+} from "@/api/itineraryItemsRoute/itineraryItemsRoute";
 
 import { ItineraryItem } from "@/types/itineraryItem";
+import { ItineraryItemsRoute } from "@/types/itineraryItemsRoute";
 import { Plan } from "@/types/plan";
+import { useItineraryContext } from "@/contexts/ItineraryContext";
+import { getDayColor } from "@/constants/day-colors";
 
 interface GoogleMapIntegrationProps {
   plan: Plan | null;
@@ -27,6 +33,13 @@ export default function GoogleMapIntegration({
     google.maps.LatLng | google.maps.LatLngLiteral | null
   >(null);
 
+  // State for routes
+  const [routes, setRoutes] = useState<ItineraryItemsRoute[]>([]);
+  const [connectionRoutes, setConnectionRoutes] = useState<
+    ItineraryItemsRoute[]
+  >([]);
+  const [isRoutesLoading, setIsRoutesLoading] = useState(false);
+
   const {
     selectedPlace,
     selectPlaceFromItinerary,
@@ -34,6 +47,8 @@ export default function GoogleMapIntegration({
     clearPlaceSelection,
     showMarkers,
     setShowMarkers,
+    showDirections,
+    setShowDirections,
     filterMode,
     setFilterMode,
     selectedDayIndex,
@@ -78,6 +93,81 @@ export default function GoogleMapIntegration({
     if (filterMode === "all") return markersData;
     return markersData.filter((m) => m.dayIndex === selectedDayIndex);
   }, [markersData, showMarkers, filterMode, selectedDayIndex]);
+
+  // Get visible items for directions (based on filter mode)
+  const visibleItems = useMemo(() => {
+    if (filterMode === "all") {
+      return markersData.map((m) => m.item);
+    }
+    return markersData
+      .filter((m) => m.dayIndex === selectedDayIndex)
+      .map((m) => m.item);
+  }, [markersData, filterMode, selectedDayIndex]);
+
+  // Fetch routes based on filterMode
+  const fetchRoutes = useCallback(async () => {
+    if (!showDirections || !itineraryDays.length) {
+      setRoutes([]);
+      return;
+    }
+
+    setIsRoutesLoading(true);
+
+    try {
+      if (filterMode === "all") {
+        // Fetch routes for ALL days
+        const allRoutes: ItineraryItemsRoute[] = [];
+        for (const day of itineraryDays) {
+          const dayRoutes = await getRoutesByDayId(day.id);
+          allRoutes.push(...dayRoutes);
+        }
+        setRoutes(allRoutes);
+
+        const allConnectionRoutes: ItineraryItemsRoute[] = [];
+        for (let i = 0; i < itineraryDays.length - 1; i++) {
+          const currentDay = itineraryDays[i];
+          const nextDay = itineraryDays[i + 1];
+          const lastItemOfCurrentDay =
+            currentDay.itineraryItems?.[currentDay.itineraryItems.length - 1];
+          const firstItemOfNextDay = nextDay.itineraryItems?.[0];
+          if (
+            lastItemOfCurrentDay &&
+            firstItemOfNextDay &&
+            lastItemOfCurrentDay.place.id !== firstItemOfNextDay.place.id
+          ) {
+            const connectionRoute = await getRouteBetweenTwoItems(
+              lastItemOfCurrentDay.id,
+              firstItemOfNextDay.id,
+            );
+            allConnectionRoutes.push(connectionRoute);
+          }
+        }
+        setConnectionRoutes(allConnectionRoutes);
+      } else {
+        // Fetch routes for current day only
+        const currentDay = itineraryDays.find(
+          (d) => d.order === selectedDayIndex,
+        );
+        if (!currentDay) {
+          setRoutes([]);
+          return;
+        }
+        const fetchedRoutes = await getRoutesByDayId(currentDay.id);
+        setRoutes(fetchedRoutes);
+      }
+    } catch (error) {
+      console.error("Failed to fetch routes:", error);
+      setRoutes([]);
+    } finally {
+      setIsRoutesLoading(false);
+    }
+  }, [showDirections, itineraryDays, selectedDayIndex, filterMode]);
+
+  // Fetch routes when showDirections, selectedDayIndex, or filterMode changes
+  useEffect(() => {
+    fetchRoutes();
+  }, [fetchRoutes]);
+
   // Center map when selectedPlace changes
   useEffect(() => {
     if (!map) return;
@@ -108,6 +198,7 @@ export default function GoogleMapIntegration({
     }
   }, [clickedPos, map]);
 
+  // Set Initial Map Center
   useEffect(() => {
     // Set initial center based on first itinerary place or default
     if (markersData.length > 0) {
@@ -192,6 +283,120 @@ export default function GoogleMapIntegration({
               />
             );
           })}
+
+          {/* Directions Renderer */}
+          {showDirections &&
+            filterMode === "byDay" &&
+            visibleItems.length >= 2 && (
+              <DirectionsRenderer
+                items={visibleItems}
+                existingRoutes={routes}
+                onRoutesChange={fetchRoutes}
+                routeColor={getDayColor(selectedDayIndex)}
+              />
+            )}
+
+          {/* Multi-Day Directions */}
+          {showDirections &&
+            filterMode === "all" &&
+            itineraryDays.length > 0 && (
+              <>
+                {/* Render directions for each day */}
+                {itineraryDays
+                  .sort((a, b) => a.order - b.order)
+                  .map((day, dayIndex) => {
+                    const dayItems = (day.itineraryItems || [])
+                      .slice()
+                      .sort((a, b) =>
+                        (a.startTime ?? "").localeCompare(b.startTime ?? ""),
+                      );
+
+                    if (dayItems.length < 2) return null;
+
+                    // Get routes for this day - check both start and end item IDs
+                    const dayItemIds = new Set(dayItems.map((item) => item.id));
+                    const dayRoutes = routes.filter(
+                      (r) =>
+                        dayItemIds.has(r.startItineraryItemId) &&
+                        dayItemIds.has(r.endItineraryItemId),
+                    );
+
+                    return (
+                      <DirectionsRenderer
+                        key={`day-${day.id}`}
+                        items={dayItems}
+                        existingRoutes={dayRoutes}
+                        onRoutesChange={fetchRoutes}
+                        routeColor={getDayColor(dayIndex)}
+                      />
+                    );
+                  })}
+
+                {/* Render connections between days (if last item of day N != first item of day N+1) */}
+                {itineraryDays
+                  .sort((a, b) => a.order - b.order)
+                  .slice(0, -1) // All days except last
+                  .map((day, dayIndex) => {
+                    const nextDay = itineraryDays.find(
+                      (d) => d.order === day.order + 1,
+                    );
+                    if (!nextDay) return null;
+
+                    const currentDayItems = (day.itineraryItems || [])
+                      .slice()
+                      .sort((a, b) =>
+                        (a.startTime ?? "").localeCompare(b.startTime ?? ""),
+                      );
+                    const nextDayItems = (nextDay.itineraryItems || [])
+                      .slice()
+                      .sort((a, b) =>
+                        (a.startTime ?? "").localeCompare(b.startTime ?? ""),
+                      );
+
+                    if (
+                      currentDayItems.length === 0 ||
+                      nextDayItems.length === 0
+                    )
+                      return null;
+
+                    const lastItemOfCurrentDay =
+                      currentDayItems[currentDayItems.length - 1];
+                    const firstItemOfNextDay = nextDayItems[0];
+
+                    // Skip if same place (e.g. same hotel)
+                    if (
+                      lastItemOfCurrentDay.place.placeId ===
+                      firstItemOfNextDay.place.placeId
+                    ) {
+                      return null;
+                    }
+
+                    // Create connection items
+                    const connectionItems = [
+                      lastItemOfCurrentDay,
+                      firstItemOfNextDay,
+                    ];
+
+                    // Find routes for this connection
+                    const existingConnectionRoutes = connectionRoutes.filter(
+                      (r) =>
+                        r.startItineraryItemId === lastItemOfCurrentDay.id &&
+                        r.endItineraryItemId === firstItemOfNextDay.id,
+                    );
+
+                    return (
+                      <DirectionsRenderer
+                        key={`connection-${day.id}-${nextDay.id}`}
+                        items={connectionItems}
+                        existingRoutes={existingConnectionRoutes}
+                        onRoutesChange={fetchRoutes}
+                        routeColor="#9CA3AF" // Gray color for connections
+                        preserveOrder={true} // Keep order: lastItem of day N -> firstItem of day N+1
+                      />
+                    );
+                  })}
+              </>
+            )}
         </Map>
       )}
 
@@ -201,6 +406,8 @@ export default function GoogleMapIntegration({
           <MapMenu
             showMarkers={showMarkers}
             setShowMarkers={setShowMarkers}
+            showDirections={showDirections}
+            setShowDirections={setShowDirections}
             filterMode={filterMode}
             setFilterMode={setFilterMode}
           />
@@ -254,6 +461,17 @@ export default function GoogleMapIntegration({
             />
           </div>
         )}
+
+        {/* All Days Badge */}
+        {filterMode === "all" &&
+          (showMarkers || showDirections) &&
+          totalDays > 0 && (
+            <div className="pointer-events-auto flex items-center justify-center bg-white/95 backdrop-blur-sm rounded-full shadow-lg px-4 py-2 border border-gray-200">
+              <span className="text-sm font-semibold text-gray-700">
+                All Days
+              </span>
+            </div>
+          )}
       </div>
 
       {/* Place Detail Dialog */}

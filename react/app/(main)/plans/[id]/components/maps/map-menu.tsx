@@ -1,7 +1,14 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { ChevronDown, Eye, EyeOff, Layers, Calendar } from "lucide-react";
+import {
+  ChevronDown,
+  Eye,
+  EyeOff,
+  Layers,
+  Calendar,
+  Route,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -10,6 +17,8 @@ import { cn } from "@/lib/utils";
 interface MapMenuProps {
   showMarkers: boolean;
   setShowMarkers: (show: boolean) => void;
+  showDirections: boolean;
+  setShowDirections: (show: boolean) => void;
   filterMode: "all" | "byDay";
   setFilterMode: (mode: "all" | "byDay") => void;
   className?: string;
@@ -18,6 +27,8 @@ interface MapMenuProps {
 export default function MapMenu({
   showMarkers,
   setShowMarkers,
+  showDirections,
+  setShowDirections,
   filterMode,
   setFilterMode,
   className,
@@ -82,6 +93,28 @@ export default function MapMenu({
                 id="show-markers"
                 checked={showMarkers}
                 onCheckedChange={setShowMarkers}
+                className="data-[state=checked]:bg-blue-500"
+              />
+            </div>
+
+            {/* Show/Hide Directions */}
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <Route
+                  size={16}
+                  className={showDirections ? "text-blue-500" : "text-gray-400"}
+                />
+                <Label
+                  htmlFor="show-directions"
+                  className="text-sm font-medium"
+                >
+                  Show Directions
+                </Label>
+              </div>
+              <Switch
+                id="show-directions"
+                checked={showDirections}
+                onCheckedChange={setShowDirections}
                 className="data-[state=checked]:bg-blue-500"
               />
             </div>

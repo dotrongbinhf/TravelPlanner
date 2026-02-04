@@ -22,6 +22,25 @@ namespace dotnet.Data
             //    .HasIndex(pa => new { pa.UserId, pa.PlanId })
             //    .IsUnique();
 
+            // ItineraryItemsRoute relationships
+            //modelBuilder.Entity<ItineraryItemsRoute>()
+            //    .HasOne(r => r.StartItineraryItem)
+            //    .WithMany()
+            //    .HasForeignKey(r => r.StartItineraryItemId)
+            //    .OnDelete(DeleteBehavior.Cascade);
+
+            //modelBuilder.Entity<ItineraryItemsRoute>()
+            //    .HasOne(r => r.EndItineraryItem)
+            //    .WithMany()
+            //    .HasForeignKey(r => r.EndItineraryItemId)
+            //    .OnDelete(DeleteBehavior.NoAction);
+
+            //modelBuilder.Entity<RouteWaypoint>()
+            //    .HasOne(w => w.ItineraryItemsRoute)
+            //    .WithMany(r => r.Waypoints)
+            //    .HasForeignKey(w => w.ItineraryItemsRouteId)
+            //    .OnDelete(DeleteBehavior.Cascade);
+
             base.OnModelCreating(modelBuilder);
         }
         public DbSet<User> Users { get; set; }
@@ -33,6 +52,8 @@ namespace dotnet.Data
         public DbSet<PackingItem> PackingItems { get; set; }
         public DbSet<Note> Notes { get; set; }
         public DbSet<ItineraryDay> ItineraryDays { get; set; }
+        public DbSet<ItineraryItemsRoute> ItineraryItemsRoutes { get; set; }
+        public DbSet<RouteWaypoint> RouteWaypoints { get; set; }
 
         public override int SaveChanges()
         {
