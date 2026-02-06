@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+langchain
+langchain-google-genai
+langgraph
+pydantic
+pydantic-settings
+python-dotenv
+requests
+httpx

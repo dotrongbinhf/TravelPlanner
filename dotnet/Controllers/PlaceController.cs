@@ -27,5 +27,23 @@ namespace dotnet.Controllers
             }
             return place;
         }
+
+        [HttpPost]
+        public async Task<ActionResult<Place>> CreatePlace(Place newPlace)
+        {
+            newPlace.CreatedDate = DateTime.UtcNow;
+            newPlace.ModifiedDate = DateTime.UtcNow;
+            newPlace.Id = null;
+            var isPlaceExisting = await _placesCollection
+                .Find(p => p.PlaceId == newPlace.PlaceId)
+                .FirstOrDefaultAsync();
+            if (isPlaceExisting != null)
+            {
+                return Conflict("Place with the same PlaceId already exists.");
+            }
+
+            await _placesCollection.InsertOneAsync(newPlace);
+            return CreatedAtAction(nameof(GetPlaceById), new { id = newPlace.PlaceId }, newPlace);
+        }
     }
 }

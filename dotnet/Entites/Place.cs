@@ -9,7 +9,7 @@ namespace dotnet.Entites
     {
         [BsonId]
         [BsonElement("_id"), BsonRepresentation(BsonType.ObjectId)]
-        public string Id { get; set; } = string.Empty;
+        public string? Id { get; set; }
         public string PlaceId { get; set; } = string.Empty;
         public string Link { get; set; } = string.Empty; // Google Map Link
         public string Title { get; set; } = string.Empty;

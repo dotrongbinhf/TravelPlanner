@@ -1,42 +1,24 @@
 import { useEffect, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CustomDialog } from "@/components/custom-dialog";
-import {
-  DatePickerInput,
-  DateTimePickerType,
-  TimePicker,
-  TimePickerType,
-} from "@/components/time-picker";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Plan } from "@/types/plan";
 import {
   Clock,
   MapPin,
   Plus,
   Star,
-  X,
   Globe,
   ExternalLink,
-  ChevronLeft,
-  ChevronRight,
   Maximize2,
 } from "lucide-react";
-import { format, addHours, setHours, setMinutes } from "date-fns";
-import { Place } from "@/types/place";
-import { getPlaceByPlaceId } from "@/api/place/place";
+import { format } from "date-fns";
+import { OpenHours, Place } from "@/types/place";
+import { getPlaceByPlaceId, createPlace } from "@/api/place/place";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
+import { useMapsLibrary } from "@vis.gl/react-google-maps";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 
 import { createItineraryItem } from "@/api/itineraryItem/itineraryItem";
 import { ItineraryItem } from "@/types/itineraryItem";
@@ -61,6 +43,7 @@ export default function PlaceDetailDialog({
   plan,
   onAddItem,
 }: PlaceDetailDialogProps) {
+  const placesLib = useMapsLibrary("places");
   const [place, setPlace] = useState<Place | null>(null);
   const [loading, setLoading] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -132,23 +115,142 @@ export default function PlaceDetailDialog({
       return;
     }
 
-    if (!placeId) return;
+    if (!placeId) {
+      setPlace(null);
+      return;
+    }
+
+    if (!placesLib) return;
+
+    let cancelled = false;
 
     const fetchPlace = async () => {
       setLoading(true);
+
       try {
+        // Try DB first
         const data = await getPlaceByPlaceId(placeId);
-        setPlace(data);
-      } catch (error) {
-        console.error("Failed to fetch place details:", error);
-        setPlace(null);
+
+        if (!cancelled) {
+          setPlace(data);
+          setLoading(false);
+        }
+
+        return;
+      } catch (err: any) {
+        // Only fallback if NotFound
+        if (err?.response?.status !== 404) {
+          console.error("DB error:", err);
+          if (!cancelled) {
+            setPlace(null);
+            setLoading(false);
+          }
+          return;
+        }
+      }
+
+      try {
+        // Fallback Google
+        const googlePlace = new placesLib.Place({ id: placeId });
+
+        console.log("Calling Place API");
+        await googlePlace.fetchFields({
+          fields: [
+            "displayName",
+            "formattedAddress",
+            "primaryType",
+            "rating",
+            "userRatingCount",
+            "regularOpeningHours",
+            "location",
+            "websiteURI",
+          ],
+        });
+
+        const openHours: OpenHours = {
+          monday: [],
+          tuesday: [],
+          wednesday: [],
+          thursday: [],
+          friday: [],
+          saturday: [],
+          sunday: [],
+        };
+
+        const dayKeys = [
+          "sunday",
+          "monday",
+          "tuesday",
+          "wednesday",
+          "thursday",
+          "friday",
+          "saturday",
+        ] as const;
+
+        googlePlace.regularOpeningHours?.periods?.forEach((p) => {
+          if (!p.open || !p.close) return;
+
+          const dayKey = dayKeys[p.open.day];
+
+          const openTime = `${String(p.open.hour).padStart(2, "0")}:${String(
+            p.open.minute,
+          ).padStart(2, "0")}`;
+
+          const closeTime = `${String(p.close.hour).padStart(2, "0")}:${String(
+            p.close.minute,
+          ).padStart(2, "0")}`;
+
+          openHours[dayKey].push(`${openTime}-${closeTime}`);
+        });
+
+        const newPlace: Place = {
+          placeId,
+          link: `https://www.google.com/maps/place/?q=place_id:${placeId}`,
+          title: googlePlace.displayName ?? "",
+          category: googlePlace.primaryType ?? "point_of_interest",
+          location: {
+            type: "Point",
+            coordinates: [
+              googlePlace.location?.lng() ?? 0,
+              googlePlace.location?.lat() ?? 0,
+            ],
+          },
+          address: googlePlace.formattedAddress ?? "",
+          openHours,
+          website: googlePlace.websiteURI ?? "",
+          reviewCount: googlePlace.userRatingCount ?? 0,
+          reviewRating: googlePlace.rating ?? 0,
+          reviewsPerRating: {},
+          cid: "",
+          description: "",
+          thumbnail: "https://placehold.co/600x400?text=No+Image",
+          images: [],
+          userReviews: [],
+          createdDate: new Date().toISOString(),
+          modifiedDate: new Date().toISOString(),
+          id: "", // backend will generate
+        };
+
+        if (!cancelled) {
+          setPlace(newPlace);
+        }
+
+        // Save to DB async
+        createPlace(newPlace).catch(console.error);
+      } catch (googleErr) {
+        console.error("Google fetch failed:", googleErr);
+        if (!cancelled) setPlace(null);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     fetchPlace();
-  }, [placeId, existingPlace]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [placeId, existingPlace, placesLib]);
 
   // Calculate rating distribution
   const totalReviews = place?.reviewCount || 0;

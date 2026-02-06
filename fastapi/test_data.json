@@ -1,0 +1,6 @@
+{
+  "message": "Hello from .NET",
+  "data": {
+    "test": true
+  }
+}
