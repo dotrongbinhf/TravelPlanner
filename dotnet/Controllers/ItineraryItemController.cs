@@ -37,7 +37,7 @@ namespace dotnet.Controllers
                 ItineraryDayId = itineraryItem.ItineraryDayId,
                 Place = place,
                 StartTime = itineraryItem.StartTime,
-                EndTime = itineraryItem.EndTime,
+                Duration = itineraryItem.Duration,
             });
         }
 
@@ -62,7 +62,7 @@ namespace dotnet.Controllers
                 ItineraryDayId = itineraryDayId,
                 PlaceId = request.PlaceId,
                 StartTime = request.StartTime,
-                EndTime = request.EndTime
+                Duration = request.Duration
             };
 
             dbContext.ItineraryItems.Add(itineraryItem);
@@ -74,7 +74,7 @@ namespace dotnet.Controllers
                 ItineraryDayId = itineraryItem.ItineraryDayId,
                 Place = place,
                 StartTime = itineraryItem.StartTime,
-                EndTime = itineraryItem.EndTime
+                Duration = itineraryItem.Duration
             });
         }
 
@@ -91,9 +91,10 @@ namespace dotnet.Controllers
             {
                 return NotFound();
             }
+
             itineraryItem.ItineraryDayId = request.ItineraryDayId;
             itineraryItem.StartTime = request.StartTime;
-            itineraryItem.EndTime = request.EndTime;
+            itineraryItem.Duration = request.Duration;
             await dbContext.SaveChangesAsync();
             return Ok(new ItineraryItemDto
             {
@@ -101,7 +102,7 @@ namespace dotnet.Controllers
                 ItineraryDayId = itineraryItem.ItineraryDayId,
                 Place = place,
                 StartTime = itineraryItem.StartTime,
-                EndTime = itineraryItem.EndTime
+                Duration = itineraryItem.Duration
             });
         }
 

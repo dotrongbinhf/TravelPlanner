@@ -1,6 +1,6 @@
 import { ItineraryDay } from "@/types/itineraryDay";
 import { Check, Pencil, Plus, X, Clock, Trash } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import PlaceAutocomplete from "./place-autocomplete";
@@ -22,11 +22,13 @@ import ActionMenu from "@/components/action-menu";
 import { useItineraryContext } from "../../../../../../contexts/ItineraryContext";
 import { getDayColor } from "../../../../../../constants/day-colors";
 import ItineraryItemCardSkeleton from "./itinerary-item-card-skeleton";
+import { buildDisplayItems } from "./cross-day-utils";
 
 interface ItineraryDayCardProps {
   allItineraryDays: ItineraryDay[];
   itineraryDay: ItineraryDay;
   dayIndex: number;
+  totalDays: number;
   planStartTime: Date;
   onEditTitle: (dayId: string, newTitle: string) => Promise<void>;
   onAddItem: (item: ItineraryItem) => void;
@@ -39,6 +41,7 @@ export default function ItineraryDayCard({
   allItineraryDays,
   itineraryDay,
   dayIndex,
+  totalDays,
   planStartTime,
   onEditTitle,
   onAddItem,
@@ -49,6 +52,16 @@ export default function ItineraryDayCard({
   const { selectedPlace, selectPlaceFromItinerary, clearPlaceSelection } =
     useItineraryContext();
   const dayColor = getDayColor(dayIndex);
+
+  // Build display items (includes cross-day splits)
+  const sortedDays = useMemo(
+    () => [...allItineraryDays].sort((a, b) => a.order - b.order),
+    [allItineraryDays],
+  );
+  const displayItems = useMemo(
+    () => buildDisplayItems(sortedDays, dayIndex, totalDays),
+    [sortedDays, dayIndex, totalDays],
+  );
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(itineraryDay.title);
 
@@ -155,10 +168,10 @@ export default function ItineraryDayCard({
     setEditingItem(newItineraryItem);
   };
 
-  const handleSelectEndTime = (date: Date | undefined) => {
+  const handleSelectDuration = (duration: string) => {
     if (!editingItem) return;
     const newItineraryItem = { ...editingItem };
-    newItineraryItem.endTime = date ? format(date, "HH:mm") : "";
+    newItineraryItem.duration = duration;
     setEditingItem(newItineraryItem);
   };
 
@@ -173,7 +186,7 @@ export default function ItineraryDayCard({
   const handleConfirmUpdateItineraryItem = async (
     itineraryDayId: string,
     startTime?: string,
-    endTime?: string,
+    duration?: string,
   ) => {
     if (!editingItem) return;
 
@@ -181,7 +194,7 @@ export default function ItineraryDayCard({
       const response = await updateItineraryItem(editingItem.id, {
         itineraryDayId,
         startTime,
-        endTime,
+        duration,
       });
 
       onUpdateItem(response);
@@ -300,29 +313,43 @@ export default function ItineraryDayCard({
       </div>
 
       {/* Items List */}
-      <div className="flex flex-col gap-3">
-        {[...(itineraryDay.itineraryItems || [])]
-          .sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""))
-          .map((item, index, sortedItems) => (
-            <ItineraryItemCard
-              key={item.id}
-              item={item}
-              orderNumber={index + 1}
-              dayColor={dayColor}
-              isFirst={index === 0}
-              isLast={index === sortedItems.length - 1}
-              isActive={
-                selectedPlace.placeId === item.place.placeId &&
-                selectedPlace.dayIndex === dayIndex
-              }
-              onEdit={() => setEditingItem(item)}
-              onDelete={() => setItemToDelete(item)}
-              onClick={() => selectPlaceFromItinerary(item, dayIndex, index)}
-            />
-          ))}
+      {displayItems.length > 0 && (
+        <div className="flex flex-col gap-3">
+          {displayItems.map((di, index) => {
+            const isCrossDayEnd = di.displayType === "cross-day-end";
+            const itemDayColor = getDayColor(di.sourceDayIndex);
+            return (
+              <ItineraryItemCard
+                key={`${di.item.id}-${di.displayType}`}
+                item={di.item}
+                orderNumber={di.orderNumber}
+                dayColor={itemDayColor}
+                isFirst={di.isOverallFirst}
+                isLast={di.isOverallLast}
+                isActive={
+                  selectedPlace.placeId === di.item.place.placeId &&
+                  selectedPlace.dayIndex === dayIndex
+                }
+                onEdit={() => !isCrossDayEnd && setEditingItem(di.item)}
+                onDelete={() => !isCrossDayEnd && setItemToDelete(di.item)}
+                onClick={() =>
+                  selectPlaceFromItinerary(
+                    di.item,
+                    dayIndex,
+                    di.orderNumber - 1,
+                  )
+                }
+                displayType={di.displayType}
+                displayStartTime={di.displayStartTime}
+                displayEndTime={di.displayEndTime}
+                isBed={di.isBed}
+              />
+            );
+          })}
 
-        {isAddingItem && <ItineraryItemCardSkeleton />}
-      </div>
+          {isAddingItem && <ItineraryItemCardSkeleton />}
+        </div>
+      )}
 
       <div className="flex flex-col gap-2 relative">
         {isOpenAutocomplete ? (
@@ -356,16 +383,16 @@ export default function ItineraryDayCard({
               itineraryDays={allItineraryDays}
               planStartTime={planStartTime}
               startTime={convertTimeOnlyStringToDate(editingItem.startTime)}
-              endTime={convertTimeOnlyStringToDate(editingItem.endTime)}
+              duration={editingItem.duration || ""}
               setStartTime={handleSelectStartTime}
-              setEndTime={handleSelectEndTime}
+              setDuration={handleSelectDuration}
             />
           }
           onConfirm={() =>
             handleConfirmUpdateItineraryItem(
               editingItem.itineraryDayId,
               editingItem.startTime,
-              editingItem.endTime,
+              editingItem.duration,
             )
           }
         />

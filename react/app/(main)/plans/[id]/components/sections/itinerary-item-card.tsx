@@ -1,8 +1,20 @@
 import { ItineraryItem } from "@/types/itineraryItem";
-import { Clock, MapPin, Pencil, Star, Trash, Home, Flag } from "lucide-react";
+import {
+  Clock,
+  MapPin,
+  Pencil,
+  Star,
+  Trash,
+  Home,
+  Flag,
+  BedDouble,
+  Moon,
+} from "lucide-react";
 import ActionMenu from "@/components/action-menu";
 import { cn } from "@/lib/utils";
 import MarkerPin from "../maps/marker-pin";
+import { useMemo } from "react";
+import { DisplayType } from "./cross-day-utils";
 
 interface ItineraryItemCardProps {
   item: ItineraryItem;
@@ -14,6 +26,12 @@ interface ItineraryItemCardProps {
   onEdit: () => void;
   onDelete: () => void;
   onClick: () => void;
+  /** Cross-day display metadata */
+  displayType?: DisplayType;
+  displayStartTime?: string;
+  displayEndTime?: string;
+  /** Whether to show Bed icon on the marker badge */
+  isBed?: boolean;
 }
 
 export default function ItineraryItemCard({
@@ -26,24 +44,103 @@ export default function ItineraryItemCard({
   onEdit,
   onDelete,
   onClick,
+  displayType = "normal",
+  displayStartTime,
+  displayEndTime,
+  isBed = false,
 }: ItineraryItemCardProps) {
-  const { place, startTime, endTime } = item;
+  const { place, startTime, duration } = item;
+
+  const getEndTime = (start?: string, dur?: string) => {
+    if (!start || !dur) return undefined;
+    const [sH, sM] = start.split(":").map(Number);
+    const [dH, dM] = dur.split(":").map(Number);
+    const totalMinutes = sH * 60 + sM + dH * 60 + dM;
+    const endH = Math.floor(totalMinutes / 60) % 24;
+    const endM = totalMinutes % 60;
+    return `${String(endH).padStart(2, "0")}:${String(endM).padStart(2, "0")}`;
+  };
+
+  const calculatedEndTime = useMemo(
+    () => getEndTime(startTime, duration),
+    [startTime, duration],
+  );
+
+  // Determine what time text to display
+  const timeDisplay = useMemo(() => {
+    if (displayType === "cross-day-start") {
+      return { start: displayStartTime || startTime, end: "moon" };
+    }
+    if (displayType === "cross-day-end") {
+      return { start: "moon", end: displayEndTime || calculatedEndTime };
+    }
+    // Normal
+    return { start: startTime, end: calculatedEndTime };
+  }, [
+    displayType,
+    displayStartTime,
+    displayEndTime,
+    startTime,
+    calculatedEndTime,
+  ]);
+
+  const isCrossDayEnd = displayType === "cross-day-end";
+
+  // Determine marker icon
+  const renderMarkerIcon = () => {
+    if (isFirst) {
+      return <Home size={12} strokeWidth={3} />;
+    }
+    if (isBed) {
+      return <BedDouble size={12} strokeWidth={3} />;
+    }
+    if (isLast) {
+      return <Flag size={12} strokeWidth={3} />;
+    }
+    return <span className="text-xs font-bold">{orderNumber}</span>;
+  };
 
   return (
     <div
-      id={`itinerary-item-${item.id}`}
-      className="flex flex-col gap-1 w-full relative group/card"
+      id={`itinerary-item-${item.id}${isCrossDayEnd ? "-end" : ""}`}
+      className={cn(
+        "flex flex-col gap-1 w-full relative group/card",
+        isCrossDayEnd && "opacity-70",
+      )}
     >
       {/* Time Header */}
       <button
-        className="cursor-pointer flex items-center gap-1.5 text-xs font-semibold text-blue-600 bg-blue-50 w-fit px-2 py-1 rounded-md mb-1"
-        onClick={onEdit}
-        title="Click to edit"
+        className={cn(
+          "cursor-pointer flex items-center gap-1.5 text-xs font-semibold w-fit px-2 py-1 rounded-md mb-1",
+          displayType === "cross-day-start"
+            ? "text-indigo-600 bg-indigo-50"
+            : displayType === "cross-day-end"
+              ? "text-purple-600 bg-purple-50"
+              : "text-blue-600 bg-blue-50",
+        )}
+        onClick={!isCrossDayEnd ? onEdit : undefined}
+        title={isCrossDayEnd ? "Overnight continuation" : "Click to edit"}
+        disabled={isCrossDayEnd}
       >
-        <Clock size={12} className="shrink-0" />
-        {/* Add time change to button to edit when start and end time is not set */}
-        <span>
-          {startTime && endTime ? `${startTime} - ${endTime}` : "Add time"}
+        {/* <Clock size={12} className="shrink-0" /> */}
+        <span className="flex items-center justify-center gap-1">
+          {timeDisplay.start && timeDisplay.end ? (
+            <>
+              {timeDisplay.start === "moon" ? (
+                <Moon size={14} className="shrink-0 inline-block" />
+              ) : (
+                timeDisplay.start
+              )}
+              {" - "}
+              {timeDisplay.end === "moon" ? (
+                <Moon size={14} className="shrink-0 inline-block" />
+              ) : (
+                timeDisplay.end
+              )}
+            </>
+          ) : (
+            "Add time"
+          )}
         </span>
       </button>
 
@@ -54,6 +151,7 @@ export default function ItineraryItemCard({
           isActive
             ? "ring-2 ring-offset-1 shadow-md"
             : "border-gray-100 hover:border-gray-200 hover:shadow-sm",
+          isCrossDayEnd && "border-dashed",
         )}
         style={{
           borderColor: isActive ? dayColor : undefined,
@@ -62,47 +160,51 @@ export default function ItineraryItemCard({
         onClick={onClick}
       >
         {/* Order Number Badge */}
-        {/* Order Number Badge */}
         <div className="absolute -top-3 -left-3 z-20 filter drop-shadow-md">
           <MarkerPin width={24} height={34} color={dayColor}>
-            {isFirst ? (
-              <Home size={12} strokeWidth={3} />
-            ) : isLast ? (
-              <Flag size={12} strokeWidth={3} />
-            ) : (
-              <span className="text-xs font-bold">{orderNumber}</span>
-            )}
+            {renderMarkerIcon()}
           </MarkerPin>
         </div>
 
-        <div className="absolute top-2 right-2 z-10 opacity-0 group-hover/card:opacity-100 has-[[data-state=open]]:opacity-100 transition-opacity">
-          <ActionMenu
-            options={[
-              {
-                label: "Edit",
-                icon: Pencil,
-                onClick: onEdit,
-                variant: "edit",
-              },
-              {
-                label: "Delete",
-                icon: Trash,
-                onClick: onDelete,
-                variant: "delete",
-              },
-            ]}
-            iconSize={16}
-            ellipsisSize={16}
-          />
-        </div>
+        {/* Action Menu - hidden for cross-day-end items */}
+        {!isCrossDayEnd && (
+          <div className="absolute top-2 right-2 z-10 opacity-0 group-hover/card:opacity-100 has-[[data-state=open]]:opacity-100 transition-opacity">
+            <ActionMenu
+              options={[
+                {
+                  label: "Edit",
+                  icon: Pencil,
+                  onClick: onEdit,
+                  variant: "edit",
+                },
+                {
+                  label: "Delete",
+                  icon: Trash,
+                  onClick: onDelete,
+                  variant: "delete",
+                },
+              ]}
+              iconSize={16}
+              ellipsisSize={16}
+            />
+          </div>
+        )}
 
-        {/* Thumbnail min-h-20 to uncomment*/}
+        {/* Overnight badge for cross-day-end */}
+        {isCrossDayEnd && (
+          <div className="absolute top-2 right-2 z-10">
+            <span className="text-[10px] font-semibold text-purple-500 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200">
+              Overnight
+            </span>
+          </div>
+        )}
+
+        {/* Thumbnail */}
         <div className="w-20 h-20 rounded-md overflow-hidden bg-gray-100 shrink-0 relative">
           {place?.thumbnail ? (
             <img
               src={place.thumbnail}
               alt={place.title}
-              // className="absolute inset-0 w-full h-full object-cover"
               className="w-full h-full object-cover"
             />
           ) : (

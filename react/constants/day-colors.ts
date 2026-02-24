@@ -1,15 +1,15 @@
 // Color palette for different days in the itinerary
 export const DAY_COLORS = [
-  "#3B82F6", // Blue
-  "#EF4444", // Red
-  "#10B981", // Green
-  "#F59E0B", // Amber
-  "#8B5CF6", // Purple
-  "#EC4899", // Pink
-  "#14B8A6", // Teal
-  "#F97316", // Orange
-  "#6366F1", // Indigo
-  "#84CC16", // Lime
+  "#039BE5",
+  "#E67C73",
+  "#33B679",
+  "#F59E0B",
+  "#3F51B5",
+  "#7986CB",
+  "#14B8A6",
+  "#8E24AA",
+  "#616161",
+  "#84CC16",
 ];
 
 export function getDayColor(dayIndex: number): string {

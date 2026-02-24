@@ -19,6 +19,7 @@ interface ActionMenuProps {
   triggerClassName?: string;
   ellipsisSize?: number;
   iconSize?: number;
+  align?: "start" | "end";
 }
 
 export default function ActionMenu({
@@ -26,6 +27,7 @@ export default function ActionMenu({
   triggerClassName,
   ellipsisSize = 16,
   iconSize = 16,
+  align = "end",
 }: ActionMenuProps) {
   return (
     <DropdownMenu>
@@ -41,7 +43,7 @@ export default function ActionMenu({
           <Ellipsis size={ellipsisSize} />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-40">
+      <DropdownMenuContent align={align} className="w-40">
         {options.map((option, index) => (
           <DropdownMenuItem
             key={index}
@@ -59,7 +61,14 @@ export default function ActionMenu({
                   option.variant === "edit" && "p-1.5 bg-yellow-400",
                 )}
               >
-                <option.icon size={iconSize} className="text-white" />
+                <option.icon
+                  size={iconSize}
+                  className={cn("text-white")}
+                  style={{
+                    width: iconSize,
+                    height: iconSize,
+                  }}
+                />
               </div>
             )}
             <span className="text-gray-700 font-semibold">{option.label}</span>

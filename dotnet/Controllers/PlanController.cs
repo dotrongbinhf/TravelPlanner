@@ -152,7 +152,7 @@ namespace dotnet.Controllers
                                 ItineraryDayId = ii.ItineraryDayId,
                                 Place = placesDict.GetValueOrDefault(ii.PlaceId), // Not Null
                                 StartTime = ii.StartTime,
-                                EndTime = ii.EndTime
+                                Duration = ii.Duration
                             }).ToList()
                     }).ToList()
             });
@@ -327,7 +327,7 @@ namespace dotnet.Controllers
                         ItineraryDayId = ii.ItineraryDayId,
                         Place = placesDict.GetValueOrDefault(ii.PlaceId),
                         StartTime = ii.StartTime,
-                        EndTime = ii.EndTime
+                        Duration = ii.Duration
                     }).ToList()
                 }).ToList()
             });

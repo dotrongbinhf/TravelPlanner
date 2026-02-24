@@ -49,7 +49,7 @@ export default function PlaceDetailDialog({
   const [adding, setAdding] = useState(false);
   const [selectedDayId, setSelectedDayId] = useState<string>("");
   const [startTime, setStartTime] = useState<Date | undefined>();
-  const [endTime, setEndTime] = useState<Date | undefined>();
+  const [duration, setDuration] = useState<string>("");
   const [isOpenDialog, setIsOpenDialog] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
 
@@ -71,23 +71,18 @@ export default function PlaceDetailDialog({
         newStart.setHours(startTime.getHours(), startTime.getMinutes());
         if (newStart.getTime() !== startTime.getTime()) setStartTime(newStart);
       }
-      if (endTime) {
-        const newEnd = new Date(baseDate);
-        newEnd.setHours(endTime.getHours(), endTime.getMinutes());
-        if (newEnd.getTime() !== endTime.getTime()) setEndTime(newEnd);
-      }
     }
   }, [selectedDayId, plan]);
 
   const handleAddToItinerary = async () => {
-    if (!place || !selectedDayId || !startTime || !endTime) return;
+    if (!place || !selectedDayId || !startTime || !duration) return;
 
     setAdding(true);
     try {
       const response = await createItineraryItem(selectedDayId, {
         placeId: place.placeId,
         startTime: format(startTime, "HH:mm"),
-        endTime: format(endTime, "HH:mm"),
+        duration: duration,
       });
 
       onAddItem(response);
@@ -580,7 +575,7 @@ export default function PlaceDetailDialog({
                         description={`Choose a day and time to add "${place.title}" to your trip.`}
                         confirmLabel={adding ? "Adding..." : "Add Place"}
                         isDisabled={
-                          !selectedDayId || !startTime || !endTime || adding
+                          !selectedDayId || !startTime || !duration || adding
                         }
                         onConfirm={handleAddToItinerary}
                       >
@@ -590,9 +585,9 @@ export default function PlaceDetailDialog({
                           itineraryDays={plan?.itineraryDays}
                           planStartTime={plan?.startTime}
                           startTime={startTime}
-                          endTime={endTime}
+                          duration={duration}
                           setStartTime={setStartTime}
-                          setEndTime={setEndTime}
+                          setDuration={setDuration}
                         />
                       </CustomDialog>
                     )}

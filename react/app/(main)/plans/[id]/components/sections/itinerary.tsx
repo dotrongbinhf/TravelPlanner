@@ -1,7 +1,8 @@
 "use client";
 
 import { DateRangePicker } from "@/components/date-range-picker";
-import { forwardRef, useEffect } from "react";
+import { forwardRef, useEffect, useState } from "react";
+import { List, LayoutGrid } from "lucide-react";
 import { updatePlanBasicInfo } from "@/api/plan/plan";
 import toast from "react-hot-toast";
 import { ItineraryDay } from "@/types/itineraryDay";
@@ -12,6 +13,8 @@ import {
 } from "@/api/itineraryDay/itineraryDay";
 import { ItineraryItem } from "@/types/itineraryItem";
 import { useItineraryContext } from "../../../../../../contexts/ItineraryContext";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import ItineraryCalendar from "./itinerary-calendar";
 
 interface ItineraryProps {
   className?: string;
@@ -35,6 +38,8 @@ const Itinerary = forwardRef<HTMLDivElement, ItineraryProps>(function Itinerary(
   },
   ref,
 ) {
+  const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
+
   const handleDateUpdate = async (start: Date | null, end: Date | null) => {
     if (!start || !end) return;
     try {
@@ -136,18 +141,14 @@ const Itinerary = forwardRef<HTMLDivElement, ItineraryProps>(function Itinerary(
       );
 
       // Adjust plan duration
-      if (deletedDay.order === 0) {
-        if (startTime && endTime) {
-          const newStartTime = new Date(startTime);
-          newStartTime.setDate(newStartTime.getDate() + 1);
-          onChange(newStartTime, endTime);
-        }
-      } else {
-        if (startTime && endTime) {
-          const newEndTime = new Date(endTime);
-          newEndTime.setDate(newEndTime.getDate() - 1);
-          onChange(startTime, newEndTime);
-        }
+      if (deletedDay.order === 0 && startTime && endTime) {
+        const newStartTime = new Date(startTime);
+        newStartTime.setDate(newStartTime.getDate() + 1);
+        onChange(newStartTime, endTime);
+      } else if (startTime && endTime) {
+        const newEndTime = new Date(endTime);
+        newEndTime.setDate(newEndTime.getDate() - 1);
+        onChange(startTime, newEndTime);
       }
 
       toast.success("Deleted Day");
@@ -192,34 +193,63 @@ const Itinerary = forwardRef<HTMLDivElement, ItineraryProps>(function Itinerary(
     >
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-gray-800">Itinerary</h2>
-        <DateRangePicker
-          startDate={startTime}
-          endDate={endTime}
-          onChange={handleDateUpdate}
-          className="font-medium"
-          iconStrokeWidth={3}
-          showActions={true}
-        />
+        <div className="flex items-center gap-3">
+          <Tabs
+            value={viewMode}
+            onValueChange={(v) => setViewMode(v as "list" | "calendar")}
+          >
+            <TabsList>
+              <TabsTrigger value="list" className="gap-1.5 px-3">
+                <List className="w-4 h-4" />
+                <span className="text-xs font-medium">List</span>
+              </TabsTrigger>
+              <TabsTrigger value="calendar" className="gap-1.5 px-3">
+                <LayoutGrid className="w-4 h-4" />
+                <span className="text-xs font-medium">Calendar</span>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <DateRangePicker
+            startDate={startTime}
+            endDate={endTime}
+            onChange={handleDateUpdate}
+            className="font-medium"
+            iconStrokeWidth={3}
+            showActions={true}
+          />
+        </div>
       </div>
 
-      <div className="flex flex-col gap-6">
-        {itineraryDays
-          .sort((a, b) => a.order - b.order)
-          .map((day, index) => (
-            <ItineraryDayCard
-              key={day.id}
-              allItineraryDays={itineraryDays}
-              itineraryDay={day}
-              dayIndex={index}
-              planStartTime={startTime || new Date()}
-              onEditTitle={handleUpdateDayTitle}
-              onAddItem={handleAddItem}
-              onUpdateItem={handleUpdateItem}
-              onDeleteItem={handleDeleteItem}
-              onDeleteDay={handleDeleteDay}
-            />
-          ))}
-      </div>
+      {viewMode === "list" ? (
+        <div className="flex flex-col gap-6">
+          {itineraryDays
+            .toSorted((a, b) => a.order - b.order)
+            .map((day, index) => (
+              <ItineraryDayCard
+                key={day.id}
+                allItineraryDays={itineraryDays}
+                itineraryDay={day}
+                dayIndex={index}
+                totalDays={itineraryDays.length}
+                planStartTime={startTime || new Date()}
+                onEditTitle={handleUpdateDayTitle}
+                onAddItem={handleAddItem}
+                onUpdateItem={handleUpdateItem}
+                onDeleteItem={handleDeleteItem}
+                onDeleteDay={handleDeleteDay}
+              />
+            ))}
+        </div>
+      ) : (
+        <ItineraryCalendar
+          itineraryDays={itineraryDays}
+          startTime={startTime}
+          endTime={endTime}
+          onAddItem={handleAddItem}
+          onUpdateItem={handleUpdateItem}
+          onDeleteItem={handleDeleteItem}
+        />
+      )}
     </section>
   );
 });

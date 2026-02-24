@@ -1,5 +1,5 @@
 import { AdvancedMarker } from "@vis.gl/react-google-maps";
-import { Home, Flag } from "lucide-react";
+import { Home, Flag, BedDouble } from "lucide-react";
 import { cn } from "@/lib/utils";
 import MarkerPin from "./marker-pin";
 
@@ -10,6 +10,7 @@ interface ItineraryMarkerProps {
   isFirst: boolean;
   isLast: boolean;
   isActive: boolean;
+  isBed?: boolean;
   onClick: () => void;
 }
 
@@ -20,11 +21,45 @@ export default function ItineraryMarker({
   isFirst,
   isLast,
   isActive,
+  isBed = false,
   onClick,
 }: ItineraryMarkerProps) {
   const baseWidth = 30;
   const baseHeight = 42;
   const baseIconSize = 14;
+
+  const renderIcon = () => {
+    if (isFirst) {
+      return (
+        <Home
+          size={baseIconSize}
+          className="text-white fill-white/20"
+          strokeWidth={3}
+        />
+      );
+    }
+    if (isBed) {
+      return (
+        <BedDouble
+          size={baseIconSize}
+          className="text-white fill-white/20"
+          strokeWidth={3}
+        />
+      );
+    }
+    if (isLast) {
+      return (
+        <Flag
+          size={baseIconSize}
+          className="text-white fill-white/20"
+          strokeWidth={3}
+        />
+      );
+    }
+    return (
+      <span className="font-bold leading-none text-sm">{orderNumber}</span>
+    );
+  };
 
   return (
     <AdvancedMarker position={position} onClick={onClick}>
@@ -43,23 +78,7 @@ export default function ItineraryMarker({
             color={dayColor}
             active={isActive}
           >
-            {isFirst ? (
-              <Home
-                size={baseIconSize}
-                className="text-white fill-white/20"
-                strokeWidth={3}
-              />
-            ) : isLast ? (
-              <Flag
-                size={baseIconSize}
-                className="text-white fill-white/20"
-                strokeWidth={3}
-              />
-            ) : (
-              <span className="font-bold leading-none text-sm">
-                {orderNumber}
-              </span>
-            )}
+            {renderIcon()}
           </MarkerPin>
         </div>
       </div>

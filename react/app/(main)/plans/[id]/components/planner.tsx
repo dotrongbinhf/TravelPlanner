@@ -3,7 +3,6 @@
 import {
   useEffect,
   useCallback,
-  useState,
   RefObject,
   SetStateAction,
   Dispatch,
@@ -15,6 +14,7 @@ import PackingLists from "./sections/packing-lists";
 import Teammates from "./sections/teammates";
 import Notes from "./sections/notes";
 import { sectionItems } from "./sidebar";
+import { useMemo } from "react";
 import { Plan } from "@/types/plan";
 import { Note } from "@/types/note";
 import { PackingList } from "@/types/packingList";
@@ -39,6 +39,15 @@ export default function Planner({
   plan,
   setPlan,
 }: PlannerProps) {
+  const planStartTime = useMemo(
+    () => (plan?.startTime ? new Date(plan.startTime) : null),
+    [plan?.startTime],
+  );
+  const planEndTime = useMemo(
+    () => (plan?.endTime ? new Date(plan.endTime) : null),
+    [plan?.endTime],
+  );
+
   const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -185,8 +194,8 @@ export default function Planner({
             }}
             name={plan.name}
             coverImageUrl={plan.coverImageUrl}
-            startTime={new Date(plan.startTime)}
-            endTime={new Date(plan.endTime)}
+            startTime={planStartTime || new Date()}
+            endTime={planEndTime || new Date()}
             participantCount={plan?.participants?.length ?? 1}
             placesCount={
               plan?.itineraryDays?.reduce(
@@ -208,8 +217,8 @@ export default function Planner({
               sectionRefs.current["itinerary"] = el;
             }}
             planId={plan.id}
-            startTime={new Date(plan.startTime)}
-            endTime={new Date(plan.endTime)}
+            startTime={planStartTime}
+            endTime={planEndTime}
             itineraryDays={plan.itineraryDays ?? []}
             onChange={updatePlanDuration}
             onItineraryDaysUpdate={updateItineraryDays}

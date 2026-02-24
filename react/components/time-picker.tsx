@@ -21,7 +21,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { X, Calendar as CalendarIcon } from "lucide-react";
+import {
+  X,
+  Calendar as CalendarIcon,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 
 export enum TimePickerType {
   START,
@@ -45,12 +50,18 @@ type TimePickerProps = {
   setExternalOpen?: (isOpen: boolean) => void;
   showDate?: boolean; // New prop to control calendar visibility
   disabled?: boolean;
+  dayLabel?: string;
+  onNextDay?: () => void;
+  onPrevDay?: () => void;
+  canNextDay?: boolean;
+  canPrevDay?: boolean;
+  showCalendar?: boolean; // New prop to control calendar component visibility separately
 };
 
 export function TimePicker({
   value,
   onChange,
-  placeholder = "dd/MM/yyyy HH:mm",
+  placeholder = "MMM dd HH:mm",
   className,
   triggerClassName,
   label,
@@ -64,6 +75,12 @@ export function TimePicker({
   setExternalOpen,
   showDate = true, // Default to true
   disabled,
+  dayLabel,
+  onNextDay,
+  onPrevDay,
+  canNextDay,
+  canPrevDay,
+  showCalendar,
 }: TimePickerProps) {
   const [open, setOpen] = React.useState(false);
   const isValidDate = value && isValid(value);
@@ -162,6 +179,9 @@ export function TimePicker({
     onChange?.(clampDate(newDate));
   };
 
+  const displayDayLabel =
+    dayLabel ?? (currentDate ? format(currentDate, "MMM dd") : undefined);
+
   return (
     <div className={cn("flex flex-col gap-1", className)}>
       {label && <label className="text-base font-medium">{label}</label>}
@@ -189,7 +209,7 @@ export function TimePicker({
               )}
             >
               {isValidDate ? (
-                format(currentDate!, showDate ? "dd/MM/yyyy HH:mm" : "HH:mm")
+                format(currentDate!, showDate ? "MMM dd HH:mm" : "HH:mm")
               ) : (
                 <span>{placeholder}</span>
               )}
@@ -213,9 +233,54 @@ export function TimePicker({
           )}
         </div>
         <PopoverContent className="w-auto p-0 z-[10000]" align="start">
+          {/* Day Navigation */}
+          {displayDayLabel && (
+            <div
+              className={cn(
+                "flex items-center justify-between p-2 border-b min-w-[300px]",
+                !onPrevDay && !onNextDay && "justify-center",
+              )}
+            >
+              {onPrevDay ? (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onPrevDay();
+                  }}
+                  disabled={canPrevDay === false}
+                >
+                  <ChevronLeft size={16} />
+                </Button>
+              ) : (
+                <div className="w-8" />
+              )}
+
+              <span className="text-sm font-semibold">{displayDayLabel}</span>
+
+              {onNextDay ? (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onNextDay();
+                  }}
+                  disabled={canNextDay === false}
+                >
+                  <ChevronRight size={16} />
+                </Button>
+              ) : (
+                <div className="w-8" />
+              )}
+            </div>
+          )}
           <div className="sm:flex">
             {/* Date Picker */}
-            {showDate && (
+            {showDate && (showCalendar === undefined || showCalendar) && (
               <Calendar
                 mode="single"
                 selected={currentDate ?? undefined}
@@ -225,101 +290,102 @@ export function TimePicker({
             )}
 
             {/* Time Picker */}
-            <div
-              className={cn(
-                "flex flex-col sm:flex-row gap-6 sm:gap-8 pr-4",
-                showDate ? "ml-5" : "p-4",
-              )}
-            >
-              <div>
-                <div className="text-sm font-semibold mb-2 relative left-2 mt-4 sm:mt-0">
-                  Hour
+            <div className="flex flex-col">
+              <div
+                className={cn("flex flex-col sm:flex-row gap-6 sm:gap-8 p-4")}
+              >
+                <div>
+                  <div className="text-sm font-semibold mb-2 relative left-2 mt-4 sm:mt-0">
+                    Hour
+                  </div>
+                  <div className="grid grid-cols-6 sm:grid-cols-4 gap-0.5">
+                    {Array.from({ length: 24 }, (_, hour) => {
+                      const testDate = currentDate
+                        ? setHours(currentDate, hour)
+                        : setHours(minDateTime || new Date(), hour);
+                      // Simplify disabled logic for now to basic range check
+                      let disabled = false;
+
+                      // We need to check if ANY minute in this hour is valid
+                      // For minDateTime: if testDate hour < minDateTime hour (same day) -> disable
+                      // BUT we must be careful with edge cases.
+
+                      // It's easier to check: is the END of this hour < minDateTime?
+                      // or START of this hour > maxDateTime?
+
+                      const startOfHour = setMinutes(testDate, 0);
+                      const endOfHour = setMinutes(testDate, 59);
+
+                      if (minDateTime && isBefore(endOfHour, minDateTime))
+                        disabled = true;
+                      if (maxDateTime && isAfter(startOfHour, maxDateTime))
+                        disabled = true;
+
+                      return (
+                        <Button
+                          key={hour}
+                          size="icon"
+                          variant={
+                            currentDate && currentDate.getHours() === hour
+                              ? "default"
+                              : "ghost"
+                          }
+                          className={cn(
+                            "aspect-square",
+                            currentDate && currentDate.getHours() === hour
+                              ? "bg-blue-600 text-white hover:bg-blue-600/90"
+                              : "hover:bg-gray-200",
+                          )}
+                          onClick={() => handleHourChange(hour)}
+                          disabled={disabled}
+                        >
+                          {hour.toString().padStart(2, "0")}
+                        </Button>
+                      );
+                    })}
+                  </div>
                 </div>
-                <div className="grid grid-cols-6 sm:grid-cols-4 gap-0.5">
-                  {Array.from({ length: 24 }, (_, hour) => {
-                    const testDate = currentDate
-                      ? setHours(currentDate, hour)
-                      : setHours(minDateTime || new Date(), hour);
-                    // Simplify disabled logic for now to basic range check
-                    let disabled = false;
+                <div>
+                  <div className="text-sm font-semibold mb-2 relative left-2 mt-4 sm:mt-0">
+                    Minute
+                  </div>
+                  <div className="grid grid-cols-6 sm:grid-cols-4 gap-0.5">
+                    {Array.from({ length: 12 }, (_, i) => i * 5).map(
+                      (minute) => {
+                        const testDate = currentDate
+                          ? setMinutes(currentDate, minute)
+                          : setMinutes(minDateTime || new Date(), minute);
 
-                    // We need to check if ANY minute in this hour is valid
-                    // For minDateTime: if testDate hour < minDateTime hour (same day) -> disable
-                    // BUT we must be careful with edge cases.
+                        let disabled = false;
+                        if (minDateTime && isBefore(testDate, minDateTime))
+                          disabled = true;
+                        if (maxDateTime && isAfter(testDate, maxDateTime))
+                          disabled = true;
 
-                    // It's easier to check: is the END of this hour < minDateTime?
-                    // or START of this hour > maxDateTime?
-
-                    const startOfHour = setMinutes(testDate, 0);
-                    const endOfHour = setMinutes(testDate, 59);
-
-                    if (minDateTime && isBefore(endOfHour, minDateTime))
-                      disabled = true;
-                    if (maxDateTime && isAfter(startOfHour, maxDateTime))
-                      disabled = true;
-
-                    return (
-                      <Button
-                        key={hour}
-                        size="icon"
-                        variant={
-                          currentDate && currentDate.getHours() === hour
-                            ? "default"
-                            : "ghost"
-                        }
-                        className={cn(
-                          "aspect-square",
-                          currentDate && currentDate.getHours() === hour
-                            ? "bg-blue-600 text-white hover:bg-blue-600/90"
-                            : "hover:bg-gray-200",
-                        )}
-                        onClick={() => handleHourChange(hour)}
-                        disabled={disabled}
-                      >
-                        {hour.toString().padStart(2, "0")}
-                      </Button>
-                    );
-                  })}
-                </div>
-              </div>
-              <div>
-                <div className="text-sm font-semibold mb-2 relative left-2 mt-4 sm:mt-0">
-                  Minute
-                </div>
-                <div className="grid grid-cols-6 sm:grid-cols-4 gap-0.5">
-                  {Array.from({ length: 12 }, (_, i) => i * 5).map((minute) => {
-                    const testDate = currentDate
-                      ? setMinutes(currentDate, minute)
-                      : setMinutes(minDateTime || new Date(), minute);
-
-                    let disabled = false;
-                    if (minDateTime && isBefore(testDate, minDateTime))
-                      disabled = true;
-                    if (maxDateTime && isAfter(testDate, maxDateTime))
-                      disabled = true;
-
-                    return (
-                      <Button
-                        key={minute}
-                        size="icon"
-                        variant={
-                          currentDate && currentDate.getMinutes() === minute
-                            ? "default"
-                            : "ghost"
-                        }
-                        className={cn(
-                          "aspect-square",
-                          currentDate && currentDate.getMinutes() === minute
-                            ? "bg-blue-600 text-white hover:bg-blue-600/90"
-                            : "hover:bg-gray-100",
-                        )}
-                        onClick={() => handleMinuteChange(minute)}
-                        disabled={disabled}
-                      >
-                        {minute.toString().padStart(2, "0")}
-                      </Button>
-                    );
-                  })}
+                        return (
+                          <Button
+                            key={minute}
+                            size="icon"
+                            variant={
+                              currentDate && currentDate.getMinutes() === minute
+                                ? "default"
+                                : "ghost"
+                            }
+                            className={cn(
+                              "aspect-square",
+                              currentDate && currentDate.getMinutes() === minute
+                                ? "bg-blue-600 text-white hover:bg-blue-600/90"
+                                : "hover:bg-gray-100",
+                            )}
+                            onClick={() => handleMinuteChange(minute)}
+                            disabled={disabled}
+                          >
+                            {minute.toString().padStart(2, "0")}
+                          </Button>
+                        );
+                      },
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

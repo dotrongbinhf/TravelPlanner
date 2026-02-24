@@ -1,0 +1,264 @@
+/* FullCalendar Custom Styles - Matching Design System */
+.fullcalendar-custom {
+  /* Header toolbar */
+  .fc-toolbar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .fc-toolbar-title {
+    font-size: 1rem !important;
+    font-weight: 600 !important;
+    color: #1f2937 !important;
+  }
+
+  /* Navigation buttons */
+  .fc-button {
+    background-color: #f3f4f6 !important;
+    border: 1px solid #e5e7eb !important;
+    color: #374151 !important;
+    font-size: 0.8rem !important;
+    font-weight: 500 !important;
+    padding: 4px 12px !important;
+    border-radius: 8px !important;
+    box-shadow: none !important;
+    transition: all 0.15s ease !important;
+  }
+
+  .fc-button:hover {
+    background-color: #e5e7eb !important;
+    color: #111827 !important;
+  }
+
+  .fc-button-active,
+  .fc-button.fc-button-active {
+    background-color: #3b82f6 !important;
+    border-color: #3b82f6 !important;
+    color: #ffffff !important;
+  }
+
+  .fc-button-active:hover,
+  .fc-button.fc-button-active:hover {
+    background-color: #2563eb !important;
+    border-color: #2563eb !important;
+  }
+
+  .fc-button-group {
+    border-radius: 8px !important;
+    overflow: hidden;
+  }
+
+  .fc-button-group > .fc-button {
+    border-radius: 0 !important;
+  }
+
+  .fc-button-group > .fc-button:first-child {
+    border-top-left-radius: 8px !important;
+    border-bottom-left-radius: 8px !important;
+  }
+
+  .fc-button-group > .fc-button:last-child {
+    border-top-right-radius: 8px !important;
+    border-bottom-right-radius: 8px !important;
+  }
+
+  .fc-customPrev-button,
+  .fc-customNext-button {
+    font-size: 1rem !important;
+    padding: 2px 12px !important;
+  }
+
+  /* Today button */
+  .fc-today-button {
+    text-transform: capitalize !important;
+  }
+
+  /* Table / Grid */
+  .fc-scrollgrid {
+    border: 1px solid #d1d5db !important; /* Darker gray */
+    border-radius: 8px !important;
+    overflow: hidden;
+  }
+
+  .fc-scrollgrid td,
+  .fc-scrollgrid th {
+    border-color: #e5e7eb !important; /* Slightly darker inner lines */
+  }
+
+  /* Column headers */
+  .fc-col-header-cell {
+    background-color: #f9fafb !important;
+    padding: 8px 4px !important;
+    border-bottom: 1px solid #d1d5db !important; /* Darker border */
+    border-left: 1px solid #e5e7eb !important; /* Separator */
+  }
+
+  .fc-col-header-cell-cushion {
+    color: #4b5563 !important;
+    font-weight: 600 !important;
+    font-size: 0.8rem !important;
+    text-decoration: none !important;
+  }
+
+  /* Time slots */
+  .fc-timegrid-slot {
+    height: 0.45em !important;
+    border-bottom: 1px solid #e5e7eb !important; /* Ensure visible lines */
+  }
+
+  .fc-timegrid-slot-label-cushion {
+    color: #6b7280 !important; /* Darker text */
+    font-size: 0.65rem !important;
+    font-weight: 500 !important;
+  }
+
+  /* Minor slot lines (15-min intervals) */
+  .fc-timegrid-slot-minor {
+    border-top-style: dotted !important;
+    border-top-color: #d1d5db !important; /* Darker dotted lines */
+  }
+
+  /* Today highlight */
+  .fc-day-today {
+    background-color: #eff6ff !important;
+  }
+
+  .fc-col-header-cell.fc-day-today {
+    background-color: #dbeafe !important;
+  }
+
+  .fc-col-header-cell.fc-day-today .fc-col-header-cell-cushion {
+    color: #2563eb !important;
+  }
+
+  /* Now indicator */
+  .fc-timegrid-now-indicator-line {
+    border-color: #ef4444 !important;
+    border-width: 2px !important;
+  }
+
+  .fc-timegrid-now-indicator-arrow {
+    border-color: #ef4444 !important;
+  }
+
+  /* Events */
+  .fc-event {
+    border: none !important;
+    border-radius: 6px !important;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12) !important;
+    cursor: pointer !important;
+    transition:
+      box-shadow 0.15s ease,
+      transform 0.1s ease !important;
+    overflow: hidden !important;
+  }
+
+  .fc-event:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2) !important;
+    transform: scale(1.01);
+    z-index: 10 !important;
+  }
+
+  .fc-event-main {
+    padding: 2px !important;
+  }
+
+  /* Resize handle */
+  .fc-event .fc-event-resizer {
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+
+  .fc-event:hover .fc-event-resizer {
+    opacity: 1;
+  }
+
+  .fc-event-resizer-end {
+    height: 6px !important;
+    bottom: 0 !important;
+    background: transparent !important; /* Removed visible bottom bar */
+    border-bottom-left-radius: 6px !important;
+    border-bottom-right-radius: 6px !important;
+  }
+
+  /* Select mirror (time range selection) */
+  .fc-highlight {
+    background-color: var(
+      --fc-highlight-color,
+      rgba(59, 130, 246, 0.5)
+    ) !important; /* Fallback */
+    opacity: 1 !important; /* Make it look solid */
+    border-radius: 6px !important;
+    box-shadow:
+      0 6px 16px rgba(0, 0, 0, 0.35),
+      0 2px 4px rgba(0, 0, 0, 0.1) !important;
+  }
+
+  /* Select mirror event (drag-to-select placeholder — looks like a real event) */
+  .fc-event-mirror {
+    border: none !important;
+    border-radius: 6px !important;
+    box-shadow:
+      0 6px 16px rgba(0, 0, 0, 0.3),
+      0 2px 4px rgba(0, 0, 0, 0.1) !important;
+    opacity: 0.85 !important;
+    color: #ffffff !important;
+    overflow: hidden !important;
+    cursor: pointer !important;
+    transform: scale(1.02) !important;
+  }
+
+  .fc-event-mirror .fc-event-main {
+    padding: 2px !important;
+  }
+
+  /* Dragging */
+  .fc-event-dragging {
+    opacity: 0.85 !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25) !important;
+    transform: scale(1.02) !important;
+  }
+
+  /* Active event highlight */
+  .fc-event-active {
+    box-shadow:
+      0 6px 16px rgba(0, 0, 0, 0.35),
+      0 2px 4px rgba(0, 0, 0, 0.1) !important;
+    transform: scale(1.03) !important;
+    z-index: 20 !important;
+  }
+
+  /* Out-of-range day columns (dimmed) */
+  .fc-day-out-of-range {
+    opacity: 0.35 !important;
+    background-color: #f9fafb !important;
+  }
+
+  .fc-day-out-of-range .fc-col-header-cell-cushion {
+    color: #d1d5db !important;
+  }
+
+  /* Allow event text to wrap */
+  .fc-event-title {
+    white-space: normal !important;
+    overflow-wrap: break-word !important;
+  }
+
+  /* Scrollbar */
+  .fc-scroller::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .fc-scroller::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .fc-scroller::-webkit-scrollbar-thumb {
+    background-color: #d1d5db;
+    border-radius: 3px;
+  }
+
+  .fc-scroller::-webkit-scrollbar-thumb:hover {
+    background-color: #9ca3af;
+  }
+}

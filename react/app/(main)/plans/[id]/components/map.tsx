@@ -1,6 +1,6 @@
 "use client";
 
-import { Map, Marker, useMap } from "@vis.gl/react-google-maps";
+import { Map as GoogleMap, Marker, useMap } from "@vis.gl/react-google-maps";
 import { useEffect, useState, useMemo, useCallback } from "react";
 import PlaceDetailDialog from "./maps/place-detail-dialog";
 import ItineraryMarker from "./maps/itinerary-marker";
@@ -17,6 +17,7 @@ import { ItineraryItemsRoute } from "@/types/itineraryItemsRoute";
 import { Plan } from "@/types/plan";
 import { useItineraryContext } from "@/contexts/ItineraryContext";
 import { getDayColor } from "@/constants/day-colors";
+import { isCrossDayEvent } from "./sections/cross-day-utils";
 
 interface GoogleMapIntegrationProps {
   plan: Plan | null;
@@ -65,34 +66,144 @@ export default function GoogleMapIntegration({
       dayIndex: number;
       itemIndex: number;
       totalItemsInDay: number;
+      isBed: boolean;
+      isOverallFirst: boolean;
+      isOverallLast: boolean;
     }> = [];
 
-    itineraryDays
-      .sort((a, b) => a.order - b.order)
-      .forEach((day, dayIndex) => {
-        const sortedItems = [...(day.itineraryItems || [])].sort((a, b) =>
-          (a.startTime ?? "").localeCompare(b.startTime ?? ""),
-        );
+    const sorted = [...itineraryDays].sort((a, b) => a.order - b.order);
+    const totalDays = sorted.length;
 
-        sortedItems.forEach((item, itemIndex) => {
-          markers.push({
-            item,
-            dayIndex,
-            itemIndex,
-            totalItemsInDay: sortedItems.length,
-          });
+    sorted.forEach((day, dayIndex) => {
+      const sortedItems = [...(day.itineraryItems || [])].sort((a, b) =>
+        (a.startTime ?? "").localeCompare(b.startTime ?? ""),
+      );
+      const isLastDay = dayIndex === totalDays - 1;
+      const isFirstDay = dayIndex === 0;
+
+      sortedItems.forEach((item, itemIndex) => {
+        const isLastInDay = itemIndex === sortedItems.length - 1;
+        const isFirstInDay = itemIndex === 0;
+
+        markers.push({
+          item,
+          dayIndex,
+          itemIndex,
+          totalItemsInDay: sortedItems.length,
+          isBed:
+            isLastInDay &&
+            !isLastDay &&
+            isCrossDayEvent(item.startTime, item.duration),
+          isOverallFirst: isFirstDay && isFirstInDay,
+          isOverallLast: isLastDay && isLastInDay,
         });
       });
+    });
 
     return markers;
   }, [itineraryDays]);
 
+  // Deduplicated markers for rendering (handles same-hotel overnight stays)
+  const deduplicatedMarkers = useMemo(() => {
+    // Track bed markers by placeId → keep earliest day's color
+    const bedPlaceSeen: globalThis.Map<string, number> = new globalThis.Map(); // placeId → earliest dayIndex
+    const result: typeof markersData = [];
+    const skippedPlaceIds: globalThis.Set<string> = new globalThis.Set();
+
+    // First pass: find all bed markers and track earliest day per placeId
+    for (const m of markersData) {
+      if (m.isBed) {
+        const pid = m.item.place.placeId;
+        if (!bedPlaceSeen.has(pid) || m.dayIndex < bedPlaceSeen.get(pid)!) {
+          bedPlaceSeen.set(pid, m.dayIndex);
+        }
+      }
+    }
+
+    // Second pass: for non-bed markers that are the first item of a day,
+    // check if previous day's last item is at the same place (same hotel)
+    // → skip the duplicate first-item marker
+    const sorted = [...itineraryDays].sort((a, b) => a.order - b.order);
+    for (const m of markersData) {
+      if (m.itemIndex === 0 && m.dayIndex > 0) {
+        const prevDay = sorted[m.dayIndex - 1];
+        if (prevDay) {
+          const prevItems = [...(prevDay.itineraryItems || [])].sort((a, b) =>
+            (a.startTime ?? "").localeCompare(b.startTime ?? ""),
+          );
+          const lastOfPrev = prevItems[prevItems.length - 1];
+          if (lastOfPrev && lastOfPrev.place.placeId === m.item.place.placeId) {
+            // This first item is same place as prev day's last (bed) → skip
+            skippedPlaceIds.add(`${m.dayIndex}-${m.item.place.placeId}`);
+            continue;
+          }
+        }
+      }
+
+      // For bed markers with duplicate placeId, only keep the first occurrence
+      if (m.isBed) {
+        const pid = m.item.place.placeId;
+        const earliestDay = bedPlaceSeen.get(pid);
+        if (earliestDay !== undefined && m.dayIndex !== earliestDay) {
+          // Check if there's already a bed marker for this place from earliest day
+          const alreadyHasBed = result.some(
+            (r) => r.isBed && r.item.place.placeId === pid,
+          );
+          if (alreadyHasBed) {
+            continue; // Skip duplicate bed marker
+          }
+        }
+      }
+
+      result.push(m);
+    }
+
+    return result;
+  }, [markersData, itineraryDays]);
+
   // Filter markers based on filter mode
   const visibleMarkers = useMemo(() => {
     if (!showMarkers) return [];
-    if (filterMode === "all") return markersData;
-    return markersData.filter((m) => m.dayIndex === selectedDayIndex);
-  }, [markersData, showMarkers, filterMode, selectedDayIndex]);
+    if (filterMode === "all") return deduplicatedMarkers;
+
+    // In byDay mode, show this day's markers PLUS cross-day markers from previous day
+    const sorted = [...itineraryDays].sort((a, b) => a.order - b.order);
+    const prevDay = selectedDayIndex > 0 ? sorted[selectedDayIndex - 1] : null;
+
+    // Find the last item of the previous day that is a cross-day event
+    let crossDayFromPrev: globalThis.Set<string> | null = null;
+    if (prevDay) {
+      const prevItems = [...(prevDay.itineraryItems || [])].sort((a, b) =>
+        (a.startTime ?? "").localeCompare(b.startTime ?? ""),
+      );
+      crossDayFromPrev = new globalThis.Set<string>();
+      prevItems.forEach((item) => {
+        if (isCrossDayEvent(item.startTime, item.duration)) {
+          crossDayFromPrev!.add(item.id);
+        }
+      });
+    }
+
+    return deduplicatedMarkers.filter((m) => {
+      // Include markers from the selected day
+      if (m.dayIndex === selectedDayIndex) return true;
+      // Include cross-day markers from previous day
+      if (
+        crossDayFromPrev &&
+        m.dayIndex === selectedDayIndex - 1 &&
+        crossDayFromPrev.has(m.item.id)
+      ) {
+        return true;
+      }
+      return false;
+    });
+  }, [
+    deduplicatedMarkers,
+    showMarkers,
+    filterMode,
+    selectedDayIndex,
+    itineraryDays,
+  ]);
 
   // Get visible items for directions (based on filter mode)
   const visibleItems = useMemo(() => {
@@ -239,7 +350,7 @@ export default function GoogleMapIntegration({
   return (
     <div className="w-full h-full flex items-center justify-center rounded-lg shadow-sm border-2 border-gray-200 overflow-hidden relative">
       {center && (
-        <Map
+        <GoogleMap
           id="itinerary-map" // useMap
           defaultZoom={15}
           defaultCenter={{ lat: center.lat, lng: center.lng }}
@@ -255,7 +366,15 @@ export default function GoogleMapIntegration({
 
           {/* Itinerary Markers */}
           {visibleMarkers.map((marker) => {
-            const { item, dayIndex, itemIndex, totalItemsInDay } = marker;
+            const {
+              item,
+              dayIndex,
+              itemIndex,
+              totalItemsInDay,
+              isBed,
+              isOverallFirst,
+              isOverallLast,
+            } = marker;
             const place = item.place;
 
             if (!place?.location?.coordinates) return null;
@@ -267,19 +386,31 @@ export default function GoogleMapIntegration({
 
             return (
               <ItineraryMarker
-                key={item.id}
+                key={`${item.id}-${dayIndex}-${isBed ? "bed" : itemIndex}`}
                 position={position}
                 orderNumber={itemIndex + 1}
                 dayColor={getDayColor(dayIndex)}
-                isFirst={itemIndex === 0}
-                isLast={itemIndex === totalItemsInDay - 1}
+                isFirst={isOverallFirst}
+                isLast={isOverallLast}
+                isBed={isBed}
                 isActive={
                   selectedPlace.placeId === place.placeId &&
-                  selectedPlace.dayIndex === dayIndex
+                  (selectedPlace.dayIndex === dayIndex ||
+                    selectedPlace.dayIndex === selectedDayIndex)
                 }
-                onClick={() =>
-                  selectPlaceFromItinerary(item, dayIndex, itemIndex, "map")
-                }
+                onClick={() => {
+                  // For cross-day markers from previous day, stay on current day
+                  const clickDayIndex =
+                    filterMode === "byDay" && dayIndex !== selectedDayIndex
+                      ? selectedDayIndex
+                      : dayIndex;
+                  selectPlaceFromItinerary(
+                    item,
+                    clickDayIndex,
+                    itemIndex,
+                    "map",
+                  );
+                }}
               />
             );
           })}
@@ -397,7 +528,7 @@ export default function GoogleMapIntegration({
                   })}
               </>
             )}
-        </Map>
+        </GoogleMap>
       )}
 
       {/* Map Controls Container */}
