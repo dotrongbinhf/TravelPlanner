@@ -202,7 +202,6 @@ export default function ItineraryCalendar({
     };
   }, []);
 
-  // ── Helpers ─────────────────────────────────────────────────────────
   const formatLocalDate = (date: Date): string => format(date, "yyyy-MM-dd");
 
   const findDayByDate = (date: Date): ItineraryDay | undefined => {
@@ -225,7 +224,6 @@ export default function ItineraryCalendar({
     return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
   };
 
-  // ── Event handlers ─────────────────────────────────────────────────
   const handleEventClick = (info: EventClickArg) => {
     const { itineraryItem, dayIndex, itemIndex } = info.event.extendedProps;
     if (!itineraryItem) return;
@@ -332,12 +330,11 @@ export default function ItineraryCalendar({
     setCalendarAddingDayId(targetDay.id);
     setCalendarAddingTime({
       start: format(info.start, "HH:mm"),
-      end: format(info.end, "HH:mm"), // Keep for display
+      end: format(info.end, "HH:mm"),
       duration: getDurationString(info.start, info.end),
       startDate: info.start,
       endDate: info.end,
     });
-    // Unselect immediately to remove default highlight (we will render a draft event instead)
     info.view.calendar.unselect();
   };
 
@@ -354,22 +351,27 @@ export default function ItineraryCalendar({
         duration: calendarAddingTime.duration,
       });
       saveScrollPosition();
+
+      const dayIndex = itineraryDays.findIndex(
+        (d) => d.id === calendarAddingDayId,
+      );
+      const day = itineraryDays[dayIndex];
+      let itemIndex = 0;
+      if (day && day.itineraryItems) {
+        const tempItems = [...day.itineraryItems, response].sort((a, b) =>
+          (a.startTime ?? "").localeCompare(b.startTime ?? ""),
+        );
+        itemIndex = tempItems.findIndex((i) => i.id === response.id);
+      }
+
       onAddItem(response);
       setActiveItem(response.id);
-      // Scroll to the newly added event
-      setTimeout(() => {
-        const calendarApi = calendarRef.current?.getApi();
-        if (calendarApi && response.startTime) {
-          const dayDate = itineraryDays.find(
-            (d) => d.id === calendarAddingDayId,
-          );
-          if (dayDate && startTime) {
-            const eventDate = new Date(startTime);
-            eventDate.setDate(eventDate.getDate() + dayDate.order);
-            calendarApi.gotoDate(eventDate);
-          }
-        }
-      }, 100);
+      selectPlaceFromItinerary(
+        response,
+        dayIndex !== -1 ? dayIndex : 0,
+        itemIndex,
+        "list",
+      );
       toast.success("Added to itinerary");
     } catch (error) {
       console.error("Error creating itinerary item:", error);
@@ -381,7 +383,7 @@ export default function ItineraryCalendar({
     }
   };
 
-  // ── Edit-dialog helpers ────────────────────────────────────────────
+  // Edit-dialog helpers
   const handleSelectCalendarEditDayId = (itineraryDayId: string) => {
     if (!calendarEditingItem) return;
     setCalendarEditingItem({ ...calendarEditingItem, itineraryDayId });
@@ -447,7 +449,7 @@ export default function ItineraryCalendar({
     }
   };
 
-  // ── Computed ────────────────────────────────────────────────────────
+  // Computed
   const tripDayCount = itineraryDays.length || 1;
 
   // Calculate initial scroll time once per trip schedule mount (to first event - 1 hour)
@@ -529,7 +531,7 @@ export default function ItineraryCalendar({
         );
         const dayColor = getDayColor(dayIndex !== -1 ? dayIndex : 0);
 
-        // Ensure `draft-event` end date reflects cross-day correctly
+        // Ensure draft-event end date reflects cross-day correctly
         const draftStart = new Date(dayDate);
         const [sH, sM] = calendarAddingTime.start.split(":").map(Number);
         draftStart.setHours(sH, sM, 0, 0);
@@ -544,14 +546,14 @@ export default function ItineraryCalendar({
           start: draftStart,
           end: draftEnd,
           backgroundColor: dayColor,
-          borderColor: dayColor, // Or "black" if you want the border to match active state exactly
+          borderColor: dayColor,
           textColor: "#ffffff",
-          classNames: ["fc-event-active"], // Apply active styling (shadow, black border from CSS)
+          classNames: ["fc-event-active"],
           extendedProps: {
-            itineraryItem: {} as ItineraryItem, // Dummy to satisfy type
+            itineraryItem: {} as ItineraryItem,
             dayIndex,
             itemIndex: -1,
-            place: null as any, // Cast to any to bypass strict Place check for draft
+            place: null as any,
             isDraft: true,
           } as any,
         });
@@ -559,7 +561,6 @@ export default function ItineraryCalendar({
     }
 
     return allEvents;
-    // activeCalendarItemId in deps forces event re-render for active styling
   }, [
     itineraryDays,
     startTime,
@@ -568,13 +569,12 @@ export default function ItineraryCalendar({
     calendarAddingTime,
   ]);
 
-  // Extended valid range (trip ± 7 days) so out-of-range days are visible but dimmed
   const calendarValidRange = useMemo(() => {
     if (!startTime || !endTime) return undefined;
     const start = new Date(startTime);
     start.setDate(start.getDate() - 7);
     const end = new Date(endTime);
-    end.setDate(end.getDate() + 8); // +1 exclusive + 7 buffer
+    end.setDate(end.getDate() + 8);
     return { start, end };
   }, [startTime, endTime]);
 
@@ -680,7 +680,7 @@ export default function ItineraryCalendar({
     [],
   );
 
-  // ── Render ─────────────────────────────────────────────────────────
+  // Render
   return (
     <>
       {/* Dynamic styles for drag-selection highlight colors */}
@@ -743,7 +743,7 @@ export default function ItineraryCalendar({
           stickyHeaderDates={true}
         />
 
-        {/* Add Place Dialog (triggered by selecting a time range) */}
+        {/* Add Place Dialog */}
         {calendarAddingDayId && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
             <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md mx-4">

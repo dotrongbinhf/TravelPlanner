@@ -1,5 +1,14 @@
 import { ItineraryDay } from "@/types/itineraryDay";
-import { Check, Pencil, Plus, X, Clock, Trash } from "lucide-react";
+import {
+  Check,
+  Pencil,
+  Plus,
+  X,
+  Clock,
+  Trash,
+  Map,
+  Loader2,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -19,10 +28,13 @@ import { CustomDialog } from "@/components/custom-dialog";
 import ItineraryItemEditor from "./itinerary-item-editor";
 import ItineraryItemCard from "./itinerary-item-card";
 import ActionMenu from "@/components/action-menu";
+import Image from "next/image";
 import { useItineraryContext } from "../../../../../../contexts/ItineraryContext";
 import { getDayColor } from "../../../../../../constants/day-colors";
 import ItineraryItemCardSkeleton from "./itinerary-item-card-skeleton";
 import { buildDisplayItems } from "./cross-day-utils";
+import { getRoutesByDayId } from "@/api/itineraryItemsRoute/itineraryItemsRoute";
+import { generateGoogleMapsLink } from "@/utils/map";
 
 interface ItineraryDayCardProps {
   allItineraryDays: ItineraryDay[];
@@ -71,6 +83,7 @@ export default function ItineraryDayCard({
   const [editingItem, setEditingItem] = useState<ItineraryItem | null>(null);
   const [itemToDelete, setItemToDelete] = useState<ItineraryItem | null>(null);
   const [dayToDelete, setDayToDelete] = useState<string | null>(null);
+  const [isGeneratingLink, setIsGeneratingLink] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -227,9 +240,43 @@ export default function ItineraryDayCard({
     setDayToDelete(null);
   };
 
+  const handleOpenGoogleMaps = async () => {
+    // 1. To make sure overnight places from yesterday connect to this day's
+    // itinerary properly, we reconstruct a list with cross-day items correctly identified
+    const mapItems: (typeof displayItems)[0]["item"][] = [];
+
+    // Check displayItems representing ghost items (cross-day-end) OR cross-day starts
+    displayItems.forEach((di) => {
+      // Only include ghost items (yesterday's overnight) and today's normal/cross-day items.
+      // It's just the items array, which already contains the right sequence
+      mapItems.push(di.item);
+    });
+
+    if (!mapItems || mapItems.length < 2) return;
+
+    setIsGeneratingLink(true);
+    try {
+      // Get routes that might span these items
+      const routes = await getRoutesByDayId(itineraryDay.id);
+      const link = generateGoogleMapsLink(mapItems, routes, "driving");
+      if (link) {
+        window.open(link, "_blank", "noopener,noreferrer");
+      }
+    } catch (error) {
+      console.error("Failed to fetch routes for Google Maps link:", error);
+      // Fallback without custom routes
+      const link = generateGoogleMapsLink(mapItems, [], "driving");
+      if (link) {
+        window.open(link, "_blank", "noopener,noreferrer");
+      }
+    } finally {
+      setIsGeneratingLink(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between group">
+      <div className="flex items-center justify-between">
         {isEditing ? (
           <div
             ref={containerRef}
@@ -271,7 +318,7 @@ export default function ItineraryDayCard({
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-between gap-2 flex-1 group">
+          <div className="flex items-center justify-between gap-2 flex-1">
             <h3 className="flex items-center gap-1">
               <span className="text-blue-500 font-bold">
                 Day {itineraryDay.order + 1}
@@ -289,25 +336,47 @@ export default function ItineraryDayCard({
               </span>
             </h3>
 
-            <ActionMenu
-              options={[
-                {
-                  label: "Edit",
-                  icon: Pencil,
-                  onClick: handleEditItineraryDay,
-                  variant: "edit",
-                },
-                {
-                  label: "Delete",
-                  icon: Trash,
-                  onClick: () => setDayToDelete(itineraryDay.id),
-                  variant: "delete",
-                },
-              ]}
-              iconSize={16}
-              ellipsisSize={16}
-              triggerClassName="opacity-0 group-hover:opacity-100 transition-opacity [data-state=open]:opacity-100"
-            />
+            <div className="flex items-center gap-1">
+              {displayItems && displayItems.length >= 2 && (
+                <button
+                  onClick={handleOpenGoogleMaps}
+                  disabled={isGeneratingLink}
+                  className="cursor-pointer p-1.5 text-gray-500 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors flex items-center justify-center"
+                  title="Open in Google Maps"
+                >
+                  {isGeneratingLink ? (
+                    <Loader2 size={16} className="animate-spin text-blue-500" />
+                  ) : (
+                    <Image
+                      src="/images/plans/google-maps.png"
+                      alt="Google Maps"
+                      width={16}
+                      height={16}
+                      className="object-contain"
+                    />
+                  )}
+                </button>
+              )}
+              <ActionMenu
+                options={[
+                  {
+                    label: "Edit",
+                    icon: Pencil,
+                    onClick: handleEditItineraryDay,
+                    variant: "edit",
+                  },
+                  {
+                    label: "Delete",
+                    icon: Trash,
+                    onClick: () => setDayToDelete(itineraryDay.id),
+                    variant: "delete",
+                  },
+                ]}
+                iconSize={16}
+                ellipsisSize={16}
+                triggerClassName="[data-state=open]:opacity-100"
+              />
+            </div>
           </div>
         )}
       </div>

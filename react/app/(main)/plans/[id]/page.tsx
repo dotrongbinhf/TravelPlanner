@@ -18,7 +18,7 @@ export default function PlanIdPage() {
   const id = params.id as string;
 
   const [plan, setPlan] = useState<Plan | null>(null);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
 
   useEffect(() => {
     if (!id) return;
@@ -143,7 +143,7 @@ export default function PlanIdPage() {
             />
           </div>
 
-          <div className="flex-[5] h-full min-w-0">
+          <div className="flex-[4] h-full min-w-0">
             <GoogleMapIntegration
               plan={plan}
               onItineraryUpdate={handleItineraryItemUpdate}

@@ -287,6 +287,9 @@ export default function PlaceDetailDialog({
                   src={place.thumbnail}
                   alt={place.title}
                   className="w-full h-full object-cover"
+                  onError={(e) => {
+                    e.currentTarget.src = "/images/plans/alternative-place.jpg";
+                  }}
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
 

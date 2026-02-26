@@ -197,8 +197,9 @@ const Itinerary = forwardRef<HTMLDivElement, ItineraryProps>(function Itinerary(
           <Tabs
             value={viewMode}
             onValueChange={(v) => setViewMode(v as "list" | "calendar")}
+            className="h-[42px]"
           >
-            <TabsList>
+            <TabsList className="h-full">
               <TabsTrigger value="list" className="gap-1.5 px-3">
                 <List className="w-4 h-4" />
                 <span className="text-xs font-medium">List</span>

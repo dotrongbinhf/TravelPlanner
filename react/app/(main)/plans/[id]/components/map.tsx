@@ -18,6 +18,9 @@ import { Plan } from "@/types/plan";
 import { useItineraryContext } from "@/contexts/ItineraryContext";
 import { getDayColor } from "@/constants/day-colors";
 import { isCrossDayEvent } from "./sections/cross-day-utils";
+import { generateGoogleMapsLink } from "@/utils/map";
+import { Button } from "@/components/ui/button";
+import Image from "next/image";
 
 interface GoogleMapIntegrationProps {
   plan: Plan | null;
@@ -103,14 +106,14 @@ export default function GoogleMapIntegration({
     return markers;
   }, [itineraryDays]);
 
-  // Deduplicated markers for rendering (handles same-hotel overnight stays)
+  // Deduplicated markers for rendering
   const deduplicatedMarkers = useMemo(() => {
     // Track bed markers by placeId → keep earliest day's color
     const bedPlaceSeen: globalThis.Map<string, number> = new globalThis.Map(); // placeId → earliest dayIndex
     const result: typeof markersData = [];
     const skippedPlaceIds: globalThis.Set<string> = new globalThis.Set();
 
-    // First pass: find all bed markers and track earliest day per placeId
+    // find all bed markers and track earliest day per placeId
     for (const m of markersData) {
       if (m.isBed) {
         const pid = m.item.place.placeId;
@@ -120,9 +123,7 @@ export default function GoogleMapIntegration({
       }
     }
 
-    // Second pass: for non-bed markers that are the first item of a day,
-    // check if previous day's last item is at the same place (same hotel)
-    // → skip the duplicate first-item marker
+    // for non-bed markers that are the first item of a day,
     const sorted = [...itineraryDays].sort((a, b) => a.order - b.order);
     for (const m of markersData) {
       if (m.itemIndex === 0 && m.dayIndex > 0) {
@@ -210,10 +211,38 @@ export default function GoogleMapIntegration({
     if (filterMode === "all") {
       return markersData.map((m) => m.item);
     }
+
+    // In byDay mode, show this day's items PLUS cross-day items from previous day
+    const sorted = [...itineraryDays].sort((a, b) => a.order - b.order);
+    const prevDay = selectedDayIndex > 0 ? sorted[selectedDayIndex - 1] : null;
+
+    let crossDayFromPrev: globalThis.Set<string> | null = null;
+    if (prevDay) {
+      const prevItems = [...(prevDay.itineraryItems || [])].sort((a, b) =>
+        (a.startTime ?? "").localeCompare(b.startTime ?? ""),
+      );
+      crossDayFromPrev = new globalThis.Set<string>();
+      prevItems.forEach((item) => {
+        if (isCrossDayEvent(item.startTime, item.duration)) {
+          crossDayFromPrev!.add(item.id);
+        }
+      });
+    }
+
     return markersData
-      .filter((m) => m.dayIndex === selectedDayIndex)
+      .filter((m) => {
+        if (m.dayIndex === selectedDayIndex) return true;
+        if (
+          crossDayFromPrev &&
+          m.dayIndex === selectedDayIndex - 1 &&
+          crossDayFromPrev.has(m.item.id)
+        ) {
+          return true;
+        }
+        return false;
+      })
       .map((m) => m.item);
-  }, [markersData, filterMode, selectedDayIndex]);
+  }, [markersData, filterMode, selectedDayIndex, itineraryDays]);
 
   // Fetch routes based on filterMode
   const fetchRoutes = useCallback(async () => {
@@ -546,7 +575,7 @@ export default function GoogleMapIntegration({
 
         {/* Day Navigator (visible below menu when byDay mode is active) */}
         {filterMode === "byDay" && totalDays > 0 && (
-          <div className="pointer-events-auto">
+          <div className="pointer-events-auto relative flex items-center justify-center">
             <ItineraryDayNavigator
               currentDay={selectedDayIndex}
               totalDays={totalDays}
@@ -590,6 +619,35 @@ export default function GoogleMapIntegration({
                 }
               }}
             />
+
+            {visibleItems.length >= 2 && (
+              <div className="absolute left-[calc(100%+8px)] top-0 h-full flex items-center">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  title="Open in Google Maps"
+                  className="h-9 px-0 w-9 bg-white/95 backdrop-blur-sm rounded-full shadow-lg border border-gray-200 hover:bg-gray-100 flex items-center gap-1 text-sm font-semibold text-gray-700"
+                  onClick={() => {
+                    const link = generateGoogleMapsLink(
+                      visibleItems,
+                      routes,
+                      "driving",
+                    );
+                    if (link) {
+                      window.open(link, "_blank");
+                    }
+                  }}
+                >
+                  <Image
+                    src="/images/plans/google-maps.png"
+                    alt="Google Maps"
+                    width={16}
+                    height={16}
+                    className="object-contain"
+                  />
+                </Button>
+              </div>
+            )}
           </div>
         )}
 

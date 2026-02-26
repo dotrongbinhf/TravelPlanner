@@ -206,6 +206,9 @@ export default function ItineraryItemCard({
               src={place.thumbnail}
               alt={place.title}
               className="w-full h-full object-cover"
+              onError={(e) => {
+                e.currentTarget.src = "/images/plans/alternative-place.jpg";
+              }}
             />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center text-gray-400">
