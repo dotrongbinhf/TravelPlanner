@@ -27,5 +27,6 @@ namespace dotnet.Dtos.Plan
         public ICollection<ExpenseItemDto>? ExpenseItems { get; set; }
         public ICollection<ParticipantDto>? Participants { get; set; }
         public ICollection<ItineraryDayDto>? ItineraryDays { get; set; }
+        public DateTimeOffset? LastSyncGoogleCalendarAt { get; set; }
     }
 }

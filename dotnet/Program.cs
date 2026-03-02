@@ -19,6 +19,8 @@ builder.Services.AddScoped<ICurrentUser, CurrentUser>();
 builder.Services.AddScoped<ICookieService, CookieService>();
 builder.Services.AddSingleton<MongoDbService>();
 builder.Services.AddScoped<ICloudinaryService, CloudinaryService>();
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<IGoogleCalendarService, GoogleCalendarService>();
 
 builder.Services.AddControllers()
     .AddJsonOptions(options =>

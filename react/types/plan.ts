@@ -20,4 +20,5 @@ export type Plan = {
   itineraryDays?: ItineraryDay[];
   expenseItems?: ExpenseItem[];
   participants?: Participant[];
+  lastSyncGoogleCalendarAt?: string;
 };

@@ -21,6 +21,12 @@ import { isCrossDayEvent } from "./sections/cross-day-utils";
 import { generateGoogleMapsLink } from "@/utils/map";
 import { Button } from "@/components/ui/button";
 import Image from "next/image";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface GoogleMapIntegrationProps {
   plan: Plan | null;
@@ -622,30 +628,38 @@ export default function GoogleMapIntegration({
 
             {visibleItems.length >= 2 && (
               <div className="absolute left-[calc(100%+8px)] top-0 h-full flex items-center">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  title="Open in Google Maps"
-                  className="h-9 px-0 w-9 bg-white/95 backdrop-blur-sm rounded-full shadow-lg border border-gray-200 hover:bg-gray-100 flex items-center gap-1 text-sm font-semibold text-gray-700"
-                  onClick={() => {
-                    const link = generateGoogleMapsLink(
-                      visibleItems,
-                      routes,
-                      "driving",
-                    );
-                    if (link) {
-                      window.open(link, "_blank");
-                    }
-                  }}
-                >
-                  <Image
-                    src="/images/plans/google-maps.png"
-                    alt="Google Maps"
-                    width={16}
-                    height={16}
-                    className="object-contain"
-                  />
-                </Button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-9 px-0 w-9 bg-white/95 backdrop-blur-sm rounded-full shadow-lg border border-gray-200 hover:bg-gray-100 flex items-center gap-1 text-sm font-semibold text-gray-700"
+                        onClick={() => {
+                          const link = generateGoogleMapsLink(
+                            visibleItems,
+                            routes,
+                            "driving",
+                          );
+                          if (link) {
+                            window.open(link, "_blank");
+                          }
+                        }}
+                      >
+                        <Image
+                          src="/images/plans/google-maps.png"
+                          alt="Google Maps"
+                          width={16}
+                          height={16}
+                          className="object-contain"
+                        />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Open in Google Maps</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </div>
             )}
           </div>

@@ -35,6 +35,12 @@ import ItineraryItemCardSkeleton from "./itinerary-item-card-skeleton";
 import { buildDisplayItems } from "./cross-day-utils";
 import { getRoutesByDayId } from "@/api/itineraryItemsRoute/itineraryItemsRoute";
 import { generateGoogleMapsLink } from "@/utils/map";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface ItineraryDayCardProps {
   allItineraryDays: ItineraryDay[];
@@ -338,24 +344,35 @@ export default function ItineraryDayCard({
 
             <div className="flex items-center gap-1">
               {displayItems && displayItems.length >= 2 && (
-                <button
-                  onClick={handleOpenGoogleMaps}
-                  disabled={isGeneratingLink}
-                  className="cursor-pointer p-1.5 text-gray-500 hover:text-blue-500 hover:bg-blue-50 rounded-md transition-colors flex items-center justify-center"
-                  title="Open in Google Maps"
-                >
-                  {isGeneratingLink ? (
-                    <Loader2 size={16} className="animate-spin text-blue-500" />
-                  ) : (
-                    <Image
-                      src="/images/plans/google-maps.png"
-                      alt="Google Maps"
-                      width={16}
-                      height={16}
-                      className="object-contain"
-                    />
-                  )}
-                </button>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={handleOpenGoogleMaps}
+                        disabled={isGeneratingLink}
+                        className="cursor-pointer py-1.5 px-2 text-gray-500 hover:bg-gray-200 rounded-md transition-colors flex items-center justify-center"
+                      >
+                        {isGeneratingLink ? (
+                          <Loader2
+                            size={14}
+                            className="animate-spin text-blue-500"
+                          />
+                        ) : (
+                          <Image
+                            src="/images/plans/google-maps.png"
+                            alt="Google Maps"
+                            width={14}
+                            height={14}
+                            className="object-contain"
+                          />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Open in Google Maps</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               )}
               <ActionMenu
                 options={[

@@ -1,8 +1,8 @@
 "use client";
 
 import { DateRangePicker } from "@/components/date-range-picker";
-import { forwardRef, useEffect, useState } from "react";
-import { List, LayoutGrid } from "lucide-react";
+import { forwardRef, useEffect, useState, useCallback } from "react";
+import { List, LayoutGrid, Loader2, CalendarRange } from "lucide-react";
 import { updatePlanBasicInfo } from "@/api/plan/plan";
 import toast from "react-hot-toast";
 import { ItineraryDay } from "@/types/itineraryDay";
@@ -15,6 +15,21 @@ import { ItineraryItem } from "@/types/itineraryItem";
 import { useItineraryContext } from "../../../../../../contexts/ItineraryContext";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ItineraryCalendar from "./itinerary-calendar";
+import { useGoogleCalendar } from "@/hooks/use-google-calendar";
+import Image from "next/image";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { LogOut } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface ItineraryProps {
   className?: string;
@@ -22,8 +37,10 @@ interface ItineraryProps {
   startTime: Date | null;
   endTime: Date | null;
   itineraryDays: ItineraryDay[];
+  lastSyncGoogleCalendarAt?: string;
   onChange: (startTime: Date | null, endTime: Date | null) => void;
   onItineraryDaysUpdate: (days: ItineraryDay[]) => void;
+  onSyncComplete: (syncedAt: string) => void;
 }
 
 const Itinerary = forwardRef<HTMLDivElement, ItineraryProps>(function Itinerary(
@@ -33,12 +50,86 @@ const Itinerary = forwardRef<HTMLDivElement, ItineraryProps>(function Itinerary(
     startTime,
     endTime,
     itineraryDays,
+    lastSyncGoogleCalendarAt,
     onChange,
     onItineraryDaysUpdate,
+    onSyncComplete,
   },
   ref,
 ) {
   const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
+  const {
+    isConnected,
+    isSyncing,
+    googleEmail,
+    googleAvatarUrl,
+    connectGoogle,
+    syncCalendar,
+    disconnectAccount,
+  } = useGoogleCalendar();
+
+  const getLastSyncText = useCallback(() => {
+    if (!lastSyncGoogleCalendarAt) return null;
+    const syncDate = new Date(lastSyncGoogleCalendarAt);
+    const now = new Date();
+    const diffMs = now.getTime() - syncDate.getTime();
+    const diffMinutes = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMinutes / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffMinutes < 1) return "just now";
+    if (diffMinutes < 60) return `${diffMinutes}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    return `${diffDays}d ago`;
+  }, [lastSyncGoogleCalendarAt]);
+
+  const [tooltipText, setTooltipText] = useState<string | null>(null);
+  const handleTooltipOpen = () => {
+    const syncText = getLastSyncText();
+    if (isConnected) {
+      setTooltipText(
+        `Sync itinerary to Google Calendar${syncText ? ` (last: ${syncText})` : ""}`,
+      );
+    } else {
+      setTooltipText("Connect & sync to Google Calendar");
+    }
+  };
+
+  const handleSyncGoogleCalendar = async () => {
+    try {
+      if (!isConnected) {
+        await connectGoogle();
+      }
+      const result = await syncCalendar(planId);
+      if (result) {
+        onSyncComplete(result.syncedAt);
+        // Update google calendar event IDs in local state
+        if (result.eventMappings.length > 0) {
+          const mappingsMap = Object.fromEntries(
+            result.eventMappings.map((m) => [
+              m.itineraryItemId,
+              m.googleCalendarEventId,
+            ]),
+          );
+          onItineraryDaysUpdate(
+            itineraryDays.map((day) => ({
+              ...day,
+              itineraryItems: day.itineraryItems?.map((item) =>
+                mappingsMap[item.id]
+                  ? {
+                      ...item,
+                      googleCalendarEventId: mappingsMap[item.id],
+                    }
+                  : item,
+              ),
+            })),
+          );
+        }
+      }
+    } catch {
+      // Errors are handled in the hook
+    }
+  };
 
   const handleDateUpdate = async (start: Date | null, end: Date | null) => {
     if (!start || !end) return;
@@ -194,22 +285,122 @@ const Itinerary = forwardRef<HTMLDivElement, ItineraryProps>(function Itinerary(
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-gray-800">Itinerary</h2>
         <div className="flex items-center gap-3">
-          <Tabs
-            value={viewMode}
-            onValueChange={(v) => setViewMode(v as "list" | "calendar")}
-            className="h-[42px]"
-          >
-            <TabsList className="h-full">
-              <TabsTrigger value="list" className="gap-1.5 px-3">
-                <List className="w-4 h-4" />
-                <span className="text-xs font-medium">List</span>
-              </TabsTrigger>
-              <TabsTrigger value="calendar" className="gap-1.5 px-3">
-                <LayoutGrid className="w-4 h-4" />
-                <span className="text-xs font-medium">Calendar</span>
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <TooltipProvider>
+            <Tabs
+              value={viewMode}
+              onValueChange={(v) => setViewMode(v as "list" | "calendar")}
+              className="h-[42px]"
+            >
+              <TabsList className="h-full bg-gray-100 gap-1 p-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span>
+                      <TabsTrigger
+                        value="list"
+                        className="p-1.5 cursor-pointer transition-all data-[state=active]:bg-white data-[state=active]:text-black data-[state=active]:shadow-sm"
+                      >
+                        <List className="w-4 h-4" />
+                      </TabsTrigger>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>List View</p>
+                  </TooltipContent>
+                </Tooltip>
+
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span>
+                      <TabsTrigger
+                        value="calendar"
+                        className="p-1.5 cursor-pointer transition-all data-[state=active]:bg-white data-[state=active]:text-black data-[state=active]:shadow-sm"
+                      >
+                        <CalendarRange className="w-4 h-4" />
+                      </TabsTrigger>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Calendar View</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TabsList>
+            </Tabs>
+          </TooltipProvider>
+
+          {/* Google Calendar Sync Button */}
+          <TooltipProvider>
+            <Tooltip onOpenChange={(open) => open && handleTooltipOpen()}>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={handleSyncGoogleCalendar}
+                  disabled={isSyncing}
+                  className="cursor-pointer flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed h-[42px]"
+                >
+                  {isSyncing ? (
+                    <Loader2 className="w-5 h-5 animate-spin text-gray-500" />
+                  ) : (
+                    <Image
+                      src="/images/plans/google-calendar.png"
+                      alt="Google Calendar"
+                      width={20}
+                      height={20}
+                    />
+                  )}
+                  <span className="text-xs font-medium text-gray-700">
+                    {isSyncing
+                      ? "Syncing..."
+                      : isConnected
+                        ? "Sync"
+                        : "Connect"}
+                  </span>
+                  {googleAvatarUrl && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <div
+                          className="relative cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                          }}
+                        >
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <img
+                                  src={googleAvatarUrl}
+                                  alt={googleEmail ?? "Google"}
+                                  className="w-6 h-6 rounded-full ring-1 ring-gray-200"
+                                  referrerPolicy="no-referrer"
+                                />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{googleEmail}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </div>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          className="text-red-600 focus:bg-red-50 focus:text-red-700 cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            disconnectAccount();
+                          }}
+                        >
+                          <LogOut className="w-4 h-4 mr-2" />
+                          Disconnect Account
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{tooltipText ?? "Google Calendar"}</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+
           <DateRangePicker
             startDate={startTime}
             endDate={endTime}

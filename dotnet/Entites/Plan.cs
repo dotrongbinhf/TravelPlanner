@@ -11,6 +11,9 @@
         public double Budget { get; set; }
         public string CurrencyCode { get; set; } = "USD";
 
+        // Google Calendar sync
+        public DateTimeOffset? LastSyncGoogleCalendarAt { get; set; }
+
         public User Owner { get; set; }
         public ICollection<ItineraryDay> ItineraryDays { get; set; } = new List<ItineraryDay>();
         public ICollection<ExpenseItem> ExpenseItems { get; set; } = new List<ExpenseItem>();

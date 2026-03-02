@@ -24,16 +24,18 @@ namespace dotnet.Controllers
         private readonly ICurrentUser _currentUser;
         private readonly ICookieService _cookieService;
         private readonly IConfiguration _configuration;
+        private readonly IGoogleCalendarService _googleCalendarService;
 
         public AuthController(MySQLDbContext mySQLDbContext, MongoDbService mongoDbService,
             ICurrentUser currentUser, ICookieService cookieService,
-            IConfiguration configuration)
+            IConfiguration configuration, IGoogleCalendarService googleCalendarService)
         {
             dbContext = mySQLDbContext;
             _placesCollection = mongoDbService.Database.GetCollection<Place>("Place");
             _currentUser = currentUser;
             _cookieService = cookieService;
             _configuration = configuration;
+            _googleCalendarService = googleCalendarService;
         }
 
         [HttpGet]
@@ -234,6 +236,20 @@ namespace dotnet.Controllers
             var user = await dbContext.Users.FirstOrDefaultAsync(u => u.Id.ToString() == claimUserId);
             if (user != null)
             {
+                // Revoke Google token and clear Google profile info
+                if (!string.IsNullOrEmpty(user.GoogleRefreshToken))
+                {
+                    try 
+                    {
+                        await _googleCalendarService.RevokeTokenAsync(user.GoogleRefreshToken);
+                    }
+                    catch { /* Ignore error if token already revoked or invalid */ }
+                    
+                    user.GoogleRefreshToken = null;
+                }
+                user.GoogleEmail = null;
+                user.GoogleAvatarUrl = null;
+
                 user.RefreshToken = "";
                 await dbContext.SaveChangesAsync();
             }

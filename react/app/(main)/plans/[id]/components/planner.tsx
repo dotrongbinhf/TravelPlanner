@@ -180,6 +180,16 @@ export default function Planner({
     });
   };
 
+  const updateLastSyncGoogleCalendarAt = (syncedAt: string) => {
+    setPlan((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        lastSyncGoogleCalendarAt: syncedAt,
+      };
+    });
+  };
+
   return (
     <div
       ref={scrollContainerRef}
@@ -220,8 +230,10 @@ export default function Planner({
             startTime={planStartTime}
             endTime={planEndTime}
             itineraryDays={plan.itineraryDays ?? []}
+            lastSyncGoogleCalendarAt={plan.lastSyncGoogleCalendarAt}
             onChange={updatePlanDuration}
             onItineraryDaysUpdate={updateItineraryDays}
+            onSyncComplete={updateLastSyncGoogleCalendarAt}
           />
         </div>
 

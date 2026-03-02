@@ -117,7 +117,6 @@ export default function ItineraryCalendar({
     setActiveCalendarItemId(id);
   }, []);
 
-  // Sync active state with context: if context selection is cleared, clear active item
   useEffect(() => {
     if (!selectedPlace.placeId) {
       setActiveItem(null);

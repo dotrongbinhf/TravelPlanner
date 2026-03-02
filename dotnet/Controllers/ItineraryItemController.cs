@@ -3,6 +3,7 @@ using dotnet.Dtos.ItineraryItem;
 using dotnet.Entites;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using MongoDB.Driver;
 
 namespace dotnet.Controllers
@@ -109,12 +110,26 @@ namespace dotnet.Controllers
         [HttpDelete("{id:Guid}")]
         public async Task<IActionResult> DeleteItineraryItem(Guid id)
         {
-            var itineraryItem = await dbContext.ItineraryItems.FindAsync(id);
+            var itineraryItem = await dbContext.ItineraryItems
+                .Include(i => i.ItineraryDay)
+                    .ThenInclude(d => d.Plan)
+                .FirstOrDefaultAsync(i => i.Id == id);
             if (itineraryItem == null)
             {
                 return NotFound();
             }
-            dbContext.ItineraryItems.Remove(itineraryItem);
+
+            // Soft delete if plan has been synced to Google Calendar and item has a Google event
+            if (itineraryItem.ItineraryDay?.Plan?.LastSyncGoogleCalendarAt != null &&
+                !string.IsNullOrEmpty(itineraryItem.GoogleCalendarEventId))
+            {
+                itineraryItem.IsDeleted = true;
+            }
+            else
+            {
+                dbContext.ItineraryItems.Remove(itineraryItem);
+            }
+
             await dbContext.SaveChangesAsync();
             return NoContent();
         }

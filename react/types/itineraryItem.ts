@@ -6,4 +6,5 @@ export type ItineraryItem = {
   place: Place;
   startTime?: string; // TimeOnly HH:mm (optional)
   duration?: string; // TimeOnly HH:mm (optional)
+  googleCalendarEventId?: string;
 };

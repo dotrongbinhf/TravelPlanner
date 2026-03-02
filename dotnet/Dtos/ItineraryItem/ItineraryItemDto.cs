@@ -9,5 +9,6 @@ namespace dotnet.Dtos.ItineraryItem
         public Place Place { get; set; }
         public TimeOnly StartTime { get; set; }
         public TimeSpan Duration { get; set; }
+        public string? GoogleCalendarEventId { get; set; }
     }
 }

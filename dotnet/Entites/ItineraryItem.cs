@@ -9,6 +9,10 @@
         // Duration to handle cross days activity
         public TimeSpan Duration { get; set; }
 
+        // Google Calendar sync
+        public string? GoogleCalendarEventId { get; set; }
+        public bool IsDeleted { get; set; } = false;
+
         // public string? Note { get; set; }
 
         public ItineraryDay ItineraryDay { get; set; }

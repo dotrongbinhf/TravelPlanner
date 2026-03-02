@@ -89,6 +89,7 @@ namespace dotnet.Controllers
                 EndTime = result.EndTime,
                 Budget = result.Budget,
                 CurrencyCode = result.CurrencyCode,
+                LastSyncGoogleCalendarAt = result.LastSyncGoogleCalendarAt,
                 Notes = result.Notes
                     .OrderBy(note => note.CreatedAt)
                     .Select(note => new Dtos.Note.NoteDto
@@ -145,14 +146,16 @@ namespace dotnet.Controllers
                         Order = iday.Order,
                         Title = iday.Title,
                         ItineraryItems = iday.ItineraryItems
+                            .Where(ii => !ii.IsDeleted)
                             .OrderBy(ii => ii.StartTime)
                             .Select(ii => new Dtos.ItineraryItem.ItineraryItemDto
                             {
                                 Id = ii.Id,
                                 ItineraryDayId = ii.ItineraryDayId,
-                                Place = placesDict.GetValueOrDefault(ii.PlaceId), // Not Null
+                                Place = placesDict.GetValueOrDefault(ii.PlaceId),
                                 StartTime = ii.StartTime,
-                                Duration = ii.Duration
+                                Duration = ii.Duration,
+                                GoogleCalendarEventId = ii.GoogleCalendarEventId
                             }).ToList()
                     }).ToList()
             });
@@ -315,19 +318,23 @@ namespace dotnet.Controllers
                 EndTime = plan.EndTime,
                 Budget = plan.Budget,
                 CurrencyCode = plan.CurrencyCode,
+                LastSyncGoogleCalendarAt = plan.LastSyncGoogleCalendarAt,
                 ItineraryDays = newItineraryDays.Select(iday => new Dtos.ItineraryDay.ItineraryDayDto
                 {
                     Id = iday.Id,
                     PlanId = iday.PlanId,
                     Order = iday.Order,
                     Title = iday.Title,
-                    ItineraryItems = iday.ItineraryItems.Select(ii => new Dtos.ItineraryItem.ItineraryItemDto
+                    ItineraryItems = iday.ItineraryItems
+                        .Where(ii => !ii.IsDeleted)
+                        .Select(ii => new Dtos.ItineraryItem.ItineraryItemDto
                     {
                         Id = ii.Id,
                         ItineraryDayId = ii.ItineraryDayId,
                         Place = placesDict.GetValueOrDefault(ii.PlaceId),
                         StartTime = ii.StartTime,
-                        Duration = ii.Duration
+                        Duration = ii.Duration,
+                        GoogleCalendarEventId = ii.GoogleCalendarEventId
                     }).ToList()
                 }).ToList()
             });
