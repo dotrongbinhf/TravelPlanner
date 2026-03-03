@@ -37,6 +37,7 @@ import {
 import { useItineraryContext } from "@/contexts/ItineraryContext";
 import ItineraryItemEditor from "./itinerary-item-editor";
 import PlaceAutocomplete from "./place-autocomplete";
+import { useEnsurePlace } from "@/hooks/use-ensure-place";
 import "./fullcalendar-custom.css";
 
 interface ItineraryCalendarProps {
@@ -60,6 +61,7 @@ export default function ItineraryCalendar({
   const savedScrollTopRef = useRef<number | null>(null);
   const { selectPlaceFromItinerary, clearPlaceSelection, selectedPlace } =
     useItineraryContext();
+  const { ensurePlaceExists } = useEnsurePlace();
 
   // Save/restore scroll position to prevent jumping on event updates
   const saveScrollPosition = useCallback(() => {
@@ -344,6 +346,8 @@ export default function ItineraryCalendar({
       return;
 
     try {
+      await ensurePlaceExists(prediction.place_id);
+
       const response = await createItineraryItem(calendarAddingDayId, {
         placeId: prediction.place_id,
         startTime: calendarAddingTime.start,

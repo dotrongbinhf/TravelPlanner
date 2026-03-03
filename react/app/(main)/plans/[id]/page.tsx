@@ -12,7 +12,12 @@ import toast from "react-hot-toast";
 import { APIProvider } from "@vis.gl/react-google-maps";
 import { ItineraryItem } from "@/types/itineraryItem";
 import { ItineraryProvider } from "../../../../contexts/ItineraryContext";
-import { MessageCircle, Map as MapIcon, ClipboardList } from "lucide-react";
+import {
+  MessageCircle,
+  Map as MapIcon,
+  ClipboardList,
+  BotMessageSquare,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -123,7 +128,10 @@ export default function PlanIdPage() {
   if (!plan) return null;
   return (
     <div className="w-full h-full flex p-4 gap-4">
-      <APIProvider apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? ""}>
+      <APIProvider
+        apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? ""}
+        language="en"
+      >
         <ItineraryProvider totalDays={plan.itineraryDays?.length ?? 0}>
           <div className="flex-shrink-0 h-full">
             <Sidebar
@@ -215,13 +223,21 @@ export default function PlanIdPage() {
       </APIProvider>
       {/* Floating AI Chat Button */}
       {!isAIChatActive && (
-        <button
-          onClick={handleOpenAIChat}
-          className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 flex items-center justify-center z-50"
-          title="Chat với AI"
-        >
-          <MessageCircle className="w-6 h-6" />
-        </button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={handleOpenAIChat}
+                className="fixed bottom-6 right-6 w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 flex items-center justify-center z-50"
+              >
+                <BotMessageSquare className="w-6 h-6" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="left" className="text-xs">
+              Plan with AI
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
     </div>
   );

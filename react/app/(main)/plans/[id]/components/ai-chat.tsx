@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { X, Send, Bot, Mic } from "lucide-react";
+import { X, Send, Bot, Mic, BotMessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface AIChatProps {
@@ -63,10 +63,10 @@ export default function AIChat({ planName, onClose }: AIChatProps) {
   return (
     <div className="w-full h-full flex flex-col rounded-lg border-2 border-gray-200 bg-white overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50 flex-shrink-0">
+      <div className="flex items-center justify-between px-4 py-3 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0">
-            <Bot className="w-4 h-4 text-white" />
+            <BotMessageSquare className="w-4 h-4 text-white" />
           </div>
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-gray-800 truncate">
@@ -79,7 +79,7 @@ export default function AIChat({ planName, onClose }: AIChatProps) {
           variant="ghost"
           size="icon"
           onClick={onClose}
-          className="h-8 w-8 rounded-full hover:bg-red-50 hover:text-red-500 flex-shrink-0"
+          className="h-8 w-8 rounded-lg hover:bg-gray-100 hover:text-gray-500 flex-shrink-0"
         >
           <X className="w-4 h-4" />
         </Button>
@@ -119,9 +119,8 @@ export default function AIChat({ planName, onClose }: AIChatProps) {
           />
           <div className="flex justify-end items-center gap-1 px-2 pb-2 bg-white">
             <Button
-              variant="ghost"
               size="icon"
-              className="h-8 w-8 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+              className="h-8 w-8 rounded-full text-gray-500 hover:text-gray-600 hover:bg-gray-200 bg-gray-100"
               title="Nhập bằng giọng nói"
             >
               <Mic className="w-4 h-4" />

@@ -34,6 +34,7 @@ import { getDayColor } from "../../../../../../constants/day-colors";
 import ItineraryItemCardSkeleton from "./itinerary-item-card-skeleton";
 import { buildDisplayItems } from "./cross-day-utils";
 import { getRoutesByDayId } from "@/api/itineraryItemsRoute/itineraryItemsRoute";
+import { useEnsurePlace } from "@/hooks/use-ensure-place";
 import { generateGoogleMapsLink } from "@/utils/map";
 import {
   Tooltip,
@@ -41,6 +42,29 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+
+function computeAutoStartTime(items: ItineraryItem[]): string {
+  const timedItems = items.filter((i) => i.startTime);
+  if (timedItems.length === 0) return "08:00";
+
+  let maxEndMinutes = 0;
+
+  for (const item of timedItems) {
+    const [sH, sM] = item.startTime!.split(":").map(Number);
+    let endMinutes = sH * 60 + sM;
+    if (item.duration) {
+      const [dH, dM] = item.duration.split(":").map(Number);
+      endMinutes += dH * 60 + dM;
+    }
+    if (endMinutes > maxEndMinutes) maxEndMinutes = endMinutes;
+  }
+
+  // Add 1-hour buffer after the latest end time
+  const nextMinutes = (maxEndMinutes + 60) % (24 * 60);
+  const h = Math.floor(nextMinutes / 60);
+  const m = nextMinutes % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
 
 interface ItineraryDayCardProps {
   allItineraryDays: ItineraryDay[];
@@ -69,6 +93,7 @@ export default function ItineraryDayCard({
 }: ItineraryDayCardProps) {
   const { selectedPlace, selectPlaceFromItinerary, clearPlaceSelection } =
     useItineraryContext();
+  const { ensurePlaceExists } = useEnsurePlace();
   const dayColor = getDayColor(dayIndex);
 
   // Build display items (includes cross-day splits)
@@ -151,8 +176,15 @@ export default function ItineraryDayCard({
     setIsAddingItem(true);
 
     try {
+      await ensurePlaceExists(prediction.place_id);
+
+      const existingItems = itineraryDay.itineraryItems ?? [];
+      const autoStartTime = computeAutoStartTime(existingItems);
+
       const response = await createItineraryItem(itineraryDay.id, {
         placeId: prediction.place_id,
+        startTime: autoStartTime,
+        duration: "02:00",
       });
 
       onAddItem(response);

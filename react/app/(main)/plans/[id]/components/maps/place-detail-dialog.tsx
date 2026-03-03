@@ -148,7 +148,7 @@ export default function PlaceDetailDialog({
         // Fallback Google
         const googlePlace = new placesLib.Place({ id: placeId });
 
-        console.log("Calling Place API");
+        toast.success("Fetching place details...");
         await googlePlace.fetchFields({
           fields: [
             "displayName",
@@ -159,6 +159,7 @@ export default function PlaceDetailDialog({
             "regularOpeningHours",
             "location",
             "websiteURI",
+            "postalAddress",
           ],
         });
 
@@ -260,7 +261,7 @@ export default function PlaceDetailDialog({
   ];
 
   return (
-    <div className="absolute bottom-2 left-2 right-2 z-10 flex flex-col items-center pointer-events-none">
+    <div className="absolute bottom-2 left-2 right-2 z-100 flex flex-col items-center pointer-events-none">
       <Card className="p-0 w-full h-[45vh] md:h-[40vh] bg-white pointer-events-auto shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300 border-0 ring-1 ring-gray-200">
         <div className="h-full flex flex-col md:flex-row relative">
           {/* <Button
