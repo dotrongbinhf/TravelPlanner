@@ -1,9 +1,9 @@
 "use client";
-
 import { useEffect, useRef, useState, useCallback } from "react";
 import GoogleMapIntegration from "./components/map";
 import Planner from "./components/planner";
 import Sidebar from "./components/sidebar";
+import AIChat from "./components/ai-chat";
 import { useParams } from "next/navigation";
 import { Plan } from "@/types/plan";
 import { getPlanById } from "@/api/plan/plan";
@@ -12,19 +12,28 @@ import toast from "react-hot-toast";
 import { APIProvider } from "@vis.gl/react-google-maps";
 import { ItineraryItem } from "@/types/itineraryItem";
 import { ItineraryProvider } from "../../../../contexts/ItineraryContext";
-
+import { MessageCircle, Map as MapIcon, ClipboardList } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 export default function PlanIdPage() {
   const params = useParams();
   const id = params.id as string;
-
   const [plan, setPlan] = useState<Plan | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
-
+  // AI Chat & right panel toggle
+  const [isAIChatActive, setIsAIChatActive] = useState(false);
+  const [rightPanelView, setRightPanelView] = useState<"map" | "planner">(
+    "map",
+  );
   useEffect(() => {
     if (!id) return;
     fetchPlan();
   }, [id]);
-
   const fetchPlan = async () => {
     try {
       const response = await getPlanById(id);
@@ -37,42 +46,33 @@ export default function PlanIdPage() {
       }
     }
   };
-
   const [activeSection, setActiveSection] = useState("itinerary");
   const sectionRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isScrollingProgrammatically = useRef(false);
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
   const handleSectionClick = useCallback((sectionId: string) => {
     setActiveSection(sectionId);
-
     // Disable scroll-based updates temporarily
     isScrollingProgrammatically.current = true;
-
     // Clear any existing timeout
     if (scrollTimeoutRef.current) {
       clearTimeout(scrollTimeoutRef.current);
     }
-
     const element = sectionRefs.current[sectionId];
     const container = scrollContainerRef.current;
-
     if (element && container) {
       const scrollPosition = element.offsetTop - 64 - 24 - 2 * 24; // HEADER_HEIGHT + SECTION_GAP + 2 * CONTAINER_PADDING
-
       // Listen for scrollend event to re-enable scroll tracking
       const handleScrollEnd = () => {
         isScrollingProgrammatically.current = false;
         container.removeEventListener("scrollend", handleScrollEnd);
       };
       container.addEventListener("scrollend", handleScrollEnd, { once: true });
-
       container.scrollTo({
         top: Math.max(0, scrollPosition),
         behavior: "smooth",
       });
-
       // Fallback timeout in case scrollend doesn't fire
       scrollTimeoutRef.current = setTimeout(() => {
         isScrollingProgrammatically.current = false;
@@ -80,14 +80,12 @@ export default function PlanIdPage() {
       }, 2000);
     }
   }, []);
-
   const handleSectionInView = useCallback((sectionId: string) => {
     // Only update if not currently scrolling programmatically
     if (!isScrollingProgrammatically.current) {
       setActiveSection(sectionId);
     }
   }, []);
-
   const handleItineraryItemUpdate = (newItem: ItineraryItem) => {
     setPlan((prev) => {
       if (!prev) return null;
@@ -104,11 +102,16 @@ export default function PlanIdPage() {
       };
     });
   };
-
   const handleToggleSidebarCollapse = useCallback(() => {
     setIsSidebarCollapsed((prev) => !prev);
   }, []);
-
+  const handleOpenAIChat = useCallback(() => {
+    setIsAIChatActive(true);
+    setRightPanelView("map");
+  }, []);
+  const handleCloseAIChat = useCallback(() => {
+    setIsAIChatActive(false);
+  }, []);
   // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
@@ -117,9 +120,7 @@ export default function PlanIdPage() {
       }
     };
   }, []);
-
   if (!plan) return null;
-
   return (
     <div className="w-full h-full flex p-4 gap-4">
       <APIProvider apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? ""}>
@@ -132,25 +133,96 @@ export default function PlanIdPage() {
               onToggleCollapse={handleToggleSidebarCollapse}
             />
           </div>
-
-          <div className="flex-[5] h-full min-w-0">
-            <Planner
-              sectionRefs={sectionRefs}
-              scrollContainerRef={scrollContainerRef}
-              onSectionInView={handleSectionInView}
-              plan={plan}
-              setPlan={setPlan}
-            />
-          </div>
-
+          {/* Center Panel */}
           <div className="flex-[4] h-full min-w-0">
-            <GoogleMapIntegration
-              plan={plan}
-              onItineraryUpdate={handleItineraryItemUpdate}
-            />
+            {isAIChatActive ? (
+              <AIChat planName={plan.name} onClose={handleCloseAIChat} />
+            ) : (
+              <Planner
+                sectionRefs={sectionRefs}
+                scrollContainerRef={scrollContainerRef}
+                onSectionInView={handleSectionInView}
+                plan={plan}
+                setPlan={setPlan}
+              />
+            )}
+          </div>
+          {/* Right Panel */}
+          <div className="flex-[4] h-full min-w-0 relative">
+            {/* Toggle button Group - only visible when AI chat is active */}
+            {isAIChatActive && (
+              <div className="absolute top-2 right-2 z-10">
+                <TooltipProvider delayDuration={100}>
+                  <div className="flex items-center rounded-lg border border-gray-300 bg-white/90 backdrop-blur-sm shadow-md overflow-hidden">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={() => setRightPanelView("planner")}
+                          className={`flex items-center justify-center p-2.5 transition-all duration-200 ${
+                            rightPanelView === "planner"
+                              ? "bg-blue-600 text-white shadow-inner"
+                              : "text-gray-600 hover:text-blue-600 hover:bg-blue-50"
+                          }`}
+                        >
+                          <ClipboardList className="w-4 h-4" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="text-xs">
+                        Planner
+                      </TooltipContent>
+                    </Tooltip>
+
+                    <div className="w-[1px] h-5 bg-gray-200" />
+
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={() => setRightPanelView("map")}
+                          className={`flex items-center justify-center p-2.5 transition-all duration-200 ${
+                            rightPanelView === "map"
+                              ? "bg-blue-600 text-white shadow-inner"
+                              : "text-gray-600 hover:text-blue-600 hover:bg-blue-50"
+                          }`}
+                        >
+                          <MapIcon className="w-4 h-4" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="text-xs">
+                        Map
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                </TooltipProvider>
+              </div>
+            )}
+            {/* Right panel content */}
+            {!isAIChatActive || rightPanelView === "map" ? (
+              <GoogleMapIntegration
+                plan={plan}
+                onItineraryUpdate={handleItineraryItemUpdate}
+              />
+            ) : (
+              <Planner
+                sectionRefs={sectionRefs}
+                scrollContainerRef={scrollContainerRef}
+                onSectionInView={handleSectionInView}
+                plan={plan}
+                setPlan={setPlan}
+              />
+            )}
           </div>
         </ItineraryProvider>
       </APIProvider>
+      {/* Floating AI Chat Button */}
+      {!isAIChatActive && (
+        <button
+          onClick={handleOpenAIChat}
+          className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 flex items-center justify-center z-50"
+          title="Chat với AI"
+        >
+          <MessageCircle className="w-6 h-6" />
+        </button>
+      )}
     </div>
   );
 }
