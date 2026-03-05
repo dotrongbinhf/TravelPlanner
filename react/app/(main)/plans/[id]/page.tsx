@@ -144,7 +144,12 @@ export default function PlanIdPage() {
           {/* Center Panel */}
           <div className="flex-[4] h-full min-w-0">
             {isAIChatActive ? (
-              <AIChat planName={plan.name} onClose={handleCloseAIChat} />
+              <AIChat
+                planName={plan.name}
+                planStartDate={new Date(plan.startTime)}
+                planEndDate={new Date(plan.endTime)}
+                onClose={handleCloseAIChat}
+              />
             ) : (
               <Planner
                 sectionRefs={sectionRefs}
@@ -156,7 +161,10 @@ export default function PlanIdPage() {
             )}
           </div>
           {/* Right Panel */}
-          <div className="flex-[4] h-full min-w-0 relative">
+          <div
+            id="right-panel-container"
+            className="flex-[4] h-full min-w-0 relative"
+          >
             {/* Toggle button Group - only visible when AI chat is active */}
             {isAIChatActive && (
               <div className="absolute top-2 right-2 z-10">
@@ -228,7 +236,7 @@ export default function PlanIdPage() {
             <TooltipTrigger asChild>
               <button
                 onClick={handleOpenAIChat}
-                className="fixed bottom-6 right-6 w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 flex items-center justify-center z-50"
+                className="cursor-pointer fixed bottom-6 right-6 w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 flex items-center justify-center z-50"
               >
                 <BotMessageSquare className="w-6 h-6" />
               </button>

@@ -334,7 +334,7 @@ const Itinerary = forwardRef<HTMLDivElement, ItineraryProps>(function Itinerary(
                 <button
                   onClick={handleSyncGoogleCalendar}
                   disabled={isSyncing}
-                  className="cursor-pointer flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed h-[42px]"
+                  className="flex-shrink-0 cursor-pointer flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed h-[42px]"
                 >
                   {isSyncing ? (
                     <Loader2 className="w-5 h-5 animate-spin text-gray-500" />
