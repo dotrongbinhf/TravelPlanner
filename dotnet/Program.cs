@@ -21,6 +21,7 @@ builder.Services.AddSingleton<MongoDbService>();
 builder.Services.AddScoped<ICloudinaryService, CloudinaryService>();
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<IGoogleCalendarService, GoogleCalendarService>();
+builder.Services.AddScoped<IAIChatService, AIChatService>();
 
 builder.Services.AddControllers()
     .AddJsonOptions(options =>

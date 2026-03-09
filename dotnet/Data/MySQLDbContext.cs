@@ -54,6 +54,8 @@ namespace dotnet.Data
         public DbSet<ItineraryDay> ItineraryDays { get; set; }
         public DbSet<ItineraryItemsRoute> ItineraryItemsRoutes { get; set; }
         public DbSet<RouteWaypoint> RouteWaypoints { get; set; }
+        public DbSet<Conversation> Conversations { get; set; }
+        public DbSet<Message> Messages { get; set; }
 
         public override int SaveChanges()
         {

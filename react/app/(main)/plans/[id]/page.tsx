@@ -236,7 +236,7 @@ export default function PlanIdPage() {
             <TooltipTrigger asChild>
               <button
                 onClick={handleOpenAIChat}
-                className="cursor-pointer fixed bottom-6 right-6 w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 flex items-center justify-center z-50"
+                className="cursor-pointer fixed bottom-6 right-6 w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 flex items-center justify-center z-40"
               >
                 <BotMessageSquare className="w-6 h-6" />
               </button>

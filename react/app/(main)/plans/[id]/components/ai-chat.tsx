@@ -1,7 +1,18 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { X, BotMessageSquare, Lightbulb, Compass, Wand2 } from "lucide-react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import {
+  X,
+  BotMessageSquare,
+  Lightbulb,
+  Compass,
+  Wand2,
+  Plus,
+  MessageSquare,
+  Check,
+  Pencil,
+  ChevronDown,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import WelcomeScreen, {
@@ -12,6 +23,23 @@ import ChatMessages, { ChatMessage } from "./chats/chat-messages";
 import ChatInput from "./chats/chat-input";
 import PromptBuilder from "./chats/prompt-builder";
 import { createPortal } from "react-dom";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import {
+  getConversationsByPlanId,
+  createConversation,
+  updateConversationTitle,
+  getMessagesByConversationId,
+  addMessage,
+} from "@/api/aiChat";
+import { Conversation, MessageRole } from "@/api/aiChat/types";
+import { useParams } from "next/navigation";
+import toast from "react-hot-toast";
 
 interface AIChatProps {
   readonly planName: string;
@@ -26,36 +54,187 @@ export default function AIChat({
   planEndDate,
   onClose,
 }: AIChatProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const { id: planId } = useParams() as { id: string };
+
+  const [activeConversationId, setActiveConversationId] = useState<
+    string | null
+  >(null);
   const [input, setInput] = useState("");
   const [activePopup, setActivePopup] = useState<"guide" | "prompts" | null>(
     null,
   );
   const [showBuilder, setShowBuilder] = useState(false);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editTitleValue, setEditTitleValue] = useState("");
+
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [isConversationsLoading, setIsConversationsLoading] = useState(true);
+
+  const [backendMessages, setBackendMessages] = useState<any[]>([]);
+  const [isMessagesLoading, setIsMessagesLoading] = useState(false);
+
+  const [isCreatingConversation, setIsCreatingConversation] = useState(false);
+  const initializationAttempted = useRef(false); // Ref to prevent React StrictMode double-fire
+
+  // Fetch Conversations
+  const fetchConversations = useCallback(async () => {
+    try {
+      setIsConversationsLoading(true);
+      const data = await getConversationsByPlanId(planId);
+      setConversations(data);
+      return data;
+    } catch (error) {
+      toast.error("Failed to load conversations");
+      return [];
+    } finally {
+      setIsConversationsLoading(false);
+    }
+  }, [planId]);
+
+  // Initial load
+  useEffect(() => {
+    const init = async () => {
+      const data = await fetchConversations();
+
+      // Auto-create only if no conversations exist AND we haven't already attempted it
+      if (
+        data.length === 0 &&
+        !isCreatingConversation &&
+        !initializationAttempted.current
+      ) {
+        initializationAttempted.current = true;
+        handleStartNewConversation();
+      } else if (data.length > 0 && !activeConversationId) {
+        setActiveConversationId(data[0].id);
+      }
+    };
+    init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planId]);
+
+  // Fetch Messages when activeConversationId changes
+  useEffect(() => {
+    if (!activeConversationId) return;
+    const fetchMessages = async () => {
+      try {
+        setIsMessagesLoading(true);
+        const msgs = await getMessagesByConversationId(activeConversationId);
+        setBackendMessages(msgs);
+      } catch (error) {
+        toast.error("Failed to load messages");
+      } finally {
+        setIsMessagesLoading(false);
+      }
+    };
+    fetchMessages();
+  }, [activeConversationId]);
+
+  // Handle Start New Conversation
+  const handleStartNewConversation = async () => {
+    try {
+      setIsCreatingConversation(true);
+      const newConv = await createConversation(planId, {
+        planId,
+        title: "New Conversation",
+      });
+      setConversations((prev) => [newConv, ...prev]);
+      setActiveConversationId(newConv.id);
+    } catch (error) {
+      toast.error("Failed to create conversation");
+    } finally {
+      setIsCreatingConversation(false);
+    }
+  };
+
+  const handleSaveTitle = async () => {
+    if (
+      activeConversationId &&
+      editTitleValue.trim() !== activeConversation?.title
+    ) {
+      try {
+        const updatedTitle = editTitleValue.trim() || "Untitled";
+        await updateConversationTitle(activeConversationId, {
+          title: updatedTitle,
+        });
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === activeConversationId ? { ...c, title: updatedTitle } : c,
+          ),
+        );
+      } catch (error) {
+        toast.error("Failed to update title");
+      }
+    }
+    setIsEditingTitle(false);
+  };
+
+  const activeConversation = conversations.find(
+    (c) => c.id === activeConversationId,
+  );
+
+  // Convert backend messages to frontend ChatMessage format
+  const messages: ChatMessage[] = backendMessages.map((m) => ({
+    id: m.id,
+    role: m.messageRole === MessageRole.Assistant ? "assistant" : "user",
+    content: m.content,
+  }));
 
   const hasMessages = messages.length > 0;
 
-  const sendMessage = useCallback((text: string) => {
-    if (!text.trim()) return;
+  const sendMessage = useCallback(
+    async (text: string) => {
+      if (!text.trim() || !activeConversationId) return;
 
-    const userMessage: ChatMessage = {
-      id: Date.now().toString(),
-      role: "user",
-      content: text.trim(),
-    };
+      const userContent = text.trim();
 
-    setMessages((prev) => [
-      ...prev,
-      userMessage,
-      {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: "AI feature is under development. Please come back later! 🚧",
-      },
-    ]);
-    setInput("");
-    setActivePopup(null);
-  }, []);
+      // Optimistic update
+      const tempUserMsgId = Date.now().toString();
+      setBackendMessages((prev) => [
+        ...prev,
+        {
+          id: tempUserMsgId,
+          conversationId: activeConversationId,
+          content: userContent,
+          messageRole: MessageRole.User,
+        },
+      ]);
+
+      setInput("");
+      setActivePopup(null);
+
+      try {
+        await addMessage(activeConversationId, {
+          conversationId: activeConversationId,
+          content: userContent,
+          messageRole: MessageRole.User,
+        });
+
+        // Simulate Assistant Reply
+        setTimeout(async () => {
+          const assistantReply =
+            "AI feature is under development. Please come back later! 🚧";
+
+          try {
+            const newMsg = await addMessage(activeConversationId, {
+              conversationId: activeConversationId,
+              content: assistantReply,
+              messageRole: MessageRole.Assistant,
+            });
+            setBackendMessages((prev) => [...prev, newMsg]);
+          } catch (e) {
+            toast.error("Failed to receive AI response");
+          }
+        }, 1000);
+      } catch (error) {
+        toast.error("Failed to send message");
+        // Remove optimistic message
+        setBackendMessages((prev) =>
+          prev.filter((m) => m.id !== tempUserMsgId),
+        );
+      }
+    },
+    [activeConversationId],
+  );
 
   const handleSend = () => sendMessage(input);
 
@@ -64,7 +243,6 @@ export default function AIChat({
   };
 
   const handleBuilderGenerate = (prompt: string) => {
-    // setShowBuilder(false);
     setInput(prompt);
   };
 
@@ -78,31 +256,116 @@ export default function AIChat({
   };
 
   return (
-    <div className="w-full h-full flex flex-col rounded-lg border-2 border-gray-200 bg-white overflow-hidden">
+    <div className="w-full h-full flex flex-col rounded-lg border-2 border-gray-200 bg-white overflow-hidden relative">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 flex-shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
+      <div className="flex items-center justify-between px-4 py-3 border-b flex-shrink-0 bg-gray-50/50">
+        <div className="flex items-center gap-3 min-w-0 pr-4 w-full">
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center flex-shrink-0">
             <BotMessageSquare className="w-4 h-4 text-white" />
           </div>
-          <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-gray-800 truncate">
-              AI Assistant
-            </h3>
-            <p className="text-xs text-gray-500 truncate">{planName}</p>
+
+          <div className="flex flex-col min-w-0 flex-1 justify-center">
+            {isEditingTitle ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  autoFocus
+                  value={editTitleValue}
+                  onChange={(e) => setEditTitleValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleSaveTitle();
+                    if (e.key === "Escape") setIsEditingTitle(false);
+                  }}
+                  onBlur={handleSaveTitle}
+                  className="h-7 text-sm font-semibold max-w-[200px]"
+                />
+              </div>
+            ) : (
+              <DropdownMenu>
+                <div className="flex items-center gap-2 group w-fit">
+                  <DropdownMenuTrigger asChild>
+                    <div className="flex items-center gap-1 cursor-pointer hover:bg-gray-100 rounded px-1 -ml-1 transition-colors">
+                      <h3
+                        className="text-sm font-semibold text-gray-800 truncate"
+                        title="Click to switch conversation"
+                      >
+                        {activeConversation?.title || "AI Assistant"}
+                      </h3>
+                      <ChevronDown className="w-3 h-3 text-gray-400" />
+                    </div>
+                  </DropdownMenuTrigger>
+                  <button
+                    onClick={() => {
+                      setEditTitleValue(activeConversation?.title || "");
+                      setIsEditingTitle(true);
+                    }}
+                    className="p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-gray-200"
+                    title="Rename conversation"
+                  >
+                    <Pencil className="w-3 h-3 text-gray-500" />
+                  </button>
+                </div>
+                <DropdownMenuContent
+                  align="start"
+                  className="w-64 max-h-[300px] overflow-y-auto custom-scrollbar"
+                >
+                  {conversations.map((conv) => (
+                    <DropdownMenuItem
+                      key={conv.id}
+                      onClick={() => setActiveConversationId(conv.id)}
+                      className={cn(
+                        "flex items-center justify-between cursor-pointer",
+                        conv.id === activeConversationId && "bg-blue-50",
+                      )}
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <MessageSquare className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                        <span className="truncate text-sm">{conv.title}</span>
+                      </div>
+                      {conv.id === activeConversationId && (
+                        <Check className="w-4 h-4 text-blue-600 flex-shrink-0" />
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+
+            <p className="text-xs text-gray-500 truncate mt-0.5">{planName}</p>
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onClose}
-          className="h-8 w-8 rounded-lg hover:bg-gray-100 hover:text-gray-500 flex-shrink-0"
-        >
-          <X className="w-4 h-4" />
-        </Button>
+
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleStartNewConversation}
+            className="hidden sm:flex h-8 gap-1.5 rounded-lg text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+            title="New Conversation"
+          >
+            <Plus className="w-4 h-4" />
+            <span className="text-xs font-medium">New Chat</span>
+          </Button>
+          <div className="w-px h-4 bg-gray-200 mx-1 hidden sm:block" />
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="h-8 w-8 rounded-lg hover:bg-gray-100 hover:text-gray-500"
+          >
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
       </div>
 
-      {hasMessages ? <ChatMessages messages={messages} /> : <WelcomeScreen />}
+      {isMessagesLoading ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        </div>
+      ) : hasMessages ? (
+        <ChatMessages messages={messages} />
+      ) : (
+        <WelcomeScreen />
+      )}
 
       {showBuilder &&
         document.getElementById("right-panel-container") &&
@@ -152,42 +415,56 @@ export default function AIChat({
           </div>
         )}
 
-        <div className="px-3 pt-1 pb-0 flex items-center gap-2 justify-end">
-          <button
-            onClick={() =>
-              handleSetPopup(activePopup === "prompts" ? null : "prompts")
-            }
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium transition-all",
-              activePopup === "prompts"
-                ? "bg-blue-50 border-blue-200 text-blue-700"
-                : "bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50",
-            )}
-          >
-            <Compass className="w-3.5 h-3.5" />
-            Quick start
-          </button>
-          <button
-            onClick={() =>
-              handleSetPopup(activePopup === "guide" ? null : "guide")
-            }
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium transition-all",
-              activePopup === "guide"
-                ? "bg-amber-50 border-amber-200 text-amber-700"
-                : "bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50",
-            )}
-          >
-            <Lightbulb className="w-3.5 h-3.5" />
-            How to ask
-          </button>
-          <button
-            onClick={handleOpenBuilder}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-blue-200 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100 transition-all"
-          >
-            <Wand2 className="w-3.5 h-3.5" />
-            Prompt Builder
-          </button>
+        <div className="px-3 pt-1 pb-0 flex items-center justify-between">
+          <div className="flex items-center">
+            {/* Show + button here on small screens if needed, otherwise spacing */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleStartNewConversation}
+              className="sm:hidden h-8 w-8 rounded-lg text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+              title="New Conversation"
+            >
+              <Plus className="w-4 h-4" />
+            </Button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() =>
+                handleSetPopup(activePopup === "prompts" ? null : "prompts")
+              }
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium transition-all",
+                activePopup === "prompts"
+                  ? "bg-blue-50 border-blue-200 text-blue-700"
+                  : "bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50",
+              )}
+            >
+              <Compass className="w-3.5 h-3.5" />
+              Quick start
+            </button>
+            <button
+              onClick={() =>
+                handleSetPopup(activePopup === "guide" ? null : "guide")
+              }
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium transition-all",
+                activePopup === "guide"
+                  ? "bg-amber-50 border-amber-200 text-amber-700"
+                  : "bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50",
+              )}
+            >
+              <Lightbulb className="w-3.5 h-3.5" />
+              How to ask
+            </button>
+            <button
+              onClick={handleOpenBuilder}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-blue-200 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100 transition-all"
+            >
+              <Wand2 className="w-3.5 h-3.5" />
+              Prompt Builder
+            </button>
+          </div>
         </div>
 
         <ChatInput

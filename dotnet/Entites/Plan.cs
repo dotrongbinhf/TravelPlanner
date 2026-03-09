@@ -20,5 +20,6 @@
         public ICollection<PackingList> PackingLists { get; set; } = new List<PackingList>();
         public ICollection<Note> Notes { get; set; } = new List<Note>();
         public ICollection<Participant> Participants { get; set; } = new List<Participant>();
+        public ICollection<Conversation> Conversations { get; set; } = new List<Conversation>();
     }
 }
