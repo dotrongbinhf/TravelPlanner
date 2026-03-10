@@ -22,6 +22,7 @@ builder.Services.AddScoped<ICloudinaryService, CloudinaryService>();
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<IGoogleCalendarService, GoogleCalendarService>();
 builder.Services.AddScoped<IAIChatService, AIChatService>();
+builder.Services.AddScoped<IExternalApiService, ExternalApiService>();
 
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
