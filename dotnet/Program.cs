@@ -1,5 +1,6 @@
 using dotnet.Data;
 using dotnet.Helpers;
+using dotnet.Hubs;
 using dotnet.Interfaces;
 using dotnet.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -23,6 +24,10 @@ builder.Services.AddHttpClient();
 builder.Services.AddScoped<IGoogleCalendarService, GoogleCalendarService>();
 builder.Services.AddScoped<IAIChatService, AIChatService>();
 builder.Services.AddScoped<IExternalApiService, ExternalApiService>();
+builder.Services.AddSingleton<IAgentWebSocketService, AgentWebSocketService>();
+
+// Add SignalR for realtime agent communication
+builder.Services.AddSignalR();
 
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
@@ -65,6 +70,21 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSection["AccessTokenSecret"])),
             ClockSkew = TimeSpan.Zero
         };
+
+        // Allow SignalR to receive JWT from query string
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                var accessToken = context.Request.Query["access_token"];
+                var path = context.HttpContext.Request.Path;
+                if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
+                {
+                    context.Token = accessToken;
+                }
+                return Task.CompletedTask;
+            }
+        };
     });
 
 builder.Services.AddAuthorization();
@@ -98,5 +118,8 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 
 app.MapControllers();
+
+// Map SignalR Hub for AI Agent streaming
+app.MapHub<AgentHub>("/hubs/agent");
 
 app.Run();

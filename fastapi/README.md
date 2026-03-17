@@ -55,7 +55,7 @@ cp .env.example .env
 Edit `.env` with your settings:
 
 - `DOTNET_API_URL`: URL of your .NET API
-- `GOOGLE_API_KEY`: Google API key for Gemini (for future agent features)
+- `GOOGLE_GEMINI_API_KEY`: Google API key for Gemini (for future agent features)
 - `HOST` and `PORT`: Server configuration
 
 ## 🏃 Running the Application

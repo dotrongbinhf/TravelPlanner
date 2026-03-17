@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     PORT: int = 8000
     
     # API Keys
-    GOOGLE_API_KEY: str = ""
+    GOOGLE_GEMINI_API_KEY: str = ""
     
     # External services
     DOTNET_API_URL: str = "https://localhost:5001"
@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     # Application settings
     APP_NAME: str = "FastAPI Multi-Agent System"
     DEBUG: bool = True
+    
+    # LangSmith Tracing (optional)
+    LANGSMITH_API_KEY: str = ""
+    LANGSMITH_PROJECT: str = "travel-planner-agents"
+    LANGSMITH_TRACING: bool = False
     
     model_config = SettingsConfigDict(
         env_file=".env",

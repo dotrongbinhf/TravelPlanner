@@ -40,6 +40,7 @@ import {
 import { Conversation, MessageRole } from "@/api/aiChat/types";
 import { useParams } from "next/navigation";
 import toast from "react-hot-toast";
+import { useAgentStream } from "@/hooks/useAgentStream";
 
 interface AIChatProps {
   readonly planName: string;
@@ -75,6 +76,14 @@ export default function AIChat({
 
   const [isCreatingConversation, setIsCreatingConversation] = useState(false);
   const initializationAttempted = useRef(false); // Ref to prevent React StrictMode double-fire
+  const streamingConversationIdRef = useRef<string | null>(null);
+
+  // Agent streaming hook
+  const {
+    sendMessage: sendAgentMessage,
+    streamState,
+    isStreaming,
+  } = useAgentStream();
 
   // Fetch Conversations
   const fetchConversations = useCallback(async () => {
@@ -179,7 +188,51 @@ export default function AIChat({
     content: m.content,
   }));
 
+  // When streaming is done but the message hasn't been saved to backend yet,
+  // show the streamed content as a temporary message to avoid flicker
+  if (
+    !isStreaming &&
+    streamState.isComplete &&
+    streamState.streamedContent &&
+    streamingConversationIdRef.current === activeConversationId &&
+    !messages.some((m) => m.content === streamState.streamedContent)
+  ) {
+    messages.push({
+      id: "streaming-complete",
+      role: "assistant",
+      content: streamState.streamedContent,
+    });
+  }
+
   const hasMessages = messages.length > 0;
+
+  // When streaming completes, save the AI response to backend
+  useEffect(() => {
+    const targetConversationId = streamingConversationIdRef.current;
+    if (
+      streamState.isComplete &&
+      streamState.streamedContent &&
+      targetConversationId
+    ) {
+      const saveAIResponse = async () => {
+        try {
+          const newMsg = await addMessage(targetConversationId, {
+            conversationId: targetConversationId,
+            content: streamState.streamedContent,
+            messageRole: MessageRole.Assistant,
+          });
+          // Only update messages list if still viewing the same conversation
+          if (streamingConversationIdRef.current === activeConversationId) {
+            setBackendMessages((prev) => [...prev, newMsg]);
+          }
+        } catch (e) {
+          console.error("Failed to save AI response:", e);
+        }
+      };
+      saveAIResponse();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamState.isComplete]);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -203,28 +256,16 @@ export default function AIChat({
       setActivePopup(null);
 
       try {
+        // Save user message to backend
         await addMessage(activeConversationId, {
           conversationId: activeConversationId,
           content: userContent,
           messageRole: MessageRole.User,
         });
 
-        // Simulate Assistant Reply
-        setTimeout(async () => {
-          const assistantReply =
-            "AI feature is under development. Please come back later! 🚧";
-
-          try {
-            const newMsg = await addMessage(activeConversationId, {
-              conversationId: activeConversationId,
-              content: assistantReply,
-              messageRole: MessageRole.Assistant,
-            });
-            setBackendMessages((prev) => [...prev, newMsg]);
-          } catch (e) {
-            toast.error("Failed to receive AI response");
-          }
-        }, 1000);
+        // Send to AI agent system via SignalR
+        streamingConversationIdRef.current = activeConversationId;
+        await sendAgentMessage(activeConversationId, userContent);
       } catch (error) {
         toast.error("Failed to send message");
         // Remove optimistic message
@@ -233,7 +274,7 @@ export default function AIChat({
         );
       }
     },
-    [activeConversationId],
+    [activeConversationId, sendAgentMessage],
   );
 
   const handleSend = () => sendMessage(input);
@@ -361,8 +402,15 @@ export default function AIChat({
         <div className="flex-1 flex items-center justify-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
         </div>
-      ) : hasMessages ? (
-        <ChatMessages messages={messages} />
+      ) : hasMessages || isStreaming ? (
+        <ChatMessages
+          messages={messages}
+          streamingContent={
+            isStreaming ? streamState.streamedContent : undefined
+          }
+          currentAgent={isStreaming ? streamState.currentAgent : undefined}
+          isStreaming={isStreaming}
+        />
       ) : (
         <WelcomeScreen />
       )}

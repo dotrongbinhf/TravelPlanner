@@ -1,6 +1,7 @@
 fastapi
 uvicorn
 langchain
+langchain-core
 langchain-google-genai
 langgraph
 pydantic
@@ -8,3 +9,5 @@ pydantic-settings
 python-dotenv
 requests
 httpx
+websockets
+langsmith

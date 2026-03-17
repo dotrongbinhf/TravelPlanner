@@ -1,23 +1,11 @@
 """
-Placeholder for future LangGraph multi-agent implementation.
+LangGraph Multi-Agent System.
 
-This module will contain the agent-based workflow using LangGraph.
-For now, it serves as a structural placeholder.
-
-Future implementation will include:
-- Agent state management
-- Graph workflow definition
-- Multiple specialized agents:
-  - Planner Agent: Route planning and itinerary creation
-  - Coordinator Agent: Workflow orchestration
-  - Integration Agent: Communication with .NET API
-  - Response Agent: Formatting and structuring responses
-- Message passing between agents
-- Conditional routing based on context
+Exports the compiled agent graph and state definition for use
+by the WebSocket endpoint and other components.
 """
 
-# Placeholder - will be implemented with LangGraph later
-# from langgraph.graph import StateGraph
-# from langchain_google_genai import ChatGoogleGenerativeAI
+from src.agents.state import GraphState
+from src.agents.graph import compiled_graph
 
-__all__ = []
+__all__ = ["GraphState", "compiled_graph"]
