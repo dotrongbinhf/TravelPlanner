@@ -2,7 +2,8 @@
 WebSocket streaming event models.
 
 Defines the structured JSON events sent through WebSocket during LangGraph workflow execution.
-These events allow the frontend to display realtime agent status, tool usage, and text streaming.
+These events allow the frontend to display realtime agent status, tool usage, text streaming,
+and structured plan data.
 """
 
 from pydantic import BaseModel, Field
@@ -19,6 +20,8 @@ class EventType(str, Enum):
     TOOL_START = "tool_start"
     TOOL_END = "tool_end"
     TEXT_CHUNK = "text_chunk"
+    STRUCTURED_DATA = "structured_data"
+    DB_COMMANDS = "db_commands"
     WORKFLOW_COMPLETE = "workflow_complete"
     ERROR = "error"
 
@@ -28,7 +31,8 @@ class AgentEvent(BaseModel):
     Structured WebSocket event for realtime streaming.
 
     Sent to the client during LangGraph workflow execution to provide
-    live updates on agent activity, tool usage, and text generation.
+    live updates on agent activity, tool usage, text generation,
+    and structured plan data.
     """
 
     event_type: EventType
@@ -39,6 +43,8 @@ class AgentEvent(BaseModel):
     tool_output: Optional[dict[str, Any]] = None
     output_summary: Optional[str] = None
     final_response: Optional[str] = None
+    structured_data: Optional[dict[str, Any]] = None
+    db_commands: Optional[list[dict[str, Any]]] = None
     error_message: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.now)
 
@@ -63,6 +69,10 @@ class AgentEvent(BaseModel):
             data["output_summary"] = self.output_summary
         if self.final_response is not None:
             data["final_response"] = self.final_response
+        if self.structured_data is not None:
+            data["structured_data"] = self.structured_data
+        if self.db_commands is not None:
+            data["db_commands"] = self.db_commands
         if self.error_message is not None:
             data["error_message"] = self.error_message
         return data

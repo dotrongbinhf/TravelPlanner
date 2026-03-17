@@ -114,6 +114,10 @@ class DotNetClient:
     async def put(self, endpoint: str, data: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         """Make a PUT request to the .NET API."""
         return await self._make_request("PUT", endpoint, data=data)
+
+    async def patch(self, endpoint: str, data: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        """Make a PATCH request to the .NET API."""
+        return await self._make_request("PATCH", endpoint, data=data)
     
     async def delete(self, endpoint: str) -> dict[str, Any]:
         """Make a DELETE request to the .NET API."""

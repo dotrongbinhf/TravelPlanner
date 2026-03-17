@@ -55,3 +55,10 @@ export const addMessage = async (
   );
   return response.data;
 };
+
+export const deleteConversation = async (conversationId: string) => {
+  const response = await API.delete(
+    `${APP_CONFIG_URL}/conversations/${conversationId}`
+  );
+  return response.data;
+};

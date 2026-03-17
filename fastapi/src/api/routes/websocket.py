@@ -1,14 +1,9 @@
 """
 WebSocket endpoint for the LangGraph multi-agent system.
 
-Provides realtime streaming of agent events to connected clients (typically .NET backend).
-Uses `astream_events` with version="v2" to capture granular LangGraph events and maps
-them to structured AgentEvent objects sent as JSON through the WebSocket.
-
-Key event mappings:
-- on_chain_start/end (node names) → agent_start/agent_end
-- on_chat_model_stream → text_chunk (realtime LLM token streaming)
-- Tool usage from node outputs → tool_start/tool_end
+Provides realtime streaming of agent events to connected clients.
+Uses `astream_events` with version="v2" to capture granular LangGraph events
+and maps them to structured AgentEvent objects sent as JSON through WebSocket.
 
 Endpoint: ws://localhost:8000/ws/agent/{conversation_id}
 """
@@ -27,10 +22,14 @@ router = APIRouter()
 
 # Track which LangGraph node names map to our agent names
 NODE_TO_AGENT = {
-    "planner": "planner",
-    "researcher": "researcher",
-    "dotnet_integration": "dotnet_integration",
-    "response": "response",
+    "orchestrator": "orchestrator",
+    "hotel_agent": "hotel_agent",
+    "flight_agent": "flight_agent",
+    "attraction_agent": "attraction_agent",
+    "restaurant_agent": "restaurant_agent",
+    "preparation_agent": "preparation_agent",
+    "itinerary_agent": "itinerary_agent",
+    "synthesize": "synthesize",
 }
 
 
@@ -49,13 +48,10 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
 
     Protocol:
     1. Client connects to ws://host:port/ws/agent/{conversation_id}
-    2. Client sends JSON: {"message": "user message text"}
+    2. Client sends JSON: {"message": "user message text", "plan_id": "optional"}
     3. Server streams AgentEvent JSON objects during graph execution
     4. Server sends workflow_complete event when done
     5. Connection stays open for additional messages (multi-turn)
-
-    The conversation_id maps to MemorySaver's thread_id for automatic
-    conversation memory management across multiple messages.
     """
     await websocket.accept()
     logger.info(f"🔌 WebSocket connected: conversation_id={conversation_id}")
@@ -70,9 +66,11 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                 data = json.loads(raw_data)
                 user_message = data.get("message", "")
                 history = data.get("history", [])
+                plan_id = data.get("plan_id", "")
             except json.JSONDecodeError:
                 user_message = raw_data
                 history = []
+                plan_id = ""
 
             if not user_message.strip():
                 await send_event(websocket, AgentEvent(
@@ -109,19 +107,22 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                     else:
                         history_messages.append(AIMessage(content=content))
             elif has_existing:
-                logger.info(f"✅ MemorySaver has existing state for thread {conversation_id}, skipping history injection")
+                logger.info(f"✅ MemorySaver has existing state for thread {conversation_id}")
 
             # Prepare graph input
             graph_input = {
                 "conversation_id": conversation_id,
+                "plan_id": plan_id,
                 "messages": history_messages + [HumanMessage(content=user_message)],
                 "current_agent": "",
                 "current_tool": "",
+                "pending_tasks": [],
+                "completed_tasks": [],
+                "user_context": {},
                 "agent_outputs": {},
-                "dotnet_api_response": {},
                 "final_response": "",
-                "plan_needs_research": False,
-                "plan_needs_details": False,
+                "structured_output": {},
+                "db_commands": [],
                 "metadata": {},
             }
 
@@ -129,9 +130,11 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
 
             # State for tracking streaming
             active_agents: set[str] = set()
-            current_node: str | None = None  # Track which node is currently running
+            current_node: str | None = None
             final_response = ""
-            streamed_chunks: list[str] = []  # Collect streamed text for final_response
+            streamed_chunks: list[str] = []
+            structured_output: dict = {}
+            db_commands: list = []
 
             try:
                 async for event in compiled_graph.astream_events(
@@ -140,12 +143,11 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                     event_kind = event.get("event", "")
                     event_name = event.get("name", "")
                     event_data = event.get("data", {})
-                    event_tags = event.get("tags", [])
 
                     # --- Node (Agent) Start ---
                     if event_kind == "on_chain_start" and event_name in NODE_TO_AGENT:
                         agent_name = NODE_TO_AGENT[event_name]
-                        current_node = agent_name  # Track current node for LLM stream mapping
+                        current_node = agent_name
                         if agent_name not in active_agents:
                             active_agents.add(agent_name)
                             logger.info(f"▶️  Agent started: {agent_name}")
@@ -177,16 +179,29 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                                     tool_output={"status": "completed"},
                                 ))
 
-                            # Capture final_response from response node
+                            # Capture final_response from any node
                             final_resp = output.get("final_response", "")
-                            if agent_name == "response" and final_resp:
+                            if final_resp:
                                 final_response = final_resp
 
-                            # Get output summary from agent_outputs
+                            # Capture structured output
+                            struct_out = output.get("structured_output", {})
+                            if struct_out:
+                                structured_output = struct_out
+
+                            # Capture db commands
+                            db_cmds = output.get("db_commands", [])
+                            if db_cmds:
+                                db_commands = db_cmds
+
+                            # Get output summary
                             agent_outputs = output.get("agent_outputs", {})
                             if agent_name in agent_outputs:
                                 agent_data = agent_outputs[agent_name]
-                                output_summary = agent_data.get("summary", agent_data.get("plan_summary", ""))
+                                if isinstance(agent_data, dict):
+                                    output_summary = agent_data.get("summary",
+                                        agent_data.get("status",
+                                        agent_data.get("search_summary", "")))
 
                         logger.info(f"⏹️  Agent ended: {agent_name}")
                         await send_event(websocket, AgentEvent(
@@ -205,18 +220,30 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
 
                         if chunk_content:
                             streamed_chunks.append(chunk_content)
-                            # Map to the current active node
-                            # In response_node, this gives us realtime text
-                            agent_for_chunk = current_node or "response"
+                            agent_for_chunk = current_node or "synthesize"
                             await send_event(websocket, AgentEvent(
                                 event_type=EventType.TEXT_CHUNK,
                                 agent_name=agent_for_chunk,
                                 content=chunk_content,
                             ))
 
-                # Use streamed content as final response if we got stream tokens
+                # Use streamed content as final response if available
                 if streamed_chunks and not final_response:
                     final_response = "".join(streamed_chunks)
+
+                # Send structured data if available
+                if structured_output:
+                    await send_event(websocket, AgentEvent(
+                        event_type=EventType.STRUCTURED_DATA,
+                        structured_data=structured_output,
+                    ))
+
+                # Send DB commands if available
+                if db_commands:
+                    await send_event(websocket, AgentEvent(
+                        event_type=EventType.DB_COMMANDS,
+                        db_commands=db_commands,
+                    ))
 
                 # Workflow complete
                 logger.info(f"✅ Workflow completed for conversation {conversation_id}")

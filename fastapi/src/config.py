@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     
     # API Keys
     GOOGLE_GEMINI_API_KEY: str = ""
+    TAVILY_API_KEY: str = ""
+    GOOGLE_MAPS_API_KEY: str = ""
     
     # External services
     DOTNET_API_URL: str = "https://localhost:5001"
@@ -27,7 +29,7 @@ class Settings(BaseSettings):
     
     # LangSmith Tracing (optional)
     LANGSMITH_API_KEY: str = ""
-    LANGSMITH_PROJECT: str = "travel-planner-agents"
+    LANGSMITH_PROJECT: str = "travel-planner-multi-agents"
     LANGSMITH_TRACING: bool = False
     
     model_config = SettingsConfigDict(

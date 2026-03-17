@@ -161,5 +161,22 @@ namespace dotnet.Services
                 CreatedAt = message.CreatedAt
             };
         }
+
+        public async Task<bool> DeleteConversation(Guid conversationId)
+        {
+            var userId = _currentUser.Id;
+            var conversation = await _context.Conversations
+                .Include(c => c.Plan)
+                .FirstOrDefaultAsync(c => c.Id == conversationId);
+
+            if (conversation == null) throw new KeyNotFoundException("Conversation not found");
+            if (conversation.Plan.OwnerId != userId)
+                throw new UnauthorizedAccessException("You don't have access to this conversation");
+
+            _context.Conversations.Remove(conversation);
+            await _context.SaveChangesAsync();
+
+            return true;
+        }
     }
 }

@@ -12,9 +12,11 @@ import {
   Check,
   Pencil,
   ChevronDown,
+  Trash,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { ConfirmDeleteModal } from "@/components/confirm-delete-modal";
 import WelcomeScreen, {
   HowToAskGuide,
   SamplePromptsPopup,
@@ -36,6 +38,7 @@ import {
   updateConversationTitle,
   getMessagesByConversationId,
   addMessage,
+  deleteConversation,
 } from "@/api/aiChat";
 import { Conversation, MessageRole } from "@/api/aiChat/types";
 import { useParams } from "next/navigation";
@@ -67,6 +70,7 @@ export default function AIChat({
   const [showBuilder, setShowBuilder] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState("");
+  const [conversationToDelete, setConversationToDelete] = useState<string | null>(null);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isConversationsLoading, setIsConversationsLoading] = useState(true);
@@ -175,6 +179,33 @@ export default function AIChat({
       }
     }
     setIsEditingTitle(false);
+  };
+
+  const handleDeleteConversation = async () => {
+    if (!conversationToDelete) return;
+
+    try {
+      await deleteConversation(conversationToDelete);
+
+      const updatedConversations = conversations.filter(
+        (c) => c.id !== conversationToDelete,
+      );
+      setConversations(updatedConversations);
+
+      if (updatedConversations.length > 0) {
+        if (activeConversationId === conversationToDelete) {
+            setActiveConversationId(updatedConversations[0].id);
+        }
+      } else {
+        setActiveConversationId(null);
+        handleStartNewConversation();
+      }
+      toast.success("Conversation deleted");
+    } catch (error) {
+      toast.error("Failed to delete conversation");
+    } finally {
+      setConversationToDelete(null);
+    }
   };
 
   const activeConversation = conversations.find(
@@ -322,7 +353,7 @@ export default function AIChat({
               </div>
             ) : (
               <DropdownMenu>
-                <div className="flex items-center gap-2 group w-fit">
+                <div className="flex items-center gap-2 w-fit">
                   <DropdownMenuTrigger asChild>
                     <div className="flex items-center gap-1 cursor-pointer hover:bg-gray-100 rounded px-1 -ml-1 transition-colors">
                       <h3
@@ -334,16 +365,25 @@ export default function AIChat({
                       <ChevronDown className="w-3 h-3 text-gray-400" />
                     </div>
                   </DropdownMenuTrigger>
-                  <button
-                    onClick={() => {
-                      setEditTitleValue(activeConversation?.title || "");
-                      setIsEditingTitle(true);
-                    }}
-                    className="p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-gray-200"
-                    title="Rename conversation"
-                  >
-                    <Pencil className="w-3 h-3 text-gray-500" />
-                  </button>
+                  <div className="flex items-center gap-1 group">
+                    <button
+                      onClick={() => {
+                        setEditTitleValue(activeConversation?.title || "");
+                        setIsEditingTitle(true);
+                      }}
+                      className="p-1 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity bg-yellow-400 hover:bg-yellow-500"
+                      title="Rename conversation"
+                    >
+                      <Pencil className="w-3 h-3 text-white" />
+                    </button>
+                    <button
+                      onClick={() => setConversationToDelete(activeConversationId)}
+                      className="p-1 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity bg-red-100 hover:bg-red-200"
+                      title="Delete conversation"
+                    >
+                      <Trash className="w-3 h-3 text-red-500" />
+                    </button>
+                  </div>
                 </div>
                 <DropdownMenuContent
                   align="start"
@@ -523,6 +563,14 @@ export default function AIChat({
           onOpenBuilder={handleOpenBuilder}
         />
       </div>
+
+      <ConfirmDeleteModal
+        open={!!conversationToDelete}
+        onOpenChange={(open) => !open && setConversationToDelete(null)}
+        title="Delete Conversation"
+        description={`Are you sure you want to delete "${conversations.find((c) => c.id === conversationToDelete)?.title || "this conversation"}"? This action cannot be undone.`}
+        onConfirm={handleDeleteConversation}
+      />
     </div>
   );
 }

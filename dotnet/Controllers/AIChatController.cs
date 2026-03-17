@@ -93,5 +93,23 @@ namespace dotnet.Controllers
                 return Forbid();
             }
         }
+
+        [HttpDelete("conversations/{id}")]
+        public async Task<IActionResult> DeleteConversation([FromRoute] Guid id)
+        {
+            try
+            {
+                var result = await _aiChatService.DeleteConversation(id);
+                return Ok(result);
+            }
+            catch (KeyNotFoundException)
+            {
+                return NotFound();
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
+            }
+        }
     }
 }

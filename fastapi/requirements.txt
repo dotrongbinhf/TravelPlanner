@@ -3,6 +3,7 @@ uvicorn
 langchain
 langchain-core
 langchain-google-genai
+langchain-community
 langgraph
 pydantic
 pydantic-settings
@@ -11,3 +12,6 @@ requests
 httpx
 websockets
 langsmith
+tavily-python
+ortools
+googlemaps

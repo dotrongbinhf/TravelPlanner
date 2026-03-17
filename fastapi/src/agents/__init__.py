@@ -1,11 +1,31 @@
 """
-LangGraph Multi-Agent System.
+Agents package for the multi-agent travel planner.
 
-Exports the compiled agent graph and state definition for use
-by the WebSocket endpoint and other components.
+Provides the LangGraph StateGraph, agent nodes, and shared state definition.
 """
 
 from src.agents.state import GraphState
 from src.agents.graph import compiled_graph
+from src.agents.nodes import (
+    orchestrator_node,
+    hotel_agent_node,
+    flight_agent_node,
+    attraction_agent_node,
+    restaurant_agent_node,
+    preparation_agent_node,
+    itinerary_agent_node,
+    synthesize_agent_node,
+)
 
-__all__ = ["GraphState", "compiled_graph"]
+__all__ = [
+    "GraphState",
+    "compiled_graph",
+    "orchestrator_node",
+    "hotel_agent_node",
+    "flight_agent_node",
+    "attraction_agent_node",
+    "restaurant_agent_node",
+    "preparation_agent_node",
+    "itinerary_agent_node",
+    "synthesize_agent_node",
+]
