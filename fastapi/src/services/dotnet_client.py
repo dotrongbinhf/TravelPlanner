@@ -22,7 +22,7 @@ class DotNetClient:
             base_url: Base URL of the .NET API. Defaults to settings.DOTNET_API_URL
         """
         self.base_url = base_url or settings.DOTNET_API_URL
-        self.timeout = 30.0
+        self.timeout = 90.0
         
     async def _make_request(
         self,

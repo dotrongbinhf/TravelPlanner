@@ -123,6 +123,7 @@ async def search_flights(
     currency: str = "USD",
     stops: Optional[int] = None,
     max_price: Optional[int] = None,
+    departure_token: Optional[str] = None,
 ) -> dict[str, Any]:
     """Search for flights between airports.
     
@@ -140,6 +141,7 @@ async def search_flights(
         currency: Currency code.
         stops: 0=Any, 1=Nonstop, 2=1 stop or fewer, 3=2 stops or fewer.
         max_price: Maximum ticket price.
+        departure_token: Token from outbound flight to search for return flights (round trip only).
 
     Returns:
         Flight search results from SerpApi.
@@ -162,6 +164,8 @@ async def search_flights(
         params["stops"] = stops
     if max_price is not None:
         params["maxPrice"] = max_price
+    if departure_token:
+        params["departureToken"] = departure_token
 
     logger.info(f"[search_flights] {departure_id}→{arrival_id} on {outbound_date}")
     result = await dotnet_client.get("/api/flight/search", params=params)

@@ -122,7 +122,7 @@ Use the search tools to find real restaurants.
 """),
         ]
 
-        result = await _run_agent_with_tools(
+        result, _ = await _run_agent_with_tools(
             llm=llm_agent, messages=llm_messages,
             tools=[places_nearby_search, places_text_search_id_only], max_iterations=4,
             agent_name="RESTAURANT_AGENT",

@@ -30,7 +30,27 @@ namespace dotnet.Controllers
                 return BadRequest(response.Error);
             }
 
-            return Ok(response);
+            // Trim: keep only Properties (max 10), flatten rates, remove tokens/links
+            var trimmedProperties = (response.Properties ?? new())
+                .Take(10)
+                .Select(p => new
+                {
+                    p.Type,
+                    p.Name,
+                    p.Link,
+                    p.GpsCoordinates,
+                    p.CheckInTime,
+                    p.CheckOutTime,
+                    RatePerNight = p.RatePerNight?.Lowest,
+                    TotalRate = p.TotalRate?.Lowest,
+                    p.NearbyPlaces,
+                    p.OverallRating,
+                    p.Reviews,
+                    p.LocationRating,
+                    p.ReviewsBreakdown,
+                });
+
+            return Ok(new { Properties = trimmedProperties });
         }
     }
 }

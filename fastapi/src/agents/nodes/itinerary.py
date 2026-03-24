@@ -153,7 +153,7 @@ IMPORTANT: Respect the suggested_day assignments. Optimize the ORDER within each
 """),
         ]
 
-        result = await _run_agent_with_tools(
+        result, _ = await _run_agent_with_tools(
             llm=llm_agent, messages=llm_messages,
             tools=[get_distance_matrix, optimize_daily_itinerary], max_iterations=4,
             agent_name="ITINERARY_AGENT",

@@ -116,7 +116,7 @@ Check weather, estimate budget, create packing lists and travel notes.
 """),
         ]
 
-        result = await _run_agent_with_tools(
+        result, _ = await _run_agent_with_tools(
             llm=llm_agent, messages=llm_messages,
             tools=[get_weather_forecast, tavily_search], max_iterations=4,
             agent_name="PREPARATION_AGENT",

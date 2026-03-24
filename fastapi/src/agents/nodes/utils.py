@@ -38,13 +38,28 @@ llm_agent = ChatGoogleGenerativeAI(
     streaming=False,
 )
 
-
 # ============================================================
 # Helper Functions
 # ============================================================
 
-def _extract_json(text: str) -> dict:
-    """Extract JSON from LLM response text, handling markdown code blocks."""
+def _extract_json(text_or_list: Any) -> dict:
+    """Extract JSON from LLM response text, handling markdown code blocks and list content."""
+    text = ""
+    # Handle case where Gemini returns a list of parts instead of a string
+    if isinstance(text_or_list, list):
+        for part in text_or_list:
+            if isinstance(part, dict) and "text" in part:
+                text += part["text"]
+            elif isinstance(part, str):
+                text += part
+    elif isinstance(text_or_list, dict):
+        if "text" in text_or_list:
+            text = text_or_list["text"]
+        else:
+            return text_or_list 
+    else:
+        text = str(text_or_list)
+
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -52,18 +67,22 @@ def _extract_json(text: str) -> dict:
 
     if "```json" in text:
         start = text.index("```json") + 7
-        end = text.index("```", start)
+        end = text.rindex("```")
         return json.loads(text[start:end].strip())
 
     if "```" in text:
         start = text.index("```") + 3
-        end = text.index("```", start)
+        end = text.rindex("```")
         return json.loads(text[start:end].strip())
 
     start = text.find("{")
-    end = text.rfind("}") + 1
-    if start >= 0 and end > start:
-        return json.loads(text[start:end])
+    if start >= 0:
+        end = text.rfind("}") + 1
+        while end > start:
+            try:
+                return json.loads(text[start:end])
+            except json.JSONDecodeError:
+                end = text.rfind("}", 0, end - 1) + 1
 
     raise ValueError(f"No valid JSON found in LLM response: {text[:200]}...")
 
@@ -98,17 +117,23 @@ async def _run_agent_with_tools(
     tools: list,
     max_iterations: int = 5,
     agent_name: str = "agent",
-) -> Any:
-    """ReAct tool-calling loop: LLM → tool calls → LLM → ... → final response."""
+) -> tuple[Any, list[dict]]:
+    """ReAct tool-calling loop: LLM → tool calls → LLM → ... → final response.
+    
+    Returns:
+        A tuple of (final_llm_result, tool_logs) where tool_logs is a list of
+        dicts with keys: name, input, output.
+    """
     tool_map = {t.name: t for t in tools}
     llm_with_tools = llm.bind_tools(tools)
+    tool_logs: list[dict] = []
 
     for iteration in range(max_iterations):
         result = await llm_with_tools.ainvoke(messages)
 
         if not result.tool_calls:
             logger.info(f"   [{agent_name}] Final response at iteration {iteration + 1}")
-            return result
+            return result, tool_logs
 
         logger.info(f"   [{agent_name}] Iteration {iteration + 1}: {len(result.tool_calls)} tool call(s)")
         messages.append(result)
@@ -125,17 +150,30 @@ async def _run_agent_with_tools(
                 try:
                     tool_result = await tool_fn.ainvoke(tool_args)
                     tool_result_str = json.dumps(tool_result, default=str, ensure_ascii=False)
-                    if len(tool_result_str) > 4000:
-                        tool_result_str = tool_result_str[:4000] + "...(truncated)"
+                    
+                    # Store full result in tool_logs
+                    tool_logs.append({
+                        "name": tool_name,
+                        "input": tool_args,
+                        "output": tool_result,
+                    })
+                    
+                    # if len(tool_result_str) > 4000:
+                    #     tool_result_str = tool_result_str[:4000] + "...(truncated)"
                     messages.append(ToolMessage(content=tool_result_str, tool_call_id=tool_id))
                 except Exception as e:
                     logger.error(f"   [{agent_name}] Tool {tool_name} error: {e}")
+                    tool_logs.append({
+                        "name": tool_name,
+                        "input": tool_args,
+                        "output": {"error": str(e)},
+                    })
                     messages.append(ToolMessage(content=f"Error: {str(e)}", tool_call_id=tool_id))
             else:
                 messages.append(ToolMessage(content=f"Unknown tool: {tool_name}", tool_call_id=tool_id))
 
     logger.warning(f"   [{agent_name}] Max iterations reached, forcing final response")
     result = await llm.ainvoke(messages)
-    return result
+    return result, tool_logs
 
 

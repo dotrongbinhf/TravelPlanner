@@ -33,24 +33,26 @@ logger = logging.getLogger(__name__)
 
 
 def route_from_orchestrator(state: GraphState) -> str:
-    """Route from orchestrator: parallel agents or direct to synthesize."""
+    """Route from orchestrator: parallel agents or direct to END."""
     if state.get("final_response"):
-        logger.info("🔀 [ROUTER] Orchestrator → Synthesize (has final_response)")
-        return "synthesize"
+        logger.info("🔀 [ROUTER] Orchestrator → END (has final_response)")
+        return END
 
     plan = state.get("orchestrator_plan", {})
     tasks = plan.get("tasks", [])
     intent = plan.get("intent", "greeting")
 
-    if intent in ("greeting", "information_query", "clarification_needed", "general_query") or not tasks:
-        logger.info("🔀 [ROUTER] Orchestrator → Synthesize (simple/general query)")
-        return "synthesize"
+    # return "synthesize" somewhere with someelse logic maybe
+
+    if intent in ("greeting", "clarification_needed", "general") or not tasks:
+        logger.info("🔀 [ROUTER] Orchestrator → END (simple/general query)")
+        return END
 
     logger.info(f"🔀 [ROUTER] Orchestrator → Phase 1 (tasks: {tasks})")
-    return "phase1"
+    return "parallel"
 
 
-async def phase1_parallel_node(state: GraphState) -> dict[str, Any]:
+async def parallel_node(state: GraphState) -> dict[str, Any]:
     """Phase 1: Flight + Attraction + Hotel agents run in parallel.
     All three receive Orchestrator context independently.
     """
@@ -61,12 +63,12 @@ async def phase1_parallel_node(state: GraphState) -> dict[str, Any]:
     tasks = plan.get("tasks", [])
 
     agents_to_run = {}
-    if "flight" in tasks and plan.get("flight"):
-        agents_to_run["flight"] = flight_agent_node
+    # if "flight" in tasks and plan.get("flight"):
+    #     agents_to_run["flight"] = flight_agent_node
+    # if "hotel" in tasks and plan.get("hotel"):
+    #     agents_to_run["hotel"] = hotel_agent_node
     if "attraction" in tasks and plan.get("attraction"):
         agents_to_run["attraction"] = attraction_agent_node
-    if "hotel" in tasks and plan.get("hotel"):
-        agents_to_run["hotel"] = hotel_agent_node
 
     if not agents_to_run:
         logger.info("   No Phase 1 agents to run")
@@ -95,7 +97,7 @@ async def phase1_parallel_node(state: GraphState) -> dict[str, Any]:
     return {
         "agent_outputs": merged_outputs,
         "messages": all_messages,
-        "current_agent": "phase1_complete",
+        "current_agent": "parallel_complete",
     }
 
 
@@ -107,27 +109,28 @@ def build_agent_graph() -> StateGraph:
 
     # Register nodes
     graph.add_node("orchestrator", orchestrator_node)
-    # graph.add_node("phase1_parallel", phase1_parallel_node)
+    graph.add_node("parallel", parallel_node)
     # graph.add_node("synthesize", synthesize_agent_node)
 
     # Entry
     graph.add_edge(START, "orchestrator")
 
     # Conditional routing from orchestrator
-    # graph.add_conditional_edges(
-    #     "orchestrator",
-    #     route_from_orchestrator,
-    #     {
-    #         "phase1": "phase1_parallel",
-    #         "synthesize": "synthesize",
-    #     },
-    # )
+    graph.add_conditional_edges(
+        "orchestrator",
+        route_from_orchestrator,
+        {
+            "parallel": "parallel",
+            # "synthesize": "synthesize",
+            END: END,
+        },
+    )
 
-    # # Phase 1 → Synthesize → END
+    # Phase 1 → Synthesize → END
     # graph.add_edge("phase1_parallel", "synthesize")
     # graph.add_edge("synthesize", END)
 
-    graph.add_edge("orchestrator", END)
+    graph.add_edge("parallel", END)
 
     # Compile
     memory = MemorySaver()

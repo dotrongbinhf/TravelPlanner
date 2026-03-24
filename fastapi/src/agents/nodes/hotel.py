@@ -4,92 +4,84 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from src.agents.state import GraphState
-from src.agents.nodes.utils import _extract_json, _run_agent_with_tools, llm_agent, llm_fast
+from src.agents.nodes.utils import _extract_json, _run_agent_with_tools, llm_agent
 from src.tools.dotnet_tools import search_hotels
-from src.tools.place_resolver import resolve_place
+from langchain_google_genai import ChatGoogleGenerativeAI
+from src.config import settings
 
 logger = logging.getLogger(__name__)
 
+llm_hotel = ChatGoogleGenerativeAI(
+    model="gemini-3.1-flash-lite-preview",
+    google_api_key=settings.GOOGLE_GEMINI_API_KEY,
+    temperature=0.5,
+    streaming=False,
+)
+
 HOTEL_AGENT_SYSTEM = """You are the Hotel Agent for a travel planning system.
 
-You search for hotels that match the user's requirements.
-You run AFTER the Attraction Agent, so you receive the actual attraction distribution to choose the best location.
+You find hotels using the search_hotels tool.
 
 ## Input
-You receive:
-1. The orchestrator's "hotel" section with: destination, dates, guests, budget, strategy, preferred_areas
-2. Attraction Agent results: a list of resolved attractions with their areas and coordinates
+You receive two pieces of context from the Orchestrator:
+1. **plan_context**: Shared trip info (destination, dates, passengers, budget, currency, mobility_plan)
+2. **hotel context**: Hotel-specific info (strategy: single_hotel or multi_hotel, segments with check_in/check_out/area hints, guests, budget preferences, hotel_class)
 
 ## Process
-1. Read the hotel context from orchestrator
-2. Analyze the attraction distribution — which areas have the most attractions?
-3. Choose the BEST area for the hotel based on:
-   - Where the MAJORITY of attractions are concentrated
-   - Practical accessibility to other areas
-   - The orchestrator's preferred_areas hint
-   - For multi_hotel: choose a different area per night segment near that night's attractions
-4. Call search_hotels with the best area
-5. Recommend top hotels
+1. Read both plan_context and hotel context carefully
+2. For EACH segment in the hotel context:
+   a. Build a search query targeting the segment's area/destination
+   b. Call search_hotels with the segment's check_in_date, check_out_date, guests, and any filters (hotel_class, max_price)
+   c. From the results, analyze all hotels considering: location, price, rating, reviews, nearby places, amenities, and user preferences
+   d. Choose the BEST hotel for that segment
+3. Return the final JSON
 
 ## Tool: search_hotels
 Key parameters:
-- query: Search text with area (e.g., "Hotels in Hoàn Kiếm, Hà Nội")
-- check_in_date: YYYY-MM-DD
-- check_out_date: YYYY-MM-DD
-- adults, children: Guest counts
-- children_ages: Ages of children, comma-separated (e.g. "5,8"). REQUIRED when children > 0.
-- hotel_class: Star filter ("3,4" or "4,5")
-- sort_by: 3=Lowest price, 8=Highest rating
+- query: Search text with area - one area per call only (e.g., "Hotel in Hoàn Kiếm, Hà Nội") (REQUIRED)
+- check_in_date: YYYY-MM-DD (REQUIRED)
+- check_out_date: YYYY-MM-DD (REQUIRED)
+- adults: Number of adult guests (REQUIRED)
+- children: TOTAL count of children + infants from plan_context (REQUIRED)
+- children_ages: Comma-separated ages for ALL children+infants (e.g. "1,5,8"). The count MUST match the children parameter. Use age 1 for infants whose exact age is unknown. REQUIRED when children > 0.
+- currency: Currency code (default "USD")
+- hotel_class: Star filter (list of stars comma separated like "3" or "3,4,5")
+- sort_by: 3=Lowest price, 8=Highest rating, 13=Most reviewed
 
 ## Response Format
-CRITICAL: Output ONLY a raw JSON object. No text before or after. No markdown fences. Just { ... }.
+CRITICAL: If your next step is to use a tool, return your response to call the tool. If you don't need to use tools anymore, your response must be one and ONLY one valid JSON object. No text before or after. Just the raw JSON starting with { and ending with }.
 
+EXAMPLE - FINAL OUTPUT STRUCTURE:
 {
-  "hotels_found": true,
-  "strategy": "single_hotel|multi_hotel",
-  "chosen_area": "Hoàn Kiếm",
-  "area_reasoning": "5 of 8 attractions are in Hoàn Kiếm, and Ba Đình is just 10 min away",
-  "recommendations": [
+  "segments": [
     {
-      "name": "Hotel Name",
-      "search_name": "Full hotel name + city (for place resolution)",
-      "area": "Hoàn Kiếm",
-      "check_in": "YYYY-MM-DD",
-      "check_out": "YYYY-MM-DD",
-      "nights": 3,
-      "price_per_night": 800000,
-      "total_price": 2400000,
-      "currency": "VND",
-      "rating": 4.5,
-      "stars": 4,
-      "amenities": ["WiFi", "Pool"],
-      "highlights": "Why this hotel is recommended"
+      "segment_name": "same as segment_name in hotel context",
+      "check_in": "2026-03-20",
+      "check_out": "2026-03-23",
+      "recommend_hotel_name": "Hanoi La Siesta Hotel & Spa",
+      "recommend_note": "The reason why you choose this hotel for this segment"
     }
-  ],
-  "search_summary": "Brief summary"
+  ]
 }
-
 
 ## Rules
 - Always call search_hotels — do NOT make up hotel data
-- Choose hotel area based on attraction distribution, NOT just geometric center
-- For multi_hotel: run separate searches per night segment
-- Include a mix of options matching the budget level
-- Use exact hotel names that exist on Google Maps
+- For multi_hotel (multiple segments): run separate searches per segment
+- Choose hotels based on the actual search results, prioritizing: rating, location, price-to-value ratio
+- Use the EXACT hotel name as it appears in the search results
+- Do NOT output your final JSON until ALL segments have been searched
 """
 
-
 async def hotel_agent_node(state: GraphState) -> dict[str, Any]:
-    """Hotel Agent — Searches hotels using attraction distribution data. Runs in Phase 2."""
+    """Hotel Agent — Searches hotels per segment. Runs in Phase 2."""
     logger.info("=" * 60)
     logger.info("🏨 [HOTEL_AGENT] Node entered (Phase 2)")
 
     plan = state.get("orchestrator_plan", {})
-    ctx = plan.get("hotel", {})
-    agent_outputs = state.get("agent_outputs", {})
-    attraction_data = agent_outputs.get("attraction_agent", {})
+    plan_context = plan.get("plan_context", {})
+    hotel_ctx = plan.get("hotel", {})
 
-    if not ctx:
+    if not hotel_ctx:
         logger.info("   No hotel context → skip")
         return {
             "current_agent": "hotel_agent",
@@ -97,77 +89,29 @@ async def hotel_agent_node(state: GraphState) -> dict[str, Any]:
             "messages": [AIMessage(content="[Hotel Agent] No hotel search needed")],
         }
 
-    destination = ctx.get("destination", "")
     hotel_result = {}
 
-    # Build attraction distribution summary for the LLM
-    area_distribution = attraction_data.get("area_distribution", {})
-    attractions_summary = []
-    for attr in attraction_data.get("attractions", []):
-        summary = {
-            "name": attr.get("name"),
-            "day": attr.get("suggested_day"),
-            "area": attr.get("area"),
-        }
-        loc = attr.get("location", {})
-        if loc and loc.get("coordinates"):
-            summary["coordinates"] = loc["coordinates"]
-        attractions_summary.append(summary)
-
     try:
+        human_content = f"""Plan context (shared trip info):
+{json.dumps(plan_context, indent=2, ensure_ascii=False)}
+
+Hotel-specific context:
+{json.dumps(hotel_ctx, indent=2, ensure_ascii=False)}
+
+Search for hotels based on this context. Use the plan_context for dates, passengers, and budget info. Use the hotel context for segments, area hints, guests, and preferences."""
+
         llm_messages = [
             SystemMessage(content=HOTEL_AGENT_SYSTEM),
-            HumanMessage(content=f"""
-Orchestrator's hotel context:
-{json.dumps(ctx, indent=2, ensure_ascii=False)}
-
-Attraction distribution across days:
-{json.dumps(area_distribution, indent=2, ensure_ascii=False)}
-
-All resolved attractions with areas and coordinates:
-{json.dumps(attractions_summary, indent=2, ensure_ascii=False)[:3000]}
-
-Based on the attraction distribution, choose the BEST area for the hotel and search for options.
-"""),
+            HumanMessage(content=human_content),
         ]
 
-        result = await _run_agent_with_tools(
-            llm=llm_agent, messages=llm_messages,
-            tools=[search_hotels], max_iterations=3,
+        result, tool_logs = await _run_agent_with_tools(
+            llm=llm_hotel, messages=llm_messages,
+            tools=[search_hotels], max_iterations=5,
             agent_name="HOTEL_AGENT",
         )
         hotel_result = _extract_json(result.content)
-
-        # Resolve hotel places
-        recommendations = hotel_result.get("recommendations", [])
-        location_bias = None
-        if destination:
-            try:
-                coord_msg = [
-                    SystemMessage(content='Return ONLY JSON: {"lat": 0.0, "lng": 0.0}'),
-                    HumanMessage(content=f"Coordinates of {destination}?"),
-                ]
-                coord_res = await llm_fast.ainvoke(coord_msg)
-                coords = _extract_json(coord_res.content)
-                location_bias = f"{coords['lat']},{coords['lng']}"
-            except Exception:
-                pass
-
-        for hotel in recommendations:
-            search_name = hotel.get("search_name", hotel.get("name", ""))
-            if search_name:
-                resolved = await resolve_place(
-                    place_name=search_name,
-                    location_bias=location_bias,
-                )
-                hotel["resolved_place"] = resolved
-                if resolved.get("resolved"):
-                    hotel["place_id"] = resolved.get("placeId", "")
-                    hotel["db_id"] = resolved.get("id", "")
-                    hotel["location"] = resolved.get("location", {})
-
-        hotel_result["resolved_count"] = sum(1 for h in recommendations if h.get("place_id"))
-        logger.info(f"   Found {len(recommendations)} hotels, resolved {hotel_result['resolved_count']}")
+        hotel_result["tools"] = tool_logs
 
     except Exception as e:
         logger.error(f"   ❌ Hotel Agent error: {e}", exc_info=True)
@@ -180,7 +124,5 @@ Based on the attraction distribution, choose the BEST area for the hotel and sea
         "current_agent": "hotel_agent",
         "current_tool": "search_hotels",
         "agent_outputs": {"hotel_agent": hotel_result},
-        "messages": [AIMessage(content=f"[Hotel Agent] {hotel_result.get('search_summary', 'Hotel search completed')}")],
+        "messages": [AIMessage(content=f"[Hotel Agent] Hotel search completed")],
     }
-
-

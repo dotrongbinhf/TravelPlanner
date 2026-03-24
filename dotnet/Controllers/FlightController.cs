@@ -30,7 +30,23 @@ namespace dotnet.Controllers
                 return BadRequest(response.Error);
             }
 
-            return Ok(response);
+            // Trim flights when NOT using departure_token (initial outbound search)
+            if (string.IsNullOrEmpty(request.DepartureToken))
+            {
+                if (response.BestFlights?.Count > 3)
+                    response.BestFlights = response.BestFlights.Take(3).ToList();
+                if (response.OtherFlights?.Count > 3)
+                    response.OtherFlights = response.OtherFlights.Take(3).ToList();
+            }
+
+            // Build trimmed response with google_flights_url
+            return Ok(new
+            {
+                response.BestFlights,
+                response.OtherFlights,
+                response.Airports,
+                GoogleFlightsUrl = response.GoogleFlightsUrl,
+            });
         }
 
         [HttpGet("airports")]

@@ -139,8 +139,16 @@ namespace dotnet.Services
             }
 
             var content = await response.Content.ReadAsStringAsync();
-            return JsonSerializer.Deserialize<FlightSearchResponseDto>(content, _snakeCaseOptions)
-                   ?? new FlightSearchResponseDto();
+            var result = JsonSerializer.Deserialize<FlightSearchResponseDto>(content, _snakeCaseOptions)
+                         ?? new FlightSearchResponseDto();
+
+            // Extract google_flights_url from search_metadata
+            if (result.SearchMetadata?.GoogleFlightsUrl != null)
+            {
+                result.GoogleFlightsUrl = result.SearchMetadata.GoogleFlightsUrl;
+            }
+
+            return result;
         }
 
         // ======================== AIRPORT (AeroDataBox / RapidAPI) ========================
