@@ -1,5 +1,7 @@
 export class TokenStorage {
   static setAccessToken(token: string): void {
+    if (typeof window === "undefined") return;
+
     try {
       localStorage.setItem("accessToken", token);
     } catch (error) {
@@ -8,6 +10,8 @@ export class TokenStorage {
   }
 
   static getAccessToken(): string | null {
+    if (typeof window === "undefined") return null;
+
     try {
       return localStorage.getItem("accessToken");
     } catch (error) {
@@ -17,6 +21,8 @@ export class TokenStorage {
   }
 
   static removeAccessToken(): void {
+    if (typeof window === "undefined") return;
+
     try {
       localStorage.removeItem("accessToken");
     } catch (error) {
