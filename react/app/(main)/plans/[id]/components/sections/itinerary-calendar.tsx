@@ -65,25 +65,26 @@ export default function ItineraryCalendar({
 
   // Save/restore scroll position to prevent jumping on event updates
   const saveScrollPosition = useCallback(() => {
-    const scroller = calendarRef.current
-      ?.getApi()
-      .el.querySelector(".fc-scroller-liquid-absolute");
-    if (scroller) {
-      savedScrollTopRef.current = scroller.scrollTop;
-    }
+    // const scroller = calendarRef.current
+    //   ?.getApi()
+    //   .el.querySelector(".fc-scroller-liquid-absolute");
+    // if (scroller) {
+    //   savedScrollTopRef.current = scroller.scrollTop;
+    //   console.log("Saved scroll position:", savedScrollTopRef.current);
+    // }
   }, []);
 
-  useLayoutEffect(() => {
-    if (savedScrollTopRef.current !== null) {
-      const scroller = calendarRef.current
-        ?.getApi()
-        .el.querySelector(".fc-scroller-liquid-absolute");
-      if (scroller) {
-        scroller.scrollTop = savedScrollTopRef.current;
-      }
-      savedScrollTopRef.current = null;
-    }
-  });
+  // useLayoutEffect(() => {
+  //   if (savedScrollTopRef.current !== null) {
+  //     const scroller = calendarRef.current
+  //       ?.getApi()
+  //       .el.querySelector(".fc-scroller-liquid-absolute");
+  //     if (scroller) {
+  //       scroller.scrollTop = savedScrollTopRef.current;
+  //     }
+  //     savedScrollTopRef.current = null;
+  //   }
+  // });
 
   // --- State ---
   const [activeCalendarItemId, setActiveCalendarItemId] = useState<
@@ -281,7 +282,7 @@ export default function ItineraryCalendar({
           duration: newDuration,
         },
       );
-      saveScrollPosition();
+      // saveScrollPosition();
       onUpdateItem(response);
       toast.success("Updated schedule");
     } catch (error) {
@@ -314,7 +315,7 @@ export default function ItineraryCalendar({
           duration: newDuration,
         },
       );
-      saveScrollPosition();
+      // saveScrollPosition();
       onUpdateItem(response);
       toast.success("Updated time");
     } catch (error) {
@@ -353,7 +354,7 @@ export default function ItineraryCalendar({
         startTime: calendarAddingTime.start,
         duration: calendarAddingTime.duration,
       });
-      saveScrollPosition();
+      // saveScrollPosition();
 
       const dayIndex = itineraryDays.findIndex(
         (d) => d.id === calendarAddingDayId,
@@ -424,7 +425,7 @@ export default function ItineraryCalendar({
         startTime: calendarEditingItem.startTime,
         duration: calendarEditingItem.duration,
       });
-      saveScrollPosition();
+      // saveScrollPosition();
       onUpdateItem(response);
       toast.success("Updated item");
       setCalendarEditingItem(null);
@@ -438,7 +439,7 @@ export default function ItineraryCalendar({
     if (!calendarDeletingItem) return;
     try {
       await deleteItineraryItem(calendarDeletingItem.id);
-      saveScrollPosition();
+      // saveScrollPosition();
       onDeleteItem(
         calendarDeletingItem.id,
         calendarDeletingItem.itineraryDayId,
