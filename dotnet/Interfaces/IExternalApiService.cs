@@ -1,4 +1,5 @@
 using dotnet.Dtos.ExternalApi;
+using dotnet.Entites;
 
 namespace dotnet.Interfaces
 {
@@ -8,5 +9,6 @@ namespace dotnet.Interfaces
         Task<FlightSearchResponseDto> GetFlightsAsync(FlightSearchRequestDto request);
         Task<AirportSearchResponseDto> SearchAirportsAsync(AirportSearchByLocationRequestDto request);
         Task<WeatherResponseDto> GetDailyForecastAsync(WeatherRequestDto request);
+        Task<Place?> GetPlaceDetailsAsync(string placeId);
     }
 }

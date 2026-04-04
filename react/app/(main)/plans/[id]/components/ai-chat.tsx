@@ -44,12 +44,15 @@ import { Conversation, MessageRole } from "@/api/aiChat/types";
 import { useParams } from "next/navigation";
 import toast from "react-hot-toast";
 import { useAgentStream } from "@/hooks/useAgentStream";
+import { applyAIPlan } from "@/api/plan/plan";
+import { Plan } from "@/types/plan";
 
 interface AIChatProps {
   readonly planName: string;
   readonly planStartDate?: Date;
   readonly planEndDate?: Date;
   readonly onClose: () => void;
+  readonly onPlanUpdated?: (plan: Plan) => void;
 }
 
 export default function AIChat({
@@ -57,6 +60,7 @@ export default function AIChat({
   planStartDate,
   planEndDate,
   onClose,
+  onPlanUpdated,
 }: AIChatProps) {
   const { id: planId } = useParams() as { id: string };
 
@@ -448,8 +452,35 @@ export default function AIChat({
           streamingContent={
             isStreaming ? streamState.streamedContent : undefined
           }
-          currentAgent={isStreaming ? streamState.currentAgent : undefined}
+          activeAgents={isStreaming ? streamState.activeAgents : undefined}
+          completedAgents={isStreaming ? streamState.completedAgents : undefined}
           isStreaming={isStreaming}
+          structuredData={streamState.structuredData}
+          onApplyPlan={async (mode) => {
+            const applyData = (streamState.structuredData as any)?.apply_data;
+            if (!applyData) {
+              toast.error("No plan data available to apply");
+              return;
+            }
+            try {
+              const requestBody = {
+                mode: mode === "CurrentPlan" ? 0 : 1,
+                ...applyData,
+              };
+              const updatedPlan = await applyAIPlan(planId, requestBody);
+              toast.success(
+                mode === "CurrentPlan"
+                  ? "Plan updated successfully!"
+                  : "New plan created successfully!"
+              );
+              if (onPlanUpdated) {
+                onPlanUpdated(updatedPlan);
+              }
+            } catch (error) {
+              toast.error("Failed to apply plan. Please try again.");
+              throw error; // Re-throw so ChatMessages can track failure
+            }
+          }}
         />
       ) : (
         <WelcomeScreen />

@@ -6,9 +6,10 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from src.agents.state import GraphState
 from src.agents.nodes.utils import _extract_json, _get_latest_user_message, _get_conversation_context
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from src.config import settings
 
-from src.agents.nodes.orchestratorMock import Orchestrator_Mock, Orchestrator_Mock_HG
+# from src.agents.nodes.orchestratorMock import Orchestrator_Mock, Orchestrator_Mock_HG
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ When: Attractions are spread far apart along a route (e.g., Hà Giang loop, coas
 
 ## Response Format
 
-CRITICAL: Whatever user request is, Your response must be one and ONLY one valid JSON object. No text before or after. Just the raw JSON starting with { and ending with }.
+CRITICAL: Your response must be one and ONLY one valid JSON object. No text before or after. Just the raw JSON starting with { and ending with }.
 EXAMPLE JSON - OUTPUT STRUCTURE:
 {
   "intent": "plan_creation | plan_modification | greeting | clarification_needed | general",
@@ -64,18 +65,16 @@ EXAMPLE JSON - OUTPUT STRUCTURE:
     "travel_by": "flight | car | train | coach | motobike | taxi",
     "mobility_plan": {
       "plan": "Take overnight coach from Hanoi at 22:00, arrive Ha Giang around 05:00. Rest at hotel until 07:00 then start exploring. Other days explore full day along the route. Last day depart Ha Giang at 14:00, arrive Hanoi around 21:00.",
-      "midday_rest_days": [0], # If you think it is needed or user requests
-      "souvenir_shopping": false, # See souvenir_shopping rules below
+      "midday_rest_days": [0],
+      "souvenir_shopping": false,
       "transport_hubs": {
         "outbound_departure": "My Dinh Bus Station, Hanoi",
         "outbound_arrival": "Ha Giang Bus Station",
         "return_departure": "Ha Giang Bus Station",
         "return_arrival": "My Dinh Bus Station, Hanoi",
-        "outbound_departure_time": "22:00 -1",
         "outbound_arrival_time": "05:00",
         "outbound_ready_time": "07:00",
-        "return_departure_time": "14:00",
-        "return_arrival_time": "21:00"
+        "return_departure_time": "14:00"
       }
     },
     "destination": "Hanoi",
@@ -90,7 +89,8 @@ EXAMPLE JSON - OUTPUT STRUCTURE:
     "interest": "history, culture",
     "pace": "relaxed | moderate | packed",
     "budget_level": "budget | moderate | luxury",
-    "currency": "VND",
+    "currency": "USD", # base on languages of user request
+    "language": "en", # base on languages of user request
     "geographic_type": "centralized | centralized_with_outlier | road_trip",
   },
 
@@ -99,12 +99,12 @@ EXAMPLE JSON - OUTPUT STRUCTURE:
       "segments": [
         {
           "segment_name": "Central Hanoi",
-          "days": [1, 2, 4],
+          "days": [0, 1, 3],
           "area_description": "Central Hanoi districts and nearby",
         },
         {
           "segment_name": "Ba Vì excursion",
-          "days": [3],
+          "days": [2],
           "area_description": "Ba Vì district, ~60km west of Hanoi center",
         }
       ],
@@ -123,8 +123,8 @@ EXAMPLE JSON - OUTPUT STRUCTURE:
       "infants_in_seat": 0,
       "infants_on_lap": 0,
       "user_flight_preferences": {
-        "type": "round_trip | one_way", # default "one_way"
-        "directions": "both | outbound_only | return_only", # default "both"
+        "type": "round_trip | one_way",
+        "directions": "both | outbound_only | return_only",
         "travel_class": "economy | premium_economy | business | first",
         "max_price": 2000000,
         "outbound_times": "arrive 8:00 AM - 10:00 AM at destination",
@@ -168,7 +168,7 @@ EXAMPLE JSON - OUTPUT STRUCTURE:
 }
 
 ## Rules
-- CRITICAL: Whatever user request is, Your response must be one and ONLY one valid JSON object. No text before or after. Just the raw JSON starting with { and ending with }.
+- CRITICAL: Your response must be one and ONLY one valid JSON object. No text before or after. Just the raw JSON starting with { and ending with }.
 - If user sends a greeting or simple question: set intent="greeting", provide a warm "direct_response", set "tasks" to null.
 - If user asks a GENERAL question (translate, summarize, explain, etc.): set intent="general", provide the answer in "direct_response", set "tasks" to null.
 - If critical info is genuinely missing or you don't understand the user request: set intent="clarification_needed", provide the question in "direct_response", set "tasks" to null.
@@ -187,42 +187,42 @@ EXAMPLE JSON - OUTPUT STRUCTURE:
 - For CENTRALIZED_WITH_OUTLIER: multiple segments. hotel_segments has entries per overnight area.
 - For ROAD_TRIP: segments follow the route order. hotel_segments has 1 entry per night stop.
 
+- Important: Fields that are not specified by the user should EXPLICITLY appear in the JSON with value null. Do NOT omit them. Do NOT replace them with guessed values.
+
 - mobility_plan: An object with the following fields:
   - plan: Comprehensive single paragraph describing full arrival-to-departure logistics. Consider: how they arrive (flight/car/train), what they do upon arrival (drop luggage? explore?), daily rhythm (full day or midday rest?), departure day (checkout, last activities, airport/station). Factor in travel_by, pace, children/infants.
-  - midday_rest_days: Array of 0-indexed day numbers where midday hotel rest is recommended (e.g., [0] for arrival day with young kids). null if not needed.
-  - souvenir_shopping: true/false/null. When true, souvenir shopping will be scheduled as an activity on the last day of the itinerary.
+  - midday_rest_days: Array of 0-indexed day numbers where midday hotel rest is recommended (e.g., [0] for arrival day with young kids, arrival early in the morning). null if not needed.
+  - souvenir_shopping: true/false/null. When true, the Itinerary Agent may incorporate souvenir shopping near one of the scheduled attractions on the last day, rather than creating a separate stop.
     - Set true if user explicitly mentions buying souvenirs/gifts, OR the trip is a leisure/family trip to a city destination with enough free time on the last day.
     - Set false for ROAD_TRIP geographic type — travelers typically buy souvenirs at each tourist stop along the route rather than dedicating separate time.
     - Set false when the pace is "packed" or the last day has very tight logistics (e.g., early morning departure).
     - Set null if not applicable or uncertain.
-  - transport_hubs: REQUIRED when travel_by is NOT "flight". null when travel_by is "flight" (flight agent handles airports). An object with:
+  - transport_hubs: REQUIRED when travel_by is NOT "flight". null when travel_by is "flight" (flight agent handles airports — the Itinerary Agent will use flight agent results for arrival/departure times). An object with:
     - outbound_departure: Name of the departure hub in the origin city (e.g., bus station, train station, or city center if generic). Must be a real, searchable place name.
     - outbound_arrival: Name of the arrival hub at the destination.
     - return_departure: Name of the departure hub for the return journey (usually same as outbound_arrival).
     - return_arrival: Name of the arrival hub back at the origin (usually same as outbound_departure).
-    - outbound_departure_time: Time of departure from origin. Use "-1" suffix if departing the night before start_date (e.g., "22:00 -1" = depart 22:00 the night before).
-    - outbound_arrival_time: Time of physical arrival at destination.
+    - outbound_arrival_time: Time of physical arrival at destination (e.g., "05:00").
     - outbound_ready_time: Time the traveler can actually START exploring — after resting, freshening up, getting vehicle, etc. Must be realistic: overnight coach arriving 05:00 → ready ~07:00, NOT 05:30. Morning train arriving 10:00 → ready ~10:15.
-    - return_departure_time: Time to leave the destination for the return journey.
-    - return_arrival_time: Time of arrival back at origin city. Use "+1" suffix if arriving the day after end_date (e.g., "05:00 +1" = arrive 05:00 next morning).
+    - return_departure_time: Time to leave the destination for the return journey (e.g., "14:00"). The Itinerary Agent will use this as the hard deadline for the last day.
     - Examples by travel_by:
       - coach: "My Dinh Bus Station, Hanoi" → "Ha Giang Bus Station"
       - train: "Hanoi Railway Station" → "Da Nang Railway Station"
       - car/motorbike/taxi: Use city center names, e.g., "Hanoi" → "Ha Giang city"
-  
-- Important: Fields that are not specified by the user should EXPLICITLY appear in the JSON with value null. Do NOT omit them. Do NOT replace them with guessed values.
 
-## Flight Time Preferences
+## Flight Time Preferences — AUTO-GENERATE
 - You MUST provide `outbound_times` and `return_times` in user_flight_preferences. The Flight Agent will convert to API format and automatically widen if no flights found.
-- **outbound_times**: Express desired ARRIVAL TIME at the destination. This determines when travelers can start their trip.
-  - Example: "arrive 7:00 AM - 10:00 AM at destination"
+- **outbound_times**: Express desired ARRIVAL TIME at the destination. This is the most important factor — it determines when travelers can start their trip.
+  - Example: "arrive 8:00 AM - 10:00 AM at destination" — arrive in the morning, have the full day
   - Always format as: "arrive [start] - [end] at destination"
 - **return_times**: Express desired DEPARTURE TIME from the destination. This determines when travelers must end their last day.
-  - Example: "depart 3:00 PM - 7:00 PM from destination"
+  - Example: "depart 3:00 PM - 7:00 PM from destination" — enjoy the last day before flying back
   - Always format as: "depart [start] - [end] from destination"
-- If the user didn't specify, generate REASONABLE defaults based on the mobility_plan (pace, children, last-day activities).
+- If the user didn't specify, generate REASONABLE defaults based on the mobility_plan:
+  - Outbound arrival: consider pace, children, and how much of Day 1 should be usable
+  - Return departure: consider last-day activities, checkout time, and airport transit (~1.5-2h before flight)
 - Provide your IDEAL narrow window — the Flight Agent will handle widening if needed.
-- When type is "one_way": provide BOTH outbound_times and return_times.
+- When type is "one_way": provide BOTH outbound_times and return_times. The Flight Agent searches twice.
 
 ## Flight Directions Rules
 - **directions** determines which flights to search: "both" (default), "outbound_only", or "return_only"
@@ -232,14 +232,13 @@ EXAMPLE JSON - OUTPUT STRUCTURE:
 - When directions is "both": provide BOTH outbound_times and return_times
 - When directions is "outbound_only": provide only outbound_times (return_times = null)
 - When directions is "return_only": provide only return_times (outbound_times = null)
-
-- The EXAMPLE JSON above shows a centralized_with_outlier case. Adapt the segments based on actual geographic analysis and user's preferences.
 """
 
-async def orchestrator_node(state: GraphState) -> dict[str, Any]:
-    """Orchestrator — Parses user request into structured per-agent JSON sections."""
+async def orchestrator_nonVRP_node(state: GraphState) -> dict[str, Any]:
+    """Orchestrator (nonVRP) — Parses user request into structured per-agent JSON sections.
+    Uses transport_hubs for non-flight travel, null for flight (flight agent provides airports)."""
     logger.info("=" * 60)
-    logger.info("🧠 [ORCHESTRATOR] Node entered")
+    logger.info("🧠 [ORCHESTRATOR_nonVRP] Node entered")
 
     user_message = _get_latest_user_message(state)
     user_context = state.get("user_context", {})
@@ -255,7 +254,7 @@ async def orchestrator_node(state: GraphState) -> dict[str, Any]:
 
         result = await llm_orchestrator.ainvoke(llm_messages)
         output = _extract_json(result.content)
-        # output = _extract_json(Orchestrator_Mock)
+        # output = _extract_json(ORCHESTRATOR_MOCK)
 
         intent = output.get("intent", "greeting")
         direct_response = output.get("direct_response")
@@ -271,20 +270,6 @@ async def orchestrator_node(state: GraphState) -> dict[str, Any]:
                 "agent_outputs": {"orchestrator": {"intent": intent, "response": direct_response}},
                 "messages": [AIMessage(content=direct_response)],
             }
-
-        # Fallback if no direct_response but intent is non-plan
-        # if intent == "greeting" or not tasks:
-        #     logger.info("   👋 Greeting Fallback (no direct_response from LLM)")
-        #     greeting = "Hello! I'm your travel planning assistant. How can I help you plan your trip today?"
-        #     return {
-        #        #        #         "pending_tasks": [],
-        #         "completed_tasks": [],
-        #         "user_context": user_context,
-        #         "orchestrator_plan": {"intent": intent, "tasks": []},
-        #         "final_response": greeting,
-        #         "agent_outputs": {"orchestrator": {"intent": intent}},
-        #         "messages": [AIMessage(content=greeting)],
-        #     }
 
         # Extract plan context and per-agent task sections
         plan_context = output.get("plan_context", {})
@@ -308,7 +293,6 @@ async def orchestrator_node(state: GraphState) -> dict[str, Any]:
 
         logger.info(f"   Intent: {intent}, Tasks: {task_list}")
 
-        # Plan creation — build orchestrator_plan with plan_context + per-agent sections
         orchestrator_plan = {
             "intent": intent,
             "tasks": task_list,
@@ -341,5 +325,3 @@ async def orchestrator_node(state: GraphState) -> dict[str, Any]:
             "messages": [AIMessage(content="I'm sorry, I encountered an error. Could you try rephrasing your request?")],
             "final_response": "I'm sorry, I encountered an error. Could you try rephrasing your request?",
         }
-
-

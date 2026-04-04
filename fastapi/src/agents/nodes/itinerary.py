@@ -2,176 +2,193 @@ import json
 import logging
 from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from src.agents.state import GraphState
-from src.agents.nodes.utils import _extract_json, _run_agent_with_tools, llm_agent
-from src.tools.maps_tools import get_distance_matrix
-from src.tools.itinerary_tools import optimize_daily_itinerary
+from src.services.itinerary_builder import run_itinerary_pipeline
+from src.agents.nodes.utils import _extract_json
+from src.config import settings
+
+llm_itinerary = ChatGoogleGenerativeAI(
+    model="gemini-3.1-flash-lite-preview",
+    google_api_key=settings.GOOGLE_GEMINI_API_KEY,
+    temperature=0.5,
+    streaming=False,
+)
 
 logger = logging.getLogger(__name__)
 
-ITINERARY_AGENT_SYSTEM = """You are the Itinerary Agent for a travel planning system.
 
-You create optimized daily schedules from all gathered places.
+POST_VRP_REVIEW_SYSTEM = """You are the Itinerary Review Agent. You receive a VRP-optimized multi-day travel schedule and review it for quality.
 
-## Input
-You receive outputs from all previous agents:
-- Attractions with locations, suggested days, durations
-- Restaurants with locations, meal types, suggested days
-- Hotels with location
-- Flights with times (for arrival/departure day scheduling)
+## Your Input
+- The VRP result JSON with days, stops, timing, and dropped locations
+- The plan_context with trip info (travelers, pace, children, etc.)
+- The mobility_plan describing arrival/departure logistics
 
-## Process
-1. For each day, collect all places (attractions, restaurants, hotel)
-2. If places have coordinates, call get_distance_matrix for travel times
-3. Set time windows for each place
-4. Call optimize_daily_itinerary (VRP solver) to find the optimal visit order
-5. If VRP fails, create a reasonable manual schedule
+## Your Task
+Analyze the schedule and output a JSON with your assessment and any adjustments.
 
-## Tools
-
-### get_distance_matrix
-- origins: List of "lat,lng" strings
-- destinations: List of "lat,lng" strings
-- mode: "driving" (default)
-
-### optimize_daily_itinerary
-- locations: List of {name, type} dicts
-- time_matrix: N×N matrix in minutes
-- time_windows: List of (earliest, latest) minutes since midnight
-- service_times: Duration in minutes
-- start_index, end_index: Start/end location indices
-
-## Time Window Guidelines (minutes since midnight)
-- Morning: (480, 720) = 08:00-12:00
-- Lunch: (660, 840) = 11:00-14:00
-- Afternoon: (720, 1080) = 12:00-18:00
-- Dinner: (1080, 1260) = 18:00-21:00
-- Evening: (1140, 1380) = 19:00-23:00
-- Hotel/flexible: (0, 1440)
+## What to Check
+1. **Long waits (> 60 min)**: If a stop has wait > 60 min before it, suggest extending the previous attraction's visit time or adding a note (e.g., "free time for coffee/strolling nearby")
+2. **Dropped must-visit places**: If any must_visit attraction was dropped, flag as critical issue
+3. **Schedule flow**: Does the order feel natural? (e.g., not visiting a morning market in the afternoon)
+4. **Last day logistics**: Is there enough time for checkout + activities + getting to airport?
 
 ## Response Format
-CRITICAL: Output ONLY a raw JSON object. No text before or after. No markdown fences. Just { ... }.
+CRITICAL: Your response must be one and ONLY one valid JSON object.
 
 {
-  "daily_schedules": [
-    {
-      "day": 1,
-      "date": "YYYY-MM-DD",
-      "schedule": [
+    "quality": "good | needs_adjustment",
+    "adjustments": [
         {
-          "time": "08:00",
-          "duration_minutes": 60,
-          "place_name": "...",
-          "place_type": "attraction|restaurant|hotel|airport",
-          "place_id": "google_place_id_if_available",
-          "travel_to_next_minutes": 15,
-          "notes": "optional"
+            "day": 1,
+            "type": "extend_duration | add_note | flag_dropped",
+            "stop_name": "...",
+            "detail": "Extend visit by 30 min to reduce 90-min wait before dinner"
         }
-      ]
-    }
-  ]
+    ],
+    "rerun_vrp": false,
+    "notes": "Overall the schedule looks balanced for a relaxed family trip."
 }
 
-
 ## Rules
-- RESPECT the suggested_day assignments — do NOT move places between days
-- Hotel is typically start and end of each day
-- Arrival day: airport → hotel → light activities
-- Departure day: hotel → activities → airport
-- Fit meals at appropriate times (breakfast 7-9, lunch 11-14, dinner 18-21)
+- rerun_vrp should be true ONLY if a must_visit was dropped or if the schedule is fundamentally broken
+- For minor wait issues, just add notes/adjustments — do NOT rerun
+- Keep adjustments practical and traveler-friendly
+- Be concise
 """
 
 
+async def _llm_review_vrp(
+    vrp_result: dict[str, Any],
+    plan_context: dict[str, Any],
+) -> dict[str, Any]:
+    """Post-VRP LLM review: analyze schedule quality and suggest adjustments."""
+    try:
+        # Build a compact summary for LLM
+        summary_lines = []
+        for day_data in vrp_result.get("days", []):
+            day_stops = []
+            for stop in day_data.get("stops", []):
+                info = f"{stop['arrival']} {stop['name']} ({stop['duration']}p)"
+                if stop.get("wait", 0) > 0:
+                    info += f" [WAIT {stop['wait']}p]"
+                day_stops.append(info)
+            summary_lines.append(f"Day {day_data['day']}: {' → '.join(day_stops)}")
+
+        dropped_info = vrp_result.get("dropped", [])
+
+        human_content = f"""VRP Schedule Result:
+{chr(10).join(summary_lines)}
+
+Dropped locations: {json.dumps(dropped_info, ensure_ascii=False) if dropped_info else "None"}
+
+Plan context:
+- Pace: {plan_context.get('pace', 'moderate')}
+- Travelers: {plan_context.get('adults', 2)} adults, {plan_context.get('children', 0)} children
+- Mobility plan: {plan_context.get('mobility_plan', 'N/A')}
+
+Please review this schedule and provide your assessment."""
+
+        messages = [
+            SystemMessage(content=POST_VRP_REVIEW_SYSTEM),
+            HumanMessage(content=human_content),
+        ]
+
+        result = await llm_itinerary.ainvoke(messages)
+        review = _extract_json(result.content)
+
+        logger.info(f"   [ITINERARY_REVIEW] Quality: {review.get('quality')}, "
+                     f"Adjustments: {len(review.get('adjustments', []))}, "
+                     f"Rerun: {review.get('rerun_vrp', False)}")
+        return review
+
+    except Exception as e:
+        logger.error(f"   [ITINERARY_REVIEW] Error: {e}", exc_info=True)
+        return {"quality": "good", "adjustments": [], "rerun_vrp": False, "notes": f"Review skipped: {e}"}
+
+
+def _apply_adjustments(vrp_result: dict, review: dict) -> dict:
+    """Apply LLM review adjustments to the VRP result (notes, duration extensions)."""
+    adjustments = review.get("adjustments", [])
+    if not adjustments:
+        return vrp_result
+
+    for adj in adjustments:
+        day_num = adj.get("day")
+        stop_name = adj.get("stop_name", "")
+        adj_type = adj.get("type", "")
+        detail = adj.get("detail", "")
+
+        if not day_num:
+            continue
+
+        # Find the matching day
+        for day_data in vrp_result.get("days", []):
+            if day_data["day"] != day_num:
+                continue
+
+            for stop in day_data.get("stops", []):
+                if stop_name and stop_name.lower() not in stop.get("name", "").lower():
+                    continue
+
+                if adj_type == "add_note":
+                    stop["note"] = detail
+                elif adj_type == "extend_duration":
+                    stop["note"] = detail
+                elif adj_type == "flag_dropped":
+                    pass  # Already in dropped list
+
+    vrp_result["review_notes"] = review.get("notes", "")
+    return vrp_result
+
+
 async def itinerary_agent_node(state: GraphState) -> dict[str, Any]:
-    """Itinerary Agent — VRP-optimized daily schedules using all agent data."""
+    """Itinerary Agent — Builds VRP input, solves, and reviews the schedule.
+    
+    2-Phase Flow:
+        Phase 1: run_itinerary_pipeline() → Extract places → Resolve → Build VRP → Solve
+        Phase 2: LLM review → Apply adjustments (or re-run VRP if critical)
+    """
     logger.info("=" * 60)
-    logger.info("📅 [ITINERARY_AGENT] Node entered (Phase 3)")
+    logger.info("📅 [ITINERARY_AGENT] Node entered")
 
     agent_outputs = state.get("agent_outputs", {})
     plan = state.get("orchestrator_plan", {})
-    attraction_ctx = plan.get("attraction", {})
-    num_days = attraction_ctx.get("num_days", 3)
-    start_date = attraction_ctx.get("start_date", "")
+    plan_context = plan.get("plan_context", {})
 
-    attraction_data = agent_outputs.get("attraction_agent", {})
-    restaurant_data = agent_outputs.get("restaurant_agent", {})
-    hotel_data = agent_outputs.get("hotel_agent", {})
-    flight_data = agent_outputs.get("flight_agent", {})
-
-    all_attractions = attraction_data.get("attractions", [])
-    all_restaurants = restaurant_data.get("restaurants", [])
-
-    itinerary_result = {"daily_schedules": []}
+    itinerary_result = {}
 
     try:
-        # Build compact summaries
-        attraction_summaries = [{
-            "name": a.get("name"),
-            "category": a.get("category"),
-            "duration": a.get("suggested_duration_minutes", 60),
-            "time_pref": a.get("suggested_time_window", "flexible"),
-            "suggested_day": a.get("suggested_day"),
-            "area": a.get("area", ""),
-            "coordinates": a.get("location", {}).get("coordinates") if a.get("location") else None,
-        } for a in all_attractions]
+        # Phase 1: Build & Solve VRP
+        logger.info("📅 [ITINERARY_AGENT] Phase 1: Building and solving VRP...")
+        itinerary_result = await run_itinerary_pipeline(agent_outputs, plan)
 
-        restaurant_summaries = [{
-            "name": r.get("name"),
-            "meal_type": r.get("meal_type"),
-            "suggested_day": r.get("suggested_day"),
-            "area": r.get("area", ""),
-            "coordinates": r.get("location", {}).get("coordinates") if r.get("location") else None,
-        } for r in all_restaurants]
+        # Phase 2: LLM Review (only if VRP succeeded)
+        # if not itinerary_result.get("error") and itinerary_result.get("days"):
+        #     logger.info("📅 [ITINERARY_AGENT] Phase 2: LLM review...")
+        #     review = await _llm_review_vrp(itinerary_result, plan_context)
 
-        hotel_summary = {}
-        recs = hotel_data.get("recommendations", [])
-        if recs:
-            h = recs[0]
-            hotel_summary = {
-                "name": h.get("name"),
-                "area": h.get("area", ""),
-                "coordinates": h.get("location", {}).get("coordinates") if h.get("location") else None,
-            }
+        #     if review.get("rerun_vrp"):
+        #         # Critical issue found — re-run VRP (same input, solver may find different solution with more time)
+        #         logger.info("📅 [ITINERARY_AGENT] Rerunning VRP (critical review issue)...")
+        #         itinerary_result = await run_itinerary_pipeline(agent_outputs, plan)
 
-        llm_messages = [
-            SystemMessage(content=ITINERARY_AGENT_SYSTEM),
-            HumanMessage(content=f"""
-Create optimized daily schedules for a {num_days}-day trip starting {start_date}.
-
-Attractions ({len(attraction_summaries)} total):
-{json.dumps(attraction_summaries, indent=2, ensure_ascii=False)[:3000]}
-
-Restaurants ({len(restaurant_summaries)} total):
-{json.dumps(restaurant_summaries, indent=2, ensure_ascii=False)[:2000]}
-
-Hotel: {json.dumps(hotel_summary, indent=2, ensure_ascii=False)}
-
-Flight info: {json.dumps(flight_data.get('recommendations', []), default=str, ensure_ascii=False)[:500]}
-
-IMPORTANT: Respect the suggested_day assignments. Optimize the ORDER within each day using the tools if coordinates are available.
-"""),
-        ]
-
-        result, _ = await _run_agent_with_tools(
-            llm=llm_agent, messages=llm_messages,
-            tools=[get_distance_matrix, optimize_daily_itinerary], max_iterations=4,
-            agent_name="ITINERARY_AGENT",
-        )
-        itinerary_result = _extract_json(result.content)
+        #     # Apply adjustments (notes, duration extensions)
+        #     itinerary_result = _apply_adjustments(itinerary_result, review)
 
     except Exception as e:
         logger.error(f"   ❌ Itinerary Agent error: {e}", exc_info=True)
-        itinerary_result = {"error": str(e), "daily_schedules": []}
+        itinerary_result = {"error": True, "message": str(e), "days": [], "dropped": []}
 
-    logger.info("📅 [ITINERARY_AGENT] Node completed")
+    num_days = len(itinerary_result.get("days", []))
+    dropped = len(itinerary_result.get("dropped", []))
+
+    logger.info(f"📅 [ITINERARY_AGENT] Completed: {num_days} days, {dropped} dropped")
     logger.info("=" * 60)
 
     return {
-        "current_agent": "itinerary_agent",
-        "current_tool": "optimize_daily_itinerary",
         "agent_outputs": {"itinerary_agent": itinerary_result},
-        "messages": [AIMessage(content=f"[Itinerary Agent] Created {num_days}-day schedule")],
+        "messages": [AIMessage(content=f"[Itinerary Agent] Created {num_days}-day optimized schedule ({dropped} places dropped)")],
     }
-
-

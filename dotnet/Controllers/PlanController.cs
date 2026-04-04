@@ -1,6 +1,7 @@
-﻿using dotnet.Data;
+using dotnet.Data;
 using dotnet.Entites;
 using dotnet.Dtos.Plan;
+using dotnet.Enums;
 using dotnet.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -19,13 +20,16 @@ namespace dotnet.Controllers
         private readonly ICurrentUser _currentUser;
         private readonly IMongoCollection<Place> _placesCollection;
         private readonly ICloudinaryService _cloudinaryService;
+        private readonly IExternalApiService _externalApiService;
         public PlanController(MySQLDbContext mySQLDbContext, ICurrentUser currentUser,
-            MongoDbService mongoDbService, ICloudinaryService cloudinaryService)
+            MongoDbService mongoDbService, ICloudinaryService cloudinaryService,
+            IExternalApiService externalApiService)
         {
             dbContext = mySQLDbContext;
             _currentUser = currentUser;
             _placesCollection = mongoDbService.Database.GetCollection<Place>("Place");
             _cloudinaryService = cloudinaryService;
+            _externalApiService = externalApiService;
         }
 
         [HttpGet]
@@ -526,6 +530,341 @@ namespace dotnet.Controllers
                 TotalCount = totalCount,
                 Page = page,
                 PageSize = pageSize
+            });
+        }
+
+        /// <summary>
+        /// Apply AI-generated plan data to an existing plan (replace) or create a new plan.
+        /// Handles: itinerary (with PlaceId resolution for restaurants), budget, packing lists, notes.
+        /// </summary>
+        [HttpPost("{id:Guid}/apply-ai")]
+        public async Task<IActionResult> ApplyAIPlan(Guid id, [FromBody] ApplyAIPlanRequest request)
+        {
+            var userId = _currentUser.Id;
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            // Validate source plan exists and user owns it
+            var sourcePlan = await dbContext.Plans.FirstOrDefaultAsync(p => p.Id == id);
+            if (sourcePlan == null)
+            {
+                return NotFound("Plan not found");
+            }
+            if (sourcePlan.OwnerId != userId)
+            {
+                return Forbid("Only the owner can apply AI plan");
+            }
+
+            Plan targetPlan;
+
+            if (request.Mode == ApplyMode.NewPlan)
+            {
+                // Create a new plan
+                targetPlan = new Plan
+                {
+                    Id = Guid.NewGuid(),
+                    OwnerId = userId.Value,
+                    Name = request.NewPlanName ?? $"{sourcePlan.Name} (AI)",
+                    StartTime = request.StartTime ?? sourcePlan.StartTime,
+                    EndTime = request.EndTime ?? sourcePlan.EndTime,
+                    Budget = sourcePlan.Budget,
+                    CurrencyCode = request.CurrencyCode ?? sourcePlan.CurrencyCode,
+                };
+                await dbContext.Plans.AddAsync(targetPlan);
+
+                // Add owner as participant
+                await dbContext.Participants.AddAsync(new Participant
+                {
+                    Id = Guid.NewGuid(),
+                    PlanId = targetPlan.Id,
+                    UserId = userId.Value,
+                    Role = PlanRole.Owner,
+                    Status = InvitationStatus.Accepted,
+                });
+            }
+            else
+            {
+                targetPlan = sourcePlan;
+
+                // Update plan metadata
+                if (request.StartTime.HasValue)
+                    targetPlan.StartTime = request.StartTime.Value;
+                if (request.EndTime.HasValue)
+                    targetPlan.EndTime = request.EndTime.Value;
+                if (!string.IsNullOrEmpty(request.CurrencyCode))
+                    targetPlan.CurrencyCode = request.CurrencyCode;
+
+                // Delete existing data (cascade will handle children)
+                var existingDays = await dbContext.ItineraryDays
+                    .Where(d => d.PlanId == targetPlan.Id)
+                    .Include(d => d.ItineraryItems)
+                    .ToListAsync();
+                dbContext.ItineraryDays.RemoveRange(existingDays);
+
+                var existingExpenses = await dbContext.ExpenseItems
+                    .Where(e => e.PlanId == targetPlan.Id)
+                    .ToListAsync();
+                dbContext.ExpenseItems.RemoveRange(existingExpenses);
+
+                var existingPackingLists = await dbContext.PackingLists
+                    .Where(p => p.PlanId == targetPlan.Id)
+                    .Include(p => p.PackingItems)
+                    .ToListAsync();
+                dbContext.PackingLists.RemoveRange(existingPackingLists);
+
+                var existingNotes = await dbContext.Notes
+                    .Where(n => n.PlanId == targetPlan.Id)
+                    .ToListAsync();
+                dbContext.Notes.RemoveRange(existingNotes);
+            }
+
+            // ── Apply Itinerary ──────────────────────────────────────
+            if (request.ItineraryDays != null)
+            {
+                foreach (var aiDay in request.ItineraryDays)
+                {
+                    var itineraryDay = new ItineraryDay
+                    {
+                        Id = Guid.NewGuid(),
+                        PlanId = targetPlan.Id,
+                        Order = aiDay.Order,
+                        Title = aiDay.Title,
+                    };
+                    await dbContext.ItineraryDays.AddAsync(itineraryDay);
+
+                    foreach (var aiItem in aiDay.Items)
+                    {
+                        var placeId = aiItem.PlaceId;
+
+                        // Skip items without PlaceId (generic activities like "Explore Old Quarter")
+                        if (string.IsNullOrEmpty(placeId))
+                            continue;
+
+                        // For restaurant stops (lunch/dinner), ensure place exists in MongoDB
+                        if (aiItem.Role == "lunch" || aiItem.Role == "dinner")
+                        {
+                            var existingPlace = await _placesCollection
+                                .Find(p => p.PlaceId == placeId)
+                                .FirstOrDefaultAsync();
+
+                            if (existingPlace == null)
+                            {
+                                // Fetch from Google Places API and save to MongoDB
+                                var googlePlace = await _externalApiService.GetPlaceDetailsAsync(placeId);
+                                if (googlePlace != null)
+                                {
+                                    // Check for race condition
+                                    var raceCheck = await _placesCollection
+                                        .Find(p => p.PlaceId == placeId)
+                                        .FirstOrDefaultAsync();
+                                    if (raceCheck == null)
+                                    {
+                                        googlePlace.Id = null; // Let MongoDB generate the Id
+                                        await _placesCollection.InsertOneAsync(googlePlace);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Parse StartTime and Duration
+                        TimeOnly startTime = TimeOnly.MinValue;
+                        if (!string.IsNullOrEmpty(aiItem.StartTime))
+                        {
+                            TimeOnly.TryParse(aiItem.StartTime, out startTime);
+                        }
+
+                        var duration = TimeSpan.FromMinutes(aiItem.Duration > 0 ? aiItem.Duration : 60);
+
+                        var itineraryItem = new ItineraryItem
+                        {
+                            Id = Guid.NewGuid(),
+                            ItineraryDayId = itineraryDay.Id,
+                            PlaceId = placeId,
+                            StartTime = startTime,
+                            Duration = duration,
+                        };
+                        dbContext.ItineraryItems.Add(itineraryItem);
+                    }
+                }
+            }
+
+            // ── Apply Budget / Expense Items ─────────────────────────
+            if (request.ExpenseItems != null)
+            {
+                foreach (var aiExpense in request.ExpenseItems)
+                {
+                    var category = Enum.TryParse<ExpenseCategory>(aiExpense.Category, true, out var parsed)
+                        ? parsed
+                        : ExpenseCategory.Other;
+
+                    var expenseItem = new ExpenseItem
+                    {
+                        Id = Guid.NewGuid(),
+                        PlanId = targetPlan.Id,
+                        Category = category,
+                        Name = aiExpense.Name,
+                        Amount = aiExpense.Amount,
+                    };
+                    dbContext.ExpenseItems.Add(expenseItem);
+                }
+            }
+
+            // ── Apply Packing Lists ──────────────────────────────────
+            if (request.PackingLists != null)
+            {
+                foreach (var aiPacking in request.PackingLists)
+                {
+                    var packingList = new PackingList
+                    {
+                        Id = Guid.NewGuid(),
+                        PlanId = targetPlan.Id,
+                        Name = aiPacking.Name,
+                    };
+                    await dbContext.PackingLists.AddAsync(packingList);
+
+                    foreach (var itemName in aiPacking.Items)
+                    {
+                        var packingItem = new PackingItem
+                        {
+                            Id = Guid.NewGuid(),
+                            PackingListId = packingList.Id,
+                            Name = itemName,
+                            IsPacked = false,
+                        };
+                        dbContext.PackingItems.Add(packingItem);
+                    }
+                }
+            }
+
+            // ── Apply Notes ──────────────────────────────────────────
+            if (request.Notes != null)
+            {
+                foreach (var aiNote in request.Notes)
+                {
+                    var note = new Note
+                    {
+                        Id = Guid.NewGuid(),
+                        PlanId = targetPlan.Id,
+                        Title = aiNote.Title,
+                        Content = aiNote.Content,
+                    };
+                    dbContext.Notes.Add(note);
+                }
+            }
+
+            // ── Save all changes ─────────────────────────────────────
+            await dbContext.SaveChangesAsync();
+
+            // ── Return full PlanDto ──────────────────────────────────
+            var result = await dbContext.Plans
+                .Where(p => p.Id == targetPlan.Id)
+                .Include(p => p.Notes)
+                .Include(p => p.PackingLists)
+                    .ThenInclude(pl => pl.PackingItems)
+                .Include(p => p.ExpenseItems)
+                .Include(p => p.Participants)
+                    .ThenInclude(p => p.User)
+                .Include(p => p.ItineraryDays)
+                    .ThenInclude(iday => iday.ItineraryItems)
+                .FirstOrDefaultAsync();
+
+            if (result == null)
+            {
+                return NotFound();
+            }
+
+            var placeIds = result.ItineraryDays
+                .SelectMany(iday => iday.ItineraryItems)
+                .Select(ii => ii.PlaceId)
+                .Distinct()
+                .ToList();
+
+            var placesDict = await _placesCollection
+                .Find(p => placeIds.Contains(p.PlaceId))
+                .ToListAsync()
+                .ContinueWith(t => t.Result.ToDictionary(p => p.PlaceId, p => p));
+
+            return Ok(new PlanDto
+            {
+                Id = result.Id,
+                OwnerId = result.OwnerId,
+                Name = result.Name,
+                CoverImageUrl = result.CoverImageUrl,
+                StartTime = result.StartTime,
+                EndTime = result.EndTime,
+                Budget = result.Budget,
+                CurrencyCode = result.CurrencyCode,
+                LastSyncGoogleCalendarAt = result.LastSyncGoogleCalendarAt,
+                Notes = result.Notes
+                    .OrderBy(note => note.CreatedAt)
+                    .Select(note => new Dtos.Note.NoteDto
+                    {
+                        Id = note.Id,
+                        PlanId = note.PlanId,
+                        Title = note.Title,
+                        Content = note.Content
+                    }).ToList(),
+                PackingLists = result.PackingLists
+                    .OrderBy(list => list.CreatedAt)
+                    .Select(pl => new Dtos.PackingList.PackingListDto
+                    {
+                        Id = pl.Id,
+                        PlanId = pl.PlanId,
+                        Name = pl.Name,
+                        PackingItems = pl.PackingItems
+                            .OrderBy(item => item.CreatedAt)
+                            .Select(item => new Dtos.PackingItem.PackingItemDto
+                            {
+                                Id = item.Id,
+                                PackingListId = item.PackingListId,
+                                Name = item.Name,
+                                IsPacked = item.IsPacked
+                            }).ToList()
+                    }).ToList(),
+                ExpenseItems = result.ExpenseItems
+                    .OrderBy(ei => ei.CreatedAt)
+                    .Select(ei => new Dtos.ExpenseItem.ExpenseItemDto
+                    {
+                        Id = ei.Id,
+                        PlanId = ei.PlanId,
+                        Category = ei.Category,
+                        Name = ei.Name,
+                        Amount = ei.Amount,
+                    }).ToList(),
+                Participants = result.Participants.Select(p => new Dtos.Participant.ParticipantDto
+                {
+                    Id = p.Id,
+                    UserId = p.UserId,
+                    PlanId = p.PlanId,
+                    Role = p.Role,
+                    Status = p.Status,
+                    Name = p.User.Name,
+                    Username = p.User.Username,
+                    AvatarUrl = p.User.AvatarUrl
+                }).ToList(),
+                ItineraryDays = result.ItineraryDays
+                    .OrderBy(iday => iday.Order)
+                    .Select(iday => new Dtos.ItineraryDay.ItineraryDayDto
+                    {
+                        Id = iday.Id,
+                        PlanId = iday.PlanId,
+                        Order = iday.Order,
+                        Title = iday.Title,
+                        ItineraryItems = iday.ItineraryItems
+                            .Where(ii => !ii.IsDeleted)
+                            .OrderBy(ii => ii.StartTime)
+                            .Select(ii => new Dtos.ItineraryItem.ItineraryItemDto
+                            {
+                                Id = ii.Id,
+                                ItineraryDayId = ii.ItineraryDayId,
+                                Place = placesDict.GetValueOrDefault(ii.PlaceId),
+                                StartTime = ii.StartTime,
+                                Duration = ii.Duration,
+                                GoogleCalendarEventId = ii.GoogleCalendarEventId
+                            }).ToList()
+                    }).ToList()
             });
         }
 

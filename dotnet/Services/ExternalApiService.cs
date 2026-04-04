@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Web;
 using dotnet.Dtos.ExternalApi;
+using dotnet.Entites;
 using Microsoft.Extensions.Configuration;
 
 namespace dotnet.Services
@@ -228,5 +229,126 @@ namespace dotnet.Services
             return JsonSerializer.Deserialize<WeatherResponseDto>(content, _snakeCaseOptions)
                    ?? new WeatherResponseDto();
         }
+
+        // ======================== GOOGLE PLACES (New) — Place Details ========================
+        // Enterprise SKU
+
+        /// <summary>
+        /// Fetch place details from Google Places API (New) and return as a Place entity.
+        /// Uses GET places/{placeId} with X-Goog-FieldMask for cost optimization.
+        /// Reference: https://developers.google.com/maps/documentation/places/web-service/place-details
+        /// </summary>
+        public async Task<Place?> GetPlaceDetailsAsync(string placeId)
+        {
+            var apiKey = _configuration["ExternalApis:GoogleMaps:ApiKey"];
+            if (string.IsNullOrEmpty(apiKey))
+            {
+                return null;
+            }
+
+            var url = $"https://places.googleapis.com/v1/places/{placeId}";
+            var fieldMask = "id,displayName,formattedAddress,location,types,rating,userRatingCount,regularOpeningHours,websiteUri,googleMapsUri";
+
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("X-Goog-Api-Key", apiKey);
+            request.Headers.Add("X-Goog-FieldMask", fieldMask);
+
+            var response = await _httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var content = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(content);
+            var result = doc.RootElement;
+
+            // Check for error response
+            if (result.TryGetProperty("error", out _)) return null;
+
+            // Parse location (New API: { "latitude": ..., "longitude": ... })
+            double lat = 0, lng = 0;
+            if (result.TryGetProperty("location", out var location))
+            {
+                lat = location.TryGetProperty("latitude", out var latProp) ? latProp.GetDouble() : 0;
+                lng = location.TryGetProperty("longitude", out var lngProp) ? lngProp.GetDouble() : 0;
+            }
+
+            // Parse opening hours (New API: regularOpeningHours.periods[].open/close.hour/minute)
+            var openHours = new OpenHours();
+            string[] dayKeys = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+            if (result.TryGetProperty("regularOpeningHours", out var regHours) &&
+                regHours.TryGetProperty("periods", out var periods))
+            {
+                foreach (var period in periods.EnumerateArray())
+                {
+                    if (!period.TryGetProperty("open", out var openInfo) ||
+                        !period.TryGetProperty("close", out var closeInfo))
+                        continue;
+
+                    var dayIdx = openInfo.TryGetProperty("day", out var dayProp) ? dayProp.GetInt32() : -1;
+                    if (dayIdx < 0 || dayIdx >= 7) continue;
+
+                    var oh = openInfo.TryGetProperty("hour", out var ohProp) ? ohProp.GetInt32() : 0;
+                    var om = openInfo.TryGetProperty("minute", out var omProp) ? omProp.GetInt32() : 0;
+                    var ch = closeInfo.TryGetProperty("hour", out var chProp) ? chProp.GetInt32() : 23;
+                    var cm = closeInfo.TryGetProperty("minute", out var cmProp) ? cmProp.GetInt32() : 59;
+                    var timeRange = $"{oh:D2}:{om:D2}-{ch:D2}:{cm:D2}";
+
+                    switch (dayKeys[dayIdx])
+                    {
+                        case "sunday": openHours.Sunday.Add(timeRange); break;
+                        case "monday": openHours.Monday.Add(timeRange); break;
+                        case "tuesday": openHours.Tuesday.Add(timeRange); break;
+                        case "wednesday": openHours.Wednesday.Add(timeRange); break;
+                        case "thursday": openHours.Thursday.Add(timeRange); break;
+                        case "friday": openHours.Friday.Add(timeRange); break;
+                        case "saturday": openHours.Saturday.Add(timeRange); break;
+                    }
+                }
+            }
+
+            // Get category (first type)
+            var category = "point_of_interest";
+            if (result.TryGetProperty("types", out var types))
+            {
+                var firstType = types.EnumerateArray().FirstOrDefault();
+                if (firstType.ValueKind == JsonValueKind.String)
+                    category = firstType.GetString() ?? category;
+            }
+
+            // displayName is { "text": "...", "languageCode": "..." }
+            var title = "";
+            if (result.TryGetProperty("displayName", out var displayName) &&
+                displayName.TryGetProperty("text", out var textProp))
+            {
+                title = textProp.GetString() ?? "";
+            }
+
+            return new Place
+            {
+                PlaceId = placeId,
+                Link = result.TryGetProperty("googleMapsUri", out var uriProp) ? uriProp.GetString() ?? "" : $"https://www.google.com/maps/place/?q=place_id:{placeId}",
+                Title = title,
+                Category = category,
+                Location = new GeoJson
+                {
+                    Type = "Point",
+                    Coordinates = [lng, lat]
+                },
+                Address = result.TryGetProperty("formattedAddress", out var addrProp) ? addrProp.GetString() ?? "" : "",
+                OpenHours = openHours,
+                Website = result.TryGetProperty("websiteUri", out var webProp) ? webProp.GetString() ?? "" : "",
+                ReviewCount = result.TryGetProperty("userRatingCount", out var rcProp) ? rcProp.GetInt32() : 0,
+                ReviewRating = result.TryGetProperty("rating", out var rrProp) ? rrProp.GetDouble() : 0,
+                ReviewsPerRating = new Dictionary<int, int>(),
+                Cid = "",
+                Description = "",
+                Thumbnail = "https://placehold.co/600x400?text=No+Image",
+                Images = [],
+                UserReviews = [],
+                CreatedDate = DateTime.UtcNow,
+                ModifiedDate = DateTime.UtcNow,
+            };
+        }
     }
 }
+

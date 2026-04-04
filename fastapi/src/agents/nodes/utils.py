@@ -120,10 +120,15 @@ async def _run_agent_with_tools(
 ) -> tuple[Any, list[dict]]:
     """ReAct tool-calling loop: LLM → tool calls → LLM → ... → final response.
     
+    When the LLM emits multiple tool calls in a single turn, they are executed
+    concurrently via asyncio.gather for faster results.
+    
     Returns:
         A tuple of (final_llm_result, tool_logs) where tool_logs is a list of
         dicts with keys: name, input, output.
     """
+    import asyncio
+
     tool_map = {t.name: t for t in tools}
     llm_with_tools = llm.bind_tools(tools)
     tool_logs: list[dict] = []
@@ -135,10 +140,13 @@ async def _run_agent_with_tools(
             logger.info(f"   [{agent_name}] Final response at iteration {iteration + 1}")
             return result, tool_logs
 
-        logger.info(f"   [{agent_name}] Iteration {iteration + 1}: {len(result.tool_calls)} tool call(s)")
+        num_calls = len(result.tool_calls)
+        logger.info(f"   [{agent_name}] Iteration {iteration + 1}: {num_calls} tool call(s)")
         messages.append(result)
 
-        for tool_call in result.tool_calls:
+        if num_calls == 1:
+            # Single tool call — execute directly (no gather overhead)
+            tool_call = result.tool_calls[0]
             tool_name = tool_call["name"]
             tool_args = tool_call["args"]
             tool_id = tool_call.get("id", tool_name)
@@ -150,27 +158,58 @@ async def _run_agent_with_tools(
                 try:
                     tool_result = await tool_fn.ainvoke(tool_args)
                     tool_result_str = json.dumps(tool_result, default=str, ensure_ascii=False)
-                    
-                    # Store full result in tool_logs
-                    tool_logs.append({
-                        "name": tool_name,
-                        "input": tool_args,
-                        "output": tool_result,
-                    })
-                    
-                    # if len(tool_result_str) > 4000:
-                    #     tool_result_str = tool_result_str[:4000] + "...(truncated)"
+                    tool_logs.append({"name": tool_name, "input": tool_args, "output": tool_result})
                     messages.append(ToolMessage(content=tool_result_str, tool_call_id=tool_id))
                 except Exception as e:
                     logger.error(f"   [{agent_name}] Tool {tool_name} error: {e}")
-                    tool_logs.append({
-                        "name": tool_name,
-                        "input": tool_args,
-                        "output": {"error": str(e)},
-                    })
+                    tool_logs.append({"name": tool_name, "input": tool_args, "output": {"error": str(e)}})
                     messages.append(ToolMessage(content=f"Error: {str(e)}", tool_call_id=tool_id))
             else:
                 messages.append(ToolMessage(content=f"Unknown tool: {tool_name}", tool_call_id=tool_id))
+        else:
+            # Multiple tool calls — execute in parallel with asyncio.gather
+            logger.info(f"   [{agent_name}] Executing {num_calls} tool calls in parallel")
+
+            async def _execute_tool(tc: dict) -> tuple[dict, str, str | None]:
+                """Execute a single tool call, return (log_entry, result_str, tool_id)."""
+                t_name = tc["name"]
+                t_args = tc["args"]
+                t_id = tc.get("id", t_name)
+
+                logger.info(f"   [{agent_name}] Calling: {t_name}({json.dumps(t_args, ensure_ascii=False)[:200]})")
+
+                t_fn = tool_map.get(t_name)
+                if not t_fn:
+                    return (
+                        {"name": t_name, "input": t_args, "output": {"error": "Unknown tool"}},
+                        f"Unknown tool: {t_name}",
+                        t_id,
+                    )
+                try:
+                    t_result = await t_fn.ainvoke(t_args)
+                    t_result_str = json.dumps(t_result, default=str, ensure_ascii=False)
+                    return (
+                        {"name": t_name, "input": t_args, "output": t_result},
+                        t_result_str,
+                        t_id,
+                    )
+                except Exception as e:
+                    logger.error(f"   [{agent_name}] Tool {t_name} error: {e}")
+                    return (
+                        {"name": t_name, "input": t_args, "output": {"error": str(e)}},
+                        f"Error: {str(e)}",
+                        t_id,
+                    )
+
+            # Run all tool calls concurrently
+            results = await asyncio.gather(
+                *[_execute_tool(tc) for tc in result.tool_calls]
+            )
+
+            # Append results in original order (important for LLM context)
+            for log_entry, result_str, tool_id in results:
+                tool_logs.append(log_entry)
+                messages.append(ToolMessage(content=result_str, tool_call_id=tool_id))
 
     logger.warning(f"   [{agent_name}] Max iterations reached, forcing final response")
     result = await llm.ainvoke(messages)

@@ -15,3 +15,4 @@ langsmith
 tavily-python
 ortools
 googlemaps
+langchain-xai

@@ -1,39 +1,41 @@
 """
-LangGraph StateGraph — Phase 1 Testing.
+LangGraph StateGraph — Native Parallel Fan-out.
 
 Graph topology:
-  START → orchestrator → [conditional routing]
-    ├─ (greeting/clarification/general_query) → synthesize → END
-    └─ (plan_creation/modification) → phase1_parallel [flight + attraction + hotel]
-                                     → synthesize → END
+  START → orchestrator → [conditional fan-out]
+    ├─ (greeting/clarification/general) → END
+    └─ (plan_creation) →  flight ──┐
+                           hotel ───┤→ itinerary → restaurant ──┐→ synthesize → END
+                           attraction┘              preparation ┘
 
-Phase 1: Flight + Attraction + Hotel run in parallel (all receive Orchestrator context independently).
-Restaurant, Itinerary, Preparation are disabled for now.
+Phase 1: Flight + Attraction + Hotel run in parallel (native LangGraph fan-out).
+Itinerary: LLM scheduling with resolved places.
+Phase 2: Restaurant + Preparation run in parallel (native LangGraph fan-out).
+Synthesize: Compiles all data and aggregated costs into final response.
 """
-
 import logging
-import asyncio
-from typing import Any
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from src.agents.state import GraphState
+# Non-VRP LLM version:
+from src.agents.nodes import orchestrator_nonVRP_node as orchestrator_node
+from src.agents.nodes import itinerary_nonVRP_agent_node as itinerary_agent_node
+
 from src.agents.nodes import (
-    orchestrator_node,
     hotel_agent_node,
     flight_agent_node,
     attraction_agent_node,
     restaurant_agent_node,
     preparation_agent_node,
-    itinerary_agent_node,
     synthesize_agent_node,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def route_from_orchestrator(state: GraphState) -> str:
-    """Route from orchestrator: parallel agents or direct to END."""
+def route_from_orchestrator(state: GraphState) -> str | list[str]:
+    """Route from orchestrator: fan-out to Phase 1 agents or direct to END."""
     if state.get("final_response"):
         logger.info("🔀 [ROUTER] Orchestrator → END (has final_response)")
         return END
@@ -42,104 +44,104 @@ def route_from_orchestrator(state: GraphState) -> str:
     tasks = plan.get("tasks", [])
     intent = plan.get("intent", "greeting")
 
-    # return "synthesize" somewhere with someelse logic maybe
-
     if intent in ("greeting", "clarification_needed", "general") or not tasks:
         logger.info("🔀 [ROUTER] Orchestrator → END (simple/general query)")
         return END
 
-    logger.info(f"🔀 [ROUTER] Orchestrator → Phase 1 (tasks: {tasks})")
-    return "parallel"
+    logger.info(f"🔀 [ROUTER] Orchestrator → Phase 1 fan-out [flight, hotel, attraction] (tasks: {tasks})")
+    return ["flight", "hotel", "attraction"]
 
 
-async def parallel_node(state: GraphState) -> dict[str, Any]:
-    """Phase 1: Flight + Attraction + Hotel agents run in parallel.
-    All three receive Orchestrator context independently.
+def build_agent_graph():
+    """Build the graph with native LangGraph parallel fan-out.
+
+    Phase 1: flight + hotel + attraction run in parallel (fan-out from orchestrator).
+              Each agent self-skips if no context is provided.
+    Itinerary: Runs after all Phase 1 agents complete (fan-in).
+    Phase 2: restaurant + preparation run in parallel (fan-out from itinerary).
+    Synthesize: Runs after all Phase 2 agents complete (fan-in).
     """
-    logger.info("=" * 60)
-    logger.info("⚡ [PHASE 1] Flight + Attraction + Hotel (parallel)")
-
-    plan = state.get("orchestrator_plan", {})
-    tasks = plan.get("tasks", [])
-
-    agents_to_run = {}
-    # if "flight" in tasks and plan.get("flight"):
-    #     agents_to_run["flight"] = flight_agent_node
-    # if "hotel" in tasks and plan.get("hotel"):
-    #     agents_to_run["hotel"] = hotel_agent_node
-    if "attraction" in tasks and plan.get("attraction"):
-        agents_to_run["attraction"] = attraction_agent_node
-
-    if not agents_to_run:
-        logger.info("   No Phase 1 agents to run")
-        return {}
-
-    logger.info(f"   Running: {list(agents_to_run.keys())}")
-
-    results = await asyncio.gather(
-        *[fn(state) for fn in agents_to_run.values()],
-        return_exceptions=True
-    )
-
-    merged_outputs = {}
-    all_messages = []
-    for name, result in zip(agents_to_run.keys(), results):
-        if isinstance(result, Exception):
-            logger.error(f"   ❌ {name} failed: {result}")
-            merged_outputs[f"{name}_agent"] = {"error": str(result)}
-        elif isinstance(result, dict):
-            merged_outputs.update(result.get("agent_outputs", {}))
-            all_messages.extend(result.get("messages", []))
-
-    logger.info(f"⚡ [PHASE 1] Completed: {list(merged_outputs.keys())}")
-    logger.info("=" * 60)
-
-    return {
-        "agent_outputs": merged_outputs,
-        "messages": all_messages,
-        "current_agent": "parallel_complete",
-    }
-
-
-def build_agent_graph() -> StateGraph:
-    """Build the Phase 1 testing graph."""
-    logger.info("Building LangGraph workflow (Phase 1: Flight + Attraction + Hotel)...")
+    logger.info("Building LangGraph workflow (native parallel fan-out)...")
 
     graph = StateGraph(GraphState)
 
-    # Register nodes
+    # ── Register individual agent nodes ────────────────────────────
     graph.add_node("orchestrator", orchestrator_node)
-    graph.add_node("parallel", parallel_node)
-    # graph.add_node("synthesize", synthesize_agent_node)
 
-    # Entry
+    # Phase 1 agents (will run in parallel via fan-out edges)
+    graph.add_node("flight", flight_agent_node)
+    graph.add_node("hotel", hotel_agent_node)
+    graph.add_node("attraction", attraction_agent_node)
+
+    # Sequential: itinerary scheduling
+    graph.add_node("itinerary", itinerary_agent_node)
+
+    # Phase 2 agents (will run in parallel via fan-out edges)
+    graph.add_node("restaurant", restaurant_agent_node)
+    graph.add_node("preparation", preparation_agent_node)
+
+    # Final: synthesize all results
+    graph.add_node("synthesize", synthesize_agent_node)
+
+    # ── Entry ──────────────────────────────────────────────────────
     graph.add_edge(START, "orchestrator")
 
-    # Conditional routing from orchestrator
+    # ── Conditional fan-out from orchestrator ──────────────────────
+    # Returns END for simple queries, or ["flight","hotel","attraction"]
+    # for plan creation — LangGraph runs all 3 in parallel (superstep).
     graph.add_conditional_edges(
         "orchestrator",
         route_from_orchestrator,
-        {
-            "parallel": "parallel",
-            # "synthesize": "synthesize",
-            END: END,
-        },
+        ["flight", "hotel", "attraction", END],
     )
 
-    # Phase 1 → Synthesize → END
-    # graph.add_edge("phase1_parallel", "synthesize")
-    # graph.add_edge("synthesize", END)
+    # # ── Phase 1 fan-in: all 3 agents → itinerary ──────────────────
+    # # LangGraph waits for ALL fan-out branches to complete before
+    # # running the next node (itinerary) in the following superstep.
+    graph.add_edge("flight", "itinerary")
+    graph.add_edge("hotel", "itinerary")
+    graph.add_edge("attraction", "itinerary")
 
-    graph.add_edge("parallel", END)
+    # # ── Phase 2 fan-out: itinerary → restaurant + preparation ─────
+    # # Both run in parallel after itinerary completes.
+    graph.add_edge("itinerary", "restaurant")
+    graph.add_edge("itinerary", "preparation")
 
-    # Compile
+    # # ── Phase 2 fan-in: both → synthesize ─────────────────────────
+    graph.add_edge("restaurant", "synthesize")
+    graph.add_edge("preparation", "synthesize")
+
+    # # ── Final ─────────────────────────────────────────────────────
+    graph.add_edge("synthesize", END)
+
+    # graph.add_edge("attraction", END)
+
+    # ── Compile ───────────────────────────────────────────────────
     memory = MemorySaver()
     compiled = graph.compile(checkpointer=memory)
 
-    logger.info("✅ LangGraph compiled (Phase 1 testing)")
-    logger.info("   Flow: orchestrator → [flight+attraction+hotel] → synthesize → END")
+    # ── Log graph structure ───────────────────────────────────────
+    logger.info("✅ LangGraph compiled (native parallel fan-out)")
+    logger.info("   Flow: orchestrator → [flight | hotel | attraction] → itinerary → [restaurant | preparation] → synthesize → END")
 
     return compiled
+
+
+def save_graph_image(output_path: str = "graph.png"):
+    """Save the compiled graph as a PNG image for visualization.
+
+    Uses Mermaid.ink API (requires internet).
+    Usage: from src.agents.graph import save_graph_image; save_graph_image()
+    """
+    try:
+        png_data = compiled_graph.get_graph().draw_mermaid_png()
+        with open(output_path, "wb") as f:
+            f.write(png_data)
+        logger.info(f"📊 Graph image saved to {output_path}")
+        print(f"✅ Graph image saved to {output_path}")
+    except Exception as e:
+        logger.error(f"❌ Could not save graph image: {e}")
+        print(f"❌ Could not save graph image: {e}")
 
 
 # Pre-built compiled graph

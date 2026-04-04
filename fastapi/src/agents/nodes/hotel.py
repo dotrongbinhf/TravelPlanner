@@ -11,6 +11,21 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
+HOTEL_AGENT_MOCK = {
+  "segments": [
+    {
+      "segment_name": "Central Hanoi Stay",
+      "check_in": "2026-04-03",
+      "check_in_time": "02:00 PM",
+      "check_out": "2026-04-06",
+      "check_out_time": "12:00 PM",
+      "recommend_hotel_name": "The Oriental Jade Hotel",
+      "totalRate": 4500000,
+      "recommend_note": "Highly rated (4.9/5) and centrally located in the Old Quarter, this hotel offers excellent service and amenities, making it ideal for a family with young children needing comfort and convenience for their Hanoi exploration."
+    }
+  ]
+}
+
 llm_hotel = ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite-preview",
     google_api_key=settings.GOOGLE_GEMINI_API_KEY,
@@ -57,14 +72,18 @@ EXAMPLE - FINAL OUTPUT STRUCTURE:
     {
       "segment_name": "same as segment_name in hotel context",
       "check_in": "2026-03-20",
+      "check_in_time": "02:00 PM",
       "check_out": "2026-03-23",
+      "check_out_time": "12:00 PM",
       "recommend_hotel_name": "Hanoi La Siesta Hotel & Spa",
+      "totalRate": 4500000,
       "recommend_note": "The reason why you choose this hotel for this segment"
     }
   ]
 }
 
 ## Rules
+- totalRate: The total room rate for the ENTIRE stay (all nights combined) at the recommended hotel, in the currency specified by plan_context. Extract this from the search results or estimate if search results do not provide total rate.
 - Always call search_hotels — do NOT make up hotel data
 - For multi_hotel (multiple segments): run separate searches per segment
 - Choose hotels based on the actual search results, prioritizing: rating, location, price-to-value ratio
@@ -84,7 +103,6 @@ async def hotel_agent_node(state: GraphState) -> dict[str, Any]:
     if not hotel_ctx:
         logger.info("   No hotel context → skip")
         return {
-            "current_agent": "hotel_agent",
             "agent_outputs": {"hotel_agent": {"hotels_found": False, "skipped": True}},
             "messages": [AIMessage(content="[Hotel Agent] No hotel search needed")],
         }
@@ -112,6 +130,9 @@ Search for hotels based on this context. Use the plan_context for dates, passeng
         )
         hotel_result = _extract_json(result.content)
         hotel_result["tools"] = tool_logs
+        
+        # Mock - HN
+        # hotel_result = _extract_json(HOTEL_AGENT_MOCK)
 
     except Exception as e:
         logger.error(f"   ❌ Hotel Agent error: {e}", exc_info=True)
@@ -121,8 +142,6 @@ Search for hotels based on this context. Use the plan_context for dates, passeng
     logger.info("=" * 60)
 
     return {
-        "current_agent": "hotel_agent",
-        "current_tool": "search_hotels",
         "agent_outputs": {"hotel_agent": hotel_result},
         "messages": [AIMessage(content=f"[Hotel Agent] Hotel search completed")],
     }

@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     GOOGLE_GEMINI_API_KEY: str = ""
     TAVILY_API_KEY: str = ""
     GOOGLE_MAPS_API_KEY: str = ""
+    XAI_API_KEY: str = ""
     
     # External services
     DOTNET_API_URL: str = "https://localhost:5001"

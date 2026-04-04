@@ -23,8 +23,10 @@ export function useAgentStream() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamState, setStreamState] = useState<AgentStreamState>({
     events: [],
-    currentAgent: null,
+    activeAgents: [],
+    completedAgents: [],
     streamedContent: "",
+    structuredData: null,
     isComplete: false,
     error: null,
   });
@@ -47,18 +49,26 @@ export function useAgentStream() {
 
       setStreamState((prev) => {
         const newEvents = [...prev.events, event];
-        let currentAgent = prev.currentAgent;
+        let activeAgents = [...prev.activeAgents];
+        let completedAgents = [...prev.completedAgents];
         let streamedContent = prev.streamedContent;
         let isComplete = prev.isComplete;
         let error = prev.error;
 
         switch (event.eventType) {
           case "agent_start":
-            currentAgent = event.agentName || null;
+            if (event.agentName && !activeAgents.includes(event.agentName)) {
+              activeAgents.push(event.agentName);
+            }
             break;
 
           case "agent_end":
-            // Don't clear currentAgent yet — another agent might start
+            if (event.agentName) {
+              activeAgents = activeAgents.filter((a) => a !== event.agentName);
+              if (!completedAgents.includes(event.agentName)) {
+                completedAgents.push(event.agentName);
+              }
+            }
             break;
 
           case "text_chunk":
@@ -67,8 +77,18 @@ export function useAgentStream() {
             }
             break;
 
+          case "structured_data":
+            if (event.structuredData) {
+              return {
+                ...prev,
+                events: newEvents,
+                structuredData: event.structuredData,
+              };
+            }
+            break;
+
           case "workflow_complete":
-            currentAgent = null;
+            activeAgents = [];
             isComplete = true;
             // Only use finalResponse as fallback when no streaming occurred
             if (event.finalResponse && !streamedContent) {
@@ -79,14 +99,16 @@ export function useAgentStream() {
           case "error":
             error = event.errorMessage || "Unknown error occurred";
             isComplete = true;
-            currentAgent = null;
+            activeAgents = [];
             break;
         }
 
         return {
           events: newEvents,
-          currentAgent,
+          activeAgents,
+          completedAgents,
           streamedContent,
+          structuredData: prev.structuredData,
           isComplete,
           error,
         };
@@ -149,8 +171,10 @@ export function useAgentStream() {
       // Reset stream state for new message
       setStreamState({
         events: [],
-        currentAgent: null,
+        activeAgents: [],
+        completedAgents: [],
         streamedContent: "",
+        structuredData: null,
         isComplete: false,
         error: null,
       });

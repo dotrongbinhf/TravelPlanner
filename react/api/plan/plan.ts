@@ -77,3 +77,8 @@ export const deletePlan = async (planId: string) => {
   const response = await API.delete(`${APP_CONFIG_URL}/${planId}`);
   return response.data;
 };
+
+export const applyAIPlan = async (planId: string, applyData: Record<string, unknown>) => {
+  const response = await API.post<Plan>(`${APP_CONFIG_URL}/${planId}/apply-ai`, applyData);
+  return response.data;
+};

@@ -20,15 +20,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Track which LangGraph node names map to our agent names
+# Track which LangGraph node names map to our frontend agent names
 NODE_TO_AGENT = {
     "orchestrator": "orchestrator",
-    "hotel_agent": "hotel_agent",
-    "flight_agent": "flight_agent",
-    "attraction_agent": "attraction_agent",
-    "restaurant_agent": "restaurant_agent",
-    "preparation_agent": "preparation_agent",
-    "itinerary_agent": "itinerary_agent",
+    "hotel": "hotel_agent",
+    "flight": "flight_agent",
+    "attraction": "attraction_agent",
+    "restaurant": "restaurant_agent",
+    "preparation": "preparation_agent",
+    "itinerary": "itinerary_agent",
     "synthesize": "synthesize",
 }
 
@@ -114,8 +114,6 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                 "conversation_id": conversation_id,
                 "plan_id": plan_id,
                 "messages": history_messages + [HumanMessage(content=user_message)],
-                "current_agent": "",
-                "current_tool": "",
                 "pending_tasks": [],
                 "completed_tasks": [],
                 "user_context": {},
@@ -216,7 +214,22 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                         chunk_content = ""
                         chunk_data = event_data.get("chunk", None)
                         if chunk_data and hasattr(chunk_data, "content"):
-                            chunk_content = chunk_data.content
+                            raw_content = chunk_data.content
+                            
+                            # Handle different LLM provider output formats
+                            if isinstance(raw_content, str):
+                                chunk_content = raw_content
+                            elif isinstance(raw_content, list):
+                                # e.g. [{"type": "text", "text": "hello"}]
+                                text_parts = []
+                                for part in raw_content:
+                                    if isinstance(part, dict) and "text" in part:
+                                        text_parts.append(part["text"])
+                                    elif isinstance(part, str):
+                                        text_parts.append(part)
+                                chunk_content = "".join(text_parts)
+                            else:
+                                chunk_content = str(raw_content)
 
                         if chunk_content:
                             streamed_chunks.append(chunk_content)

@@ -33,8 +33,6 @@ class GraphState(TypedDict):
         conversation_id: Unique ID of the conversation (maps to MemorySaver thread_id).
         plan_id: ID of the plan being discussed/modified.
         messages: LangChain message history, auto-appended via add_messages reducer.
-        current_agent: Name of the agent currently executing.
-        current_tool: Name of the tool currently being used.
         
         # Orchestrator routing
         pending_tasks: Queue of agent tasks to execute next.
@@ -56,8 +54,6 @@ class GraphState(TypedDict):
     conversation_id: str
     plan_id: str
     messages: Annotated[list, add_messages]
-    current_agent: str
-    current_tool: str
 
     # Orchestrator routing
     pending_tasks: list[str]

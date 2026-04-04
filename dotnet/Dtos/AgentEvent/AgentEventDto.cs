@@ -52,6 +52,12 @@ namespace dotnet.Dtos.AgentEvent
         public string? ErrorMessage { get; set; }
 
         /// <summary>
+        /// Structured data payload from the AI pipeline (for structured_data events).
+        /// Contains apply_data with normalized plan data for the Apply AI Plan feature.
+        /// </summary>
+        public object? StructuredData { get; set; }
+
+        /// <summary>
         /// Timestamp of the event
         /// </summary>
         public string? Timestamp { get; set; }

@@ -43,6 +43,7 @@ export type AgentEvent = {
     | "tool_start"
     | "tool_end"
     | "text_chunk"
+    | "structured_data"
     | "workflow_complete"
     | "error";
   agentName?: string;
@@ -52,14 +53,17 @@ export type AgentEvent = {
   toolOutput?: Record<string, unknown>;
   outputSummary?: string;
   finalResponse?: string;
+  structuredData?: Record<string, unknown>;
   errorMessage?: string;
   timestamp?: string;
 };
 
 export type AgentStreamState = {
   events: AgentEvent[];
-  currentAgent: string | null;
+  activeAgents: string[];
+  completedAgents: string[];
   streamedContent: string;
+  structuredData: Record<string, unknown> | null;
   isComplete: boolean;
   error: string | null;
 };

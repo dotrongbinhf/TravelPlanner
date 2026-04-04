@@ -149,6 +149,7 @@ export default function PlanIdPage() {
                 planStartDate={new Date(plan.startTime)}
                 planEndDate={new Date(plan.endTime)}
                 onClose={handleCloseAIChat}
+                onPlanUpdated={(updatedPlan) => setPlan(updatedPlan)}
               />
             ) : (
               <Planner

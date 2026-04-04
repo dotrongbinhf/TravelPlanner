@@ -123,6 +123,8 @@ async def search_flights(
     currency: str = "USD",
     stops: Optional[int] = None,
     max_price: Optional[int] = None,
+    outbound_times: Optional[str] = None,
+    return_times: Optional[str] = None,
     departure_token: Optional[str] = None,
 ) -> dict[str, Any]:
     """Search for flights between airports.
@@ -141,6 +143,8 @@ async def search_flights(
         currency: Currency code.
         stops: 0=Any, 1=Nonstop, 2=1 stop or fewer, 3=2 stops or fewer.
         max_price: Maximum ticket price.
+        outbound_times: Outbound times range. Two or four comma-separated numbers representing hours 0-23
+        return_times: Return times range. Same format as outbound_times.
         departure_token: Token from outbound flight to search for return flights (round trip only).
 
     Returns:
@@ -164,6 +168,10 @@ async def search_flights(
         params["stops"] = stops
     if max_price is not None:
         params["maxPrice"] = max_price
+    if outbound_times:
+        params["outboundTimes"] = outbound_times
+    if return_times:
+        params["returnTimes"] = return_times
     if departure_token:
         params["departureToken"] = departure_token
 

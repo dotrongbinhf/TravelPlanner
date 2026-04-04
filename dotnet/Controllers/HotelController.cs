@@ -30,9 +30,9 @@ namespace dotnet.Controllers
                 return BadRequest(response.Error);
             }
 
-            // Trim: keep only Properties (max 10), flatten rates, remove tokens/links
+            // Trim: keep only Properties (max 5), flatten rates, remove tokens/links
             var trimmedProperties = (response.Properties ?? new())
-                .Take(10)
+                .Take(5)
                 .Select(p => new
                 {
                     p.Type,

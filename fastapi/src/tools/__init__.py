@@ -6,5 +6,4 @@ Provides tool modules for:
 - search_tools: Tavily web search
 - maps_tools: Google Maps Platform (Places, Distance Matrix)
 - place_resolver: Place resolution pipeline (name → PlaceId → DB)
-- itinerary_tools: OR-Tools VRP daily schedule optimizer
 """
