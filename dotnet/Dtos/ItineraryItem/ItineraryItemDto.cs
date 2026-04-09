@@ -1,4 +1,4 @@
-﻿using dotnet.Entites;
+using dotnet.Entites;
 
 namespace dotnet.Dtos.ItineraryItem
 {
@@ -6,9 +6,10 @@ namespace dotnet.Dtos.ItineraryItem
     {
         public Guid Id { get; set; }
         public Guid ItineraryDayId { get; set; }
-        public Place Place { get; set; }
-        public TimeOnly StartTime { get; set; }
-        public TimeSpan Duration { get; set; }
+        public Place? Place { get; set; }
+        public TimeOnly? StartTime { get; set; }
+        public TimeSpan? Duration { get; set; }
+        public string? Note { get; set; }
         public string? GoogleCalendarEventId { get; set; }
     }
 }

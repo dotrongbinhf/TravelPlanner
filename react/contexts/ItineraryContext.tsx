@@ -103,8 +103,8 @@ export function ItineraryProvider({
       source: "map" | "list" = "list",
     ) => {
       setSelectedPlace({
-        placeId: item.place.placeId,
-        place: item.place,
+        placeId: item.place?.placeId ?? null,
+        place: item.place ?? null,
         dayIndex,
         itemIndex,
         isFromItinerary: true,

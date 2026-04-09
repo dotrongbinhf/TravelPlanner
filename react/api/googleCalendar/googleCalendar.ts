@@ -31,9 +31,9 @@ export const getGoogleAuthStatus = async () => {
   return response.data;
 };
 
-export const syncGoogleCalendar = async (planId: string) => {
+export const syncGoogleCalendar = async (planId: string, timeZoneOffsetMinutes: number, timeZone: string) => {
   const response = await API.post<SyncGoogleCalendarResponse>(
-    `${APP_CONFIG_URL}/sync/${planId}`,
+    `${APP_CONFIG_URL}/sync/${planId}?timeZoneOffsetMinutes=${timeZoneOffsetMinutes}&timeZone=${encodeURIComponent(timeZone)}`,
   );
   return response.data;
 };
@@ -41,6 +41,13 @@ export const syncGoogleCalendar = async (planId: string) => {
 export const disconnectGoogle = async () => {
   const response = await API.post<GoogleAuthStatusResponse>(
     `${APP_CONFIG_URL}/disconnect`,
+  );
+  return response.data;
+};
+
+export const unsyncGoogleCalendar = async (planId: string) => {
+  const response = await API.post(
+    `${APP_CONFIG_URL}/unsync/${planId}`,
   );
   return response.data;
 };

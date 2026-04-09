@@ -106,8 +106,12 @@ namespace dotnet.Services
                 summary = calendarEvent.Summary,
                 description = calendarEvent.Description,
                 location = calendarEvent.Location,
-                start = new { dateTime = calendarEvent.Start.ToString("o"), timeZone = "UTC" },
-                end = new { dateTime = calendarEvent.End.ToString("o"), timeZone = "UTC" }
+                start = calendarEvent.TimeZone != null 
+                    ? new { dateTime = calendarEvent.Start.ToString("yyyy-MM-ddTHH:mm:ss"), timeZone = calendarEvent.TimeZone }
+                    : new { dateTime = calendarEvent.Start.ToString("o"), timeZone = "UTC" },
+                end = calendarEvent.TimeZone != null 
+                    ? new { dateTime = calendarEvent.End.ToString("yyyy-MM-ddTHH:mm:ss"), timeZone = calendarEvent.TimeZone }
+                    : new { dateTime = calendarEvent.End.ToString("o"), timeZone = "UTC" }
             };
 
             var json = JsonSerializer.Serialize(eventBody);
@@ -136,8 +140,12 @@ namespace dotnet.Services
                 summary = calendarEvent.Summary,
                 description = calendarEvent.Description,
                 location = calendarEvent.Location,
-                start = new { dateTime = calendarEvent.Start.ToString("o"), timeZone = "UTC" },
-                end = new { dateTime = calendarEvent.End.ToString("o"), timeZone = "UTC" }
+                start = calendarEvent.TimeZone != null 
+                    ? new { dateTime = calendarEvent.Start.ToString("yyyy-MM-ddTHH:mm:ss"), timeZone = calendarEvent.TimeZone }
+                    : new { dateTime = calendarEvent.Start.ToString("o"), timeZone = "UTC" },
+                end = calendarEvent.TimeZone != null 
+                    ? new { dateTime = calendarEvent.End.ToString("yyyy-MM-ddTHH:mm:ss"), timeZone = calendarEvent.TimeZone }
+                    : new { dateTime = calendarEvent.End.ToString("o"), timeZone = "UTC" }
             };
 
             var json = JsonSerializer.Serialize(eventBody);

@@ -6,6 +6,7 @@ import {
   getGoogleAuthStatus,
   syncGoogleCalendar,
   disconnectGoogle,
+  unsyncGoogleCalendar,
   type SyncGoogleCalendarResponse,
 } from "@/api/googleCalendar/googleCalendar";
 import toast from "react-hot-toast";
@@ -21,6 +22,7 @@ const GOOGLE_SCOPE =
 export function useGoogleCalendar() {
   const [isConnected, setIsConnected] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isUnsyncing, setIsUnsyncing] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [googleEmail, setGoogleEmail] = useState<string | undefined>();
   const [googleAvatarUrl, setGoogleAvatarUrl] = useState<string | undefined>();
@@ -121,7 +123,9 @@ export function useGoogleCalendar() {
     async (planId: string): Promise<SyncGoogleCalendarResponse | null> => {
       setIsSyncing(true);
       try {
-        const result = await syncGoogleCalendar(planId);
+        const timeZoneOffsetMinutes = new Date().getTimezoneOffset();
+        const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const result = await syncGoogleCalendar(planId, timeZoneOffsetMinutes, timeZone);
         const totalActions =
           result.createdCount + result.updatedCount + result.deletedCount;
         toast.success(
@@ -158,9 +162,26 @@ export function useGoogleCalendar() {
     }
   }, []);
 
+  const unsyncCalendar = useCallback(
+    async (planId: string): Promise<void> => {
+      setIsUnsyncing(true);
+      try {
+        await unsyncGoogleCalendar(planId);
+        toast.success("Successfully removed synced events from Google Calendar");
+      } catch (error: unknown) {
+        toast.error("Failed to unsync events");
+      } finally {
+        setIsUnsyncing(false);
+      }
+    },
+    [],
+  );
+
+
   return {
     isConnected,
     isSyncing,
+    isUnsyncing,
     isCheckingAuth,
     googleEmail,
     googleAvatarUrl,
@@ -168,5 +189,6 @@ export function useGoogleCalendar() {
     syncCalendar,
     checkAuthStatus,
     disconnectAccount,
+    unsyncCalendar,
   };
 }

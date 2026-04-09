@@ -38,6 +38,12 @@ import { useItineraryContext } from "@/contexts/ItineraryContext";
 import ItineraryItemEditor from "./itinerary-item-editor";
 import PlaceAutocomplete from "./place-autocomplete";
 import { useEnsurePlace } from "@/hooks/use-ensure-place";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import "./fullcalendar-custom.css";
 
 interface ItineraryCalendarProps {
@@ -144,10 +150,10 @@ export default function ItineraryCalendar({
       const isDraft = !!eventInfo.event.extendedProps?.isDraft;
       const isRealEvent = !!itineraryItem?.id;
 
-      return (
-        <div className="group/event flex items-start gap-1 px-1.5 py-0.5 h-full relative">
-          <div className="flex-1 min-w-0">
-            <div className="text-[11px] font-bold opacity-90 leading-tight flex items-center gap-0.5 flex-wrap">
+      const contentNode = (
+        <div className="group/event flex items-start gap-1 px-1.5 py-0.5 h-full relative w-full overflow-hidden">
+          <div className="flex-1 min-w-0 flex flex-col justify-start">
+            <div className="text-[11px] font-bold opacity-90 leading-[1.1] flex items-center gap-0.5 flex-wrap">
               {eventInfo.timeText.split(" - ").map((part, index) => {
                 const text = part.trim();
                 const isMoon = text === "00:00" || text === "24:00";
@@ -163,8 +169,8 @@ export default function ItineraryCalendar({
                 );
               })}
             </div>
-            <p className="text-xs font-semibold whitespace-normal break-words leading-tight mt-0.5">
-              {eventInfo.event.title || "New Item..."}
+            <p className="text-xs font-semibold whitespace-normal break-words leading-[1.1] mt-0.5 line-clamp-2">
+              {eventInfo.event.title || "Untitled Activity"}
             </p>
           </div>
           {/* ActionMenu — visible on hover or when active (only for real events) */}
@@ -200,6 +206,33 @@ export default function ItineraryCalendar({
             </div>
           )}
         </div>
+      );
+
+      if (!isRealEvent) return contentNode;
+
+      return (
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>{contentNode}</TooltipTrigger>
+            <TooltipContent
+              side="left"
+              align="center"
+              className="max-w-[280px] p-3 shadow-lg z-50 flex flex-col gap-1.5 bg-gray-900 border-gray-800"
+            >
+              <div className="text-[11px] font-mono text-gray-400">
+                {eventInfo.timeText}
+              </div>
+              <div className="font-semibold text-sm leading-tight text-white">
+                {itineraryItem?.place?.title || itineraryItem?.note || "Untitled Activity"}
+              </div>
+              {itineraryItem?.place?.title && itineraryItem?.note && (
+                <div className="text-sm font-medium text-gray-300 whitespace-pre-wrap mt-0.5">
+                  {itineraryItem.note}
+                </div>
+              )}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       );
     };
   }, []);
@@ -506,7 +539,7 @@ export default function ItineraryCalendar({
 
         return {
           id: item.id,
-          title: item.place?.title || "Unknown Place",
+          title: item.place?.title || item.note || "Untitled Activity",
           start: start,
           end: end,
           backgroundColor: dayColor,

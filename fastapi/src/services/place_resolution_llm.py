@@ -18,6 +18,7 @@ from typing import Any, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 from src.tools.maps_tools import places_text_search_id_only
 from src.tools.dotnet_tools import get_place_from_db
@@ -25,11 +26,21 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
-llm_verify = ChatGoogleGenerativeAI(
-    model="gemini-3.1-flash-lite-preview",
-    google_api_key=settings.GOOGLE_GEMINI_API_KEY,
-    temperature=0.0,
-    streaming=False,
+llm_verify = (
+    ChatOpenAI(
+        model="google/gemini-3.1-flash-lite-preview",
+        api_key=settings.VERCEL_AI_GATEWAY_API_KEY,
+        base_url="https://ai-gateway.vercel.sh/v1",
+        temperature=0.3,
+        streaming=False,
+    )
+    if settings.USE_VERCEL_AI_GATEWAY
+    else ChatGoogleGenerativeAI(
+        model="gemini-3.1-flash-lite-preview",
+        google_api_key=settings.GOOGLE_GEMINI_API_KEY,
+        temperature=0.3,
+        streaming=False,
+    )
 )
 
 VERIFY_SYSTEM_PROMPT = """You verify attraction names against Google Maps candidates.
@@ -81,35 +92,48 @@ async def _fetch_candidates(
     name: str,
     semaphore: asyncio.Semaphore,
     location_bias: Optional[str] = None,
+    other_name: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Fetch candidates for a single attraction name.
 
     1. textSearch(name) → top 5 placeIds
-    2. get_place_from_db for each placeId → title, address
+    2. If other_name provided, textSearch(other_name) → merge candidates (dedup by placeId)
+    3. get_place_from_db for each placeId → title, address
 
     Returns list of candidate dicts with: placeId, title, address
     """
     async with semaphore:
-        logger.info(f"[resolve] Fetching candidates for: '{name}'")
+        logger.info(f"[resolve] Fetching candidates for: '{name}'" + (f" (also: '{other_name}')" if other_name else ""))
 
-        # Step 1: Text Search → placeIds
-        try:
-            search_results = await places_text_search_id_only.ainvoke({
-                "query": name,
-                "location_bias": location_bias or "",
-            })
-        except Exception as e:
-            logger.error(f"[resolve] textSearch failed for '{name}': {e}")
-            return []
+        # Step 1: Text Search → placeIds (primary name)
+        all_place_ids = []
+        seen_pids = set()
 
-        if not search_results or not isinstance(search_results, list):
-            return []
-        if isinstance(search_results[0], dict) and "error" in search_results[0]:
-            logger.error(f"[resolve] textSearch error for '{name}': {search_results[0]}")
-            return []
+        async def _search_and_collect(query: str):
+            try:
+                results = await places_text_search_id_only.ainvoke({
+                    "query": query,
+                    "location_bias": location_bias or "",
+                })
+            except Exception as e:
+                logger.error(f"[resolve] textSearch failed for '{query}': {e}")
+                return
+            if not results or not isinstance(results, list):
+                return
+            if isinstance(results[0], dict) and "error" in results[0]:
+                logger.error(f"[resolve] textSearch error for '{query}': {results[0]}")
+                return
+            for r in results:
+                pid = r.get("place_id", "")
+                if pid and pid not in seen_pids:
+                    seen_pids.add(pid)
+                    all_place_ids.append(pid)
 
-        place_ids = [r.get("place_id", "") for r in search_results if r.get("place_id")]
-        if not place_ids:
+        await _search_and_collect(name)
+        if other_name:
+            await _search_and_collect(other_name)
+
+        if not all_place_ids:
             return []
 
         # Step 2: DB lookup for each candidate (parallel within semaphore)
@@ -129,7 +153,7 @@ async def _fetch_candidates(
                 logger.error(f"[resolve] DB lookup failed for placeId={pid}: {e}")
             return None
 
-        db_tasks = [_get_db_info(pid) for pid in place_ids]
+        db_tasks = [_get_db_info(pid) for pid in all_place_ids]
         db_results = await asyncio.gather(*db_tasks)
 
         candidates = [c for c in db_results if c is not None]
@@ -239,30 +263,25 @@ async def resolve_all_attractions(
         for attr_idx, attr in enumerate(segment.get("attractions", [])):
             all_attractions.append({
                 "name": attr.get("name", ""),
+                "other_name": attr.get("other_name"),
                 "segment_idx": seg_idx,
                 "attraction_idx": attr_idx,
                 "is_include": False,
                 "include_idx": -1,
             })
-            for inc_idx, inc in enumerate(attr.get("includes", [])):
-                if isinstance(inc, dict) and inc.get("name"):
-                    all_attractions.append({
-                        "name": inc["name"],
-                        "segment_idx": seg_idx,
-                        "attraction_idx": attr_idx,
-                        "is_include": True,
-                        "include_idx": inc_idx,
-                    })
 
     if not all_attractions:
         return attraction_result
 
     logger.info(f"[resolve] Resolving {len(all_attractions)} attractions for '{destination}'")
 
-    # --- Step 2: Fetch candidates (parallel) ---
+    # --- Step 2: Fetch candidates (parallel), using other_name when available ---
     semaphore = asyncio.Semaphore(5)
     all_candidates = await asyncio.gather(*[
-        _fetch_candidates(a["name"], semaphore, location_bias)
+        _fetch_candidates(
+            a["name"], semaphore, location_bias,
+            other_name=a.get("other_name"),
+        )
         for a in all_attractions
     ])
 
@@ -379,21 +398,13 @@ def _apply_to_segments(
         attraction = attractions[attr_idx]
 
         if global_idx in duplicate_indices:
-            if not info["is_include"]:
-                removals[(seg_idx, attr_idx)] = True
+            removals[(seg_idx, attr_idx)] = True
             continue
 
         if global_idx in resolved_map:
             resolved = resolved_map[global_idx]
-            if info["is_include"]:
-                includes = attraction.get("includes", [])
-                inc_idx = info["include_idx"]
-                if inc_idx < len(includes) and isinstance(includes[inc_idx], dict):
-                    includes[inc_idx]["name"] = resolved["title"]
-                    includes[inc_idx]["placeId"] = resolved["placeId"]
-            else:
-                attraction["name"] = resolved["title"]
-                attraction["placeId"] = resolved["placeId"]
+            attraction["name"] = resolved["title"]
+            attraction["placeId"] = resolved["placeId"]
 
     # Remove duplicates (reverse order to preserve indices)
     for seg_idx in range(len(segments)):
@@ -432,15 +443,8 @@ def _fallback_first_candidate(
         attraction = attractions[attr_idx]
         first = candidates[0]
 
-        if info["is_include"]:
-            includes = attraction.get("includes", [])
-            inc_idx = info["include_idx"]
-            if 0 <= inc_idx < len(includes) and isinstance(includes[inc_idx], dict):
-                includes[inc_idx]["name"] = first["title"]
-                includes[inc_idx]["placeId"] = first["placeId"]
-        else:
-            attraction["name"] = first["title"]
-            attraction["placeId"] = first["placeId"]
+        attraction["name"] = first["title"]
+        attraction["placeId"] = first["placeId"]
 
     return attraction_result
 

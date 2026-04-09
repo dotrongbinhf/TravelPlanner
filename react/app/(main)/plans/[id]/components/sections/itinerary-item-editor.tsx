@@ -1,5 +1,8 @@
 import { ItineraryDay } from "@/types/itineraryDay";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Map, X } from "lucide-react";
+import PlaceAutocomplete from "./place-autocomplete";
 import {
   Select,
   SelectContent,
@@ -20,6 +23,12 @@ interface ItineraryItemEditorProps {
   duration: string; // HH:mm
   setStartTime: (date: Date | undefined) => void;
   setDuration: (duration: string) => void;
+  note?: string;
+  setNote?: (note: string) => void;
+  placeId?: string | null;
+  setPlaceId?: (id: string | null) => void;
+  placeName?: string;
+  setPlaceName?: (name: string) => void;
 }
 
 export default function ItineraryItemEditor({
@@ -31,6 +40,12 @@ export default function ItineraryItemEditor({
   duration,
   setStartTime,
   setDuration,
+  note,
+  setNote,
+  placeId,
+  setPlaceId,
+  placeName,
+  setPlaceName,
 }: ItineraryItemEditorProps) {
   useEffect(() => {
     if (!selectedDayId && itineraryDays.length > 0) {
@@ -324,6 +339,59 @@ export default function ItineraryItemEditor({
           />
         </div>
       </div>
+      {setPlaceId && setPlaceName && (
+        <div className="grid grid-cols-4 items-start gap-4">
+          <Label className="text-right font-medium text-gray-700 mt-3">
+            Place
+          </Label>
+          <div className="col-span-3">
+            {placeId ? (
+              <div className="flex justify-between items-center p-3 bg-blue-50 border border-blue-100 rounded-lg">
+                <div className="flex items-center gap-2 overflow-hidden">
+                  <Map size={16} className="text-blue-500 shrink-0" />
+                  <span className="text-sm font-medium text-blue-800 truncate">
+                    {placeName}
+                  </span>
+                </div>
+                <button
+                  onClick={() => {
+                    setPlaceId(null);
+                    setPlaceName("");
+                  }}
+                  className="text-blue-400 hover:text-blue-600 transition-colors ml-2 shrink-0 cursor-pointer"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            ) : (
+              <PlaceAutocomplete
+                onPlaceSelect={(p) => {
+                  if (p.place_id && p.description) {
+                    setPlaceId(p.place_id);
+                    setPlaceName(p.description);
+                  }
+                }}
+                onClose={() => {}}
+              />
+            )}
+          </div>
+        </div>
+      )}
+      {setNote && (
+        <div className="grid grid-cols-4 items-start gap-4">
+          <Label className="text-right font-medium text-gray-700 mt-2">
+            Note
+          </Label>
+          <div className="col-span-3">
+            <Textarea
+              value={note || ""}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Add a note (optional)..."
+              className="w-full min-h-[80px]"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

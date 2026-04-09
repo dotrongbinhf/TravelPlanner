@@ -32,6 +32,8 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  generatedPlanData?: string | null;
+  applyGeneratedPlanAt?: string | null;
 }
 
 interface ChatMessagesProps {
@@ -43,6 +45,7 @@ interface ChatMessagesProps {
   readonly structuredData?: Record<string, unknown> | null;
   readonly onApplyPlan?: (
     mode: "CurrentPlan" | "NewPlan",
+    messageId?: string,
   ) => Promise<void>;
 }
 
@@ -73,9 +76,7 @@ const markdownComponents = {
   h3: ({ node, ...props }: any) => (
     <h3 className="text-lg font-bold mt-3 mb-2" {...props} />
   ),
-  p: ({ node, ...props }: any) => (
-    <p className="mb-2 last:mb-0" {...props} />
-  ),
+  p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
   ul: ({ node, ...props }: any) => (
     <ul className="list-disc pl-5 mb-2 space-y-1" {...props} />
   ),
@@ -96,6 +97,21 @@ const markdownComponents = {
   ),
 };
 
+function formatAppliedAt(isoString: string): string {
+  try {
+    const date = new Date(isoString);
+    return date.toLocaleDateString(undefined, {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return isoString;
+  }
+}
+
 export default function ChatMessages({
   messages,
   streamingContent,
@@ -106,73 +122,185 @@ export default function ChatMessages({
   onApplyPlan,
 }: ChatMessagesProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [isApplying, setIsApplying] = useState(false);
-  const [applySuccess, setApplySuccess] = useState(false);
+  const lastUserMessageRef = useRef<HTMLDivElement>(null);
+  const isInitialLoadRef = useRef(true);
+  const prevMsgCountRef = useRef(messages.length);
+
+  const [applyingMessageId, setApplyingMessageId] = useState<string | null>(
+    null,
+  );
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [confirmMessageId, setConfirmMessageId] = useState<string | null>(null);
+
+  const lastUserMsgId = [...messages].reverse().find(m => m.role === "user")?.id;
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, streamingContent, scrollToBottom]);
+  const scrollToLastUserMsg = useCallback(() => {
+    if (lastUserMessageRef.current) {
+      lastUserMessageRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else {
+      scrollToBottom();
+    }
+  }, [scrollToBottom]);
 
-  const hasApplyData =
+  useEffect(() => {
+    if (isInitialLoadRef.current && messages.length > 0) {
+      setTimeout(scrollToLastUserMsg, 100);
+      isInitialLoadRef.current = false;
+      prevMsgCountRef.current = messages.length;
+      return;
+    }
+
+    if (messages.length > prevMsgCountRef.current || isStreaming || (streamingContent && streamingContent.length > 0)) {
+      scrollToBottom();
+    }
+    
+    prevMsgCountRef.current = messages.length;
+  }, [messages.length, isStreaming, streamingContent, scrollToBottom, scrollToLastUserMsg]);
+
+  // Check if any DB-loaded message already has generatedPlanData
+  const hasDbApplyData = messages.some((m) => m.generatedPlanData);
+
+  const streamingHasApplyData =
     !isStreaming &&
     structuredData &&
-    (structuredData as any)?.apply_data;
+    (structuredData as any)?.apply_data &&
+    !hasDbApplyData;
 
-  const handleApply = async (mode: "CurrentPlan" | "NewPlan") => {
+  const handleApply = async (
+    mode: "CurrentPlan" | "NewPlan",
+    messageId?: string,
+  ) => {
     if (!onApplyPlan) return;
-    setIsApplying(true);
-    setApplySuccess(false);
+    setApplyingMessageId(messageId || "streaming");
     try {
-      await onApplyPlan(mode);
-      setApplySuccess(true);
+      await onApplyPlan(mode, messageId);
     } catch {
       // Error handled by parent
     } finally {
-      setIsApplying(false);
+      setApplyingMessageId(null);
     }
   };
 
-  const handleCurrentPlanClick = () => {
+  const handleCurrentPlanClick = (messageId?: string) => {
+    setConfirmMessageId(messageId || null);
     setShowConfirmDialog(true);
   };
 
   const handleConfirmReplace = () => {
     setShowConfirmDialog(false);
-    handleApply("CurrentPlan");
+    handleApply("CurrentPlan", confirmMessageId || undefined);
+  };
+
+  const renderApplyButton = (
+    messageId: string,
+    applyGeneratedPlanAt?: string | null,
+  ) => {
+    const isApplying = applyingMessageId === messageId;
+    return (
+      <div className="flex justify-start pl-8 mt-1.5 animate-in fade-in slide-in-from-bottom-2 duration-300">
+        <div className="flex items-center gap-2 p-3 rounded-xl bg-gradient-to-r from-emerald-50 to-green-50 border border-emerald-200">
+          {applyGeneratedPlanAt ? (
+            <div className="flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="text-xs text-emerald-700 font-medium">
+                Applied at {formatAppliedAt(applyGeneratedPlanAt)}
+              </span>
+              <span className="text-xs text-gray-400">·</span>
+            </div>
+          ) : (
+            <span className="text-xs text-emerald-700 font-medium">
+              Plan ready to apply
+            </span>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                disabled={isApplying}
+                className="h-7 px-3 text-xs font-semibold bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-lg shadow-sm"
+              >
+                {isApplying ? (
+                  <>
+                    <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                    Applying...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-3 h-3 mr-1" />
+                    {applyGeneratedPlanAt ? "Re-apply" : "Apply Plan"}
+                  </>
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-52">
+              <DropdownMenuItem
+                onClick={() => handleCurrentPlanClick(messageId)}
+                className="cursor-pointer"
+              >
+                <CheckCircle2 className="w-4 h-4 mr-2 text-emerald-600" />
+                <div>
+                  <div className="text-sm font-medium">Apply to this plan</div>
+                  <div className="text-xs text-gray-500">
+                    Replace current plan data
+                  </div>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => handleApply("NewPlan", messageId)}
+                className="cursor-pointer"
+              >
+                <FilePlus2 className="w-4 h-4 mr-2 text-blue-600" />
+                <div>
+                  <div className="text-sm font-medium">Create new plan</div>
+                  <div className="text-xs text-gray-500">
+                    Keep current plan unchanged
+                  </div>
+                </div>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+    );
   };
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
       {messages.map((msg) => (
-        <div
-          key={msg.id}
-          className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-        >
-          {msg.role === "assistant" && (
-            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center flex-shrink-0 mr-2 mt-1">
-              <BotMessageSquare className="w-3 h-3 text-white" />
-            </div>
-          )}
+        <div key={msg.id} ref={msg.id === lastUserMsgId ? lastUserMessageRef : null}>
           <div
-            className={cn(
-              "max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words",
-              msg.role === "user"
-                ? "bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-br-md"
-                : "bg-gray-100 text-gray-800 rounded-bl-md",
-            )}
+            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
           >
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={markdownComponents}
+            {msg.role === "assistant" && (
+              <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center flex-shrink-0 mr-2 mt-1">
+                <BotMessageSquare className="w-3 h-3 text-white" />
+              </div>
+            )}
+            <div
+              className={cn(
+                "max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words",
+                msg.role === "user"
+                  ? "bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-br-md"
+                  : "bg-gray-100 text-gray-800 rounded-bl-md",
+              )}
             >
-              {msg.content}
-            </ReactMarkdown>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={markdownComponents}
+              >
+                {msg.content}
+              </ReactMarkdown>
+            </div>
           </div>
+
+          {/* Per-message Apply button — for messages loaded from DB */}
+          {msg.role === "assistant" &&
+            msg.generatedPlanData &&
+            renderApplyButton(msg.id, msg.applyGeneratedPlanAt)}
         </div>
       ))}
 
@@ -187,15 +315,25 @@ export default function ChatMessages({
             {(activeAgents?.length! > 0 || completedAgents?.length! > 0) && (
               <div className="flex flex-col gap-1.5 mt-1 border-l-2 pl-3 border-blue-200">
                 {completedAgents?.map((agentName) => (
-                  <div key={agentName} className="flex items-center gap-1.5 text-xs text-emerald-600 font-medium">
+                  <div
+                    key={agentName}
+                    className="flex items-center gap-1.5 text-xs text-emerald-600 font-medium"
+                  >
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                    <span>{AGENT_LABELS[agentName] || agentName} completed</span>
+                    <span>
+                      {AGENT_LABELS[agentName] || agentName} completed
+                    </span>
                   </div>
                 ))}
                 {activeAgents?.map((agentName) => (
-                  <div key={agentName} className="flex items-center gap-1.5 text-xs text-blue-600 font-medium">
+                  <div
+                    key={agentName}
+                    className="flex items-center gap-1.5 text-xs text-blue-600 font-medium"
+                  >
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span className="animate-pulse">{AGENT_LABELS[agentName] || agentName} running...</span>
+                    <span className="animate-pulse">
+                      {AGENT_LABELS[agentName] || agentName} running...
+                    </span>
                   </div>
                 ))}
               </div>
@@ -234,75 +372,8 @@ export default function ChatMessages({
         </div>
       )}
 
-      {/* Apply AI Plan Button — shown after streaming completes with apply_data */}
-      {hasApplyData && !applySuccess && (
-        <div className="flex justify-start pl-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <div className="flex items-center gap-2 p-3 rounded-xl bg-gradient-to-r from-emerald-50 to-green-50 border border-emerald-200">
-            <span className="text-xs text-emerald-700 font-medium">
-              Plan ready to apply
-            </span>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  size="sm"
-                  disabled={isApplying}
-                  className="h-7 px-3 text-xs font-semibold bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-lg shadow-sm"
-                >
-                  {isApplying ? (
-                    <>
-                      <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                      Applying...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="w-3 h-3 mr-1" />
-                      Apply Plan
-                    </>
-                  )}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-52">
-                <DropdownMenuItem
-                  onClick={handleCurrentPlanClick}
-                  className="cursor-pointer"
-                >
-                  <CheckCircle2 className="w-4 h-4 mr-2 text-emerald-600" />
-                  <div>
-                    <div className="text-sm font-medium">Apply to this plan</div>
-                    <div className="text-xs text-gray-500">
-                      Replace current plan data
-                    </div>
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => handleApply("NewPlan")}
-                  className="cursor-pointer"
-                >
-                  <FilePlus2 className="w-4 h-4 mr-2 text-blue-600" />
-                  <div>
-                    <div className="text-sm font-medium">Create new plan</div>
-                    <div className="text-xs text-gray-500">
-                      Keep current plan unchanged
-                    </div>
-                  </div>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
-      )}
-
-      {/* Apply success message */}
-      {applySuccess && (
-        <div className="flex justify-start pl-8 animate-in fade-in duration-300">
-          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-            <span className="text-xs text-emerald-700 font-medium">
-              Plan applied successfully!
-            </span>
-          </div>
-        </div>
-      )}
+      {/* Apply button for streaming result (not yet saved to DB) */}
+      {streamingHasApplyData && renderApplyButton("streaming")}
 
       {/* Confirm replace dialog */}
       <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
@@ -339,4 +410,3 @@ export default function ChatMessages({
     </div>
   );
 }
-

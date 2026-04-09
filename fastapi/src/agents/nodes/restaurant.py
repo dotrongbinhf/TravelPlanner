@@ -15,6 +15,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 from src.agents.state import GraphState
 from src.agents.nodes.utils import _extract_json
@@ -23,54 +24,28 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
-llm_restaurant = ChatGoogleGenerativeAI(
-    model="gemini-3.1-flash-lite-preview",
-    google_api_key=settings.GOOGLE_GEMINI_API_KEY,
-    temperature=0.5,
-    streaming=False,
+USE_ENTERPRISE_FIELDS = settings.USE_ENTERPRISE_FIELDS
+
+llm_restaurant = (
+    ChatOpenAI(
+        model="google/gemini-3.1-flash-lite-preview",
+        api_key=settings.VERCEL_AI_GATEWAY_API_KEY,
+        base_url="https://ai-gateway.vercel.sh/v1",
+        temperature=0.3,
+        streaming=False,
+    )
+    if settings.USE_VERCEL_AI_GATEWAY
+    else ChatGoogleGenerativeAI(
+        model="gemini-3.1-flash-lite-preview",
+        google_api_key=settings.GOOGLE_GEMINI_API_KEY_RESTAURANT,
+        temperature=0.3,
+        streaming=False,
+    )
 )
 
 # ============================================================================
 # PHASE 1: LLM Meal Planning
 # ============================================================================
-
-MOCK_MEAL_PLAN = [
-  {
-    "day": 0,
-    "meal_type": "lunch",
-    "query": "nhà hàng bún chả truyền thống"
-  },
-  {
-    "day": 0,
-    "meal_type": "dinner",
-    "query": "nhà hàng món ăn Việt Nam gia đình"
-  },
-  {
-    "day": 1,
-    "meal_type": "lunch",
-    "query": "nhà hàng phở ngon"
-  },
-  {
-    "day": 1,
-    "meal_type": "dinner",
-    "query": "nhà hàng đặc sản Hà Nội"
-  },
-  {
-    "day": 2,
-    "meal_type": "lunch",
-    "query": "nhà hàng cơm niêu Việt Nam"
-  },
-  {
-    "day": 2,
-    "meal_type": "dinner",
-    "query": "quán ăn đường phố Hà Nội"
-  },
-  {
-    "day": 3,
-    "meal_type": "lunch",
-    "query": "nhà hàng bánh cuốn truyền thống"
-  }
-]
 
 MEAL_PLAN_SYSTEM = """You are a meal planning specialist for travelers.
 
@@ -104,71 +79,6 @@ Return ONLY a JSON array of meal plan entries. No text before or after.
 # ============================================================================
 # PHASE 3: LLM Restaurant Selection
 # ============================================================================
-MOCK_SELECTION = [
-  {
-    "day": 0,
-    "meal_type": "lunch",
-    "name": "Bún Chả Que Tre",
-    "place_id": "ChIJU3LMMUOrNTERaL170xOiY3M",
-    "estimated_cost_total": 250000,
-    "note": "Quán bún chả nổi tiếng, không gian phù hợp gia đình, đánh giá cao với 744 lượt bình chọn.",
-    "alternatives": ["Tuyết Bún Chả - 104 Trần Nhật Duật", "Hùng - Bún Chả Gia Truyền"]
-  },
-  {
-    "day": 0,
-    "meal_type": "dinner",
-    "name": "Góc Bếp Hà Thành",
-    "place_id": "ChIJX9_lMwCrNTERm_ymoTKS8go",
-    "estimated_cost_total": 600000,
-    "note": "Nhà hàng chuyên món Việt với không gian ấm cúng, rất phù hợp cho bữa tối gia đình.",
-    "alternatives": ["Épices d'Indochine Restaurant - Nhà hàng Gia Vị Đông Dương", "Nhà hàng Bắc Đỉnh"]
-  },
-  {
-    "day": 1,
-    "meal_type": "lunch",
-    "name": "Phở bò Cô Hoa",
-    "place_id": "ChIJq-sX-aerNTERFPF3qifBlqY",
-    "estimated_cost_total": 180000,
-    "note": "Phở truyền thống với hương vị chuẩn Hà Nội, được đánh giá rất cao về chất lượng nước dùng.",
-    "alternatives": ["Phở Gia Thành", "Phở Gà Nguyệt"]
-  },
-  {
-    "day": 1,
-    "meal_type": "dinner",
-    "name": "Mộng Mer - Đặc sản Huế",
-    "place_id": "ChIJJ35t-G-rNTERGdN-EYvJxAc",
-    "estimated_cost_total": 500000,
-    "note": "Trải nghiệm ẩm thực đặc sản đa dạng, không gian sạch sẽ và phục vụ chuyên nghiệp.",
-    "alternatives": ["Quan An Ngon", "Ngon Garden"]
-  },
-  {
-    "day": 2,
-    "meal_type": "lunch",
-    "name": "Ẩm Thực Niêu Quán",
-    "place_id": "ChIJtb_5fgCrNTER-3SBt4RVJN8",
-    "estimated_cost_total": 450000,
-    "note": "Cơm niêu truyền thống Việt Nam, không gian rộng rãi, rất thích hợp cho gia đình có trẻ nhỏ.",
-    "alternatives": ["Niêu Quán", "Cơm niêu Singapore KOMBO - 30 Nguyễn Phong Sắc"]
-  },
-  {
-    "day": 2,
-    "meal_type": "dinner",
-    "name": "Quán Ngon Phố Cổ",
-    "place_id": "ChIJaefUR7-rNTERxsCI70VAJ4w",
-    "estimated_cost_total": 400000,
-    "note": "Nằm ngay khu phố cổ, phục vụ nhiều món ăn đường phố đặc trưng trong không gian thoải mái.",
-    "alternatives": ["Quan An Ngon"]
-  },
-  {
-    "day": 3,
-    "meal_type": "lunch",
-    "name": "Bánh Cuốn Gia Truyền Thanh Vân",
-    "place_id": "ChIJ_cJfr76rNTERk1CbU0guunY",
-    "estimated_cost_total": 200000,
-    "note": "Thương hiệu bánh cuốn gia truyền lâu đời, hương vị tinh tế, là lựa chọn tuyệt vời cho bữa trưa.",
-    "alternatives": ["Tuệ An | Bánh Cuốn Nóng & Phở Bò Bảo Khánh", "Bánh cuốn gia truyền Thanh Vân"]
-  }
-]
 
 SELECTION_SYSTEM = """You are a restaurant selection specialist for travelers.
 
@@ -177,10 +87,12 @@ Given search results for each meal in a trip, select the best restaurant per mea
 ## Rules
 - Each meal entry includes `date` and `day_of_week` — use these to CHECK opening_hours
 - If a restaurant's opening_hours show it is CLOSED on that day_of_week, do NOT select it
+- **IMPORTANT**: If a meal has NO search_results (empty input array), you MUST still output a meal entry for it to estimate its cost. For such meals, set `name` to "Tự túc ăn uống" (or equivalent in requested language), leave `place_id` empty, return empty `alternatives`, and provide a generic `note` about eating independently.
+- Whether results exist or not, always output a reasonable `estimated_cost_total` for the meal.
 - Choose restaurants that match the travelers' preferences and budget
 - Do NOT select the same restaurant for different meals (choose variety)
 - Estimate total meal cost for the ENTIRE group (all adults + children)
-- Provide a brief note explaining your choice
+- Provide a brief note explaining your choice and describing the restaurant/food in the requested language.
 - Pick 2 alternatives from the remaining results (also must be open on that day)
 - Respond in the language specified in the `language` field (e.g., "vi" → Vietnamese, "en" → English). The `note` field MUST be in this language.
 
@@ -242,33 +154,54 @@ def _parse_meal_slots(itinerary_data: dict, resolved_places: dict) -> list[dict]
         stops = day_data.get("stops", [])
 
         for i, stop in enumerate(stops):
-            role = stop.get("role", "")
-            if role not in ("lunch", "dinner"):
+            roles = stop.get("role", stop.get("roles", []))
+            # Support both string and list just in case
+            if isinstance(roles, str):
+                roles = [roles]
+            
+            meal_type = None
+            if "lunch" in roles:
+                meal_type = "lunch"
+            elif "dinner" in roles:
+                meal_type = "dinner"
+            
+            if not meal_type:
                 continue
 
-            # Find the nearest attraction/real-place BEFORE this meal
+            # Find the nearest attraction/real-place BEFORE or AFTER this meal
             near_attraction = ""
             lat, lng = 0.0, 0.0
 
-            # Walk backwards from the meal stop
-            for j in range(i - 1, -1, -1):
-                prev_stop = stops[j]
-                prev_role = prev_stop.get("role", "")
-                prev_name = prev_stop.get("name", "")
+            def _get_valid_location(idx: int) -> tuple[str, float, float]:
+                if 0 <= idx < len(stops):
+                    s = stops[idx]
+                    s_roles = s.get("role", s.get("roles", []))
+                    if isinstance(s_roles, str):
+                        s_roles = [s_roles]
+                    s_name = s.get("name", "")
+                    
+                    if "generic" not in s_roles and s_name in coords_lookup:
+                        lat_val, lng_val = coords_lookup[s_name]
+                        return s_name, lat_val, lng_val
+                return "", 0.0, 0.0
 
-                # Skip generic stops (no real coords)
-                if prev_role == "generic":
-                    continue
-
-                # Try to find coords in lookup
-                if prev_name in coords_lookup:
-                    near_attraction = prev_name
-                    lat, lng = coords_lookup[prev_name]
-                    break
+            # 1. Check previous stop (i - 1)
+            # If it's generic (or invalid), _get_valid_location returns empty
+            prev_name, p_lat, p_lng = _get_valid_location(i - 1)
+            
+            if prev_name:
+                near_attraction, lat, lng = prev_name, p_lat, p_lng
+            else:
+                # 2. If previous was generic (or no valid coords), check next stop (i + 1)
+                next_name, n_lat, n_lng = _get_valid_location(i + 1)
+                if next_name:
+                    near_attraction, lat, lng = next_name, n_lat, n_lng
+            
+            # If both were generic (or not found), lat/lng remain 0.0 and it will be skipped later
 
             meal_slots.append({
                 "day": day_idx,
-                "meal_type": role,
+                "meal_type": meal_type,
                 "near_attraction": near_attraction,
                 "lat": lat,
                 "lng": lng,
@@ -356,7 +289,6 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
 
         phase1_result = await llm_restaurant.ainvoke(phase1_messages)
         meal_plan = _extract_json(phase1_result.content)
-        # meal_plan = MOCK_MEAL_PLAN
 
         if not isinstance(meal_plan, list):
             meal_plan = meal_plan.get("meal_plan", []) if isinstance(meal_plan, dict) else []
@@ -390,12 +322,13 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
             if not matching_slot or (matching_slot["lat"] == 0 and matching_slot["lng"] == 0):
                 logger.warning(f"   No coords for Day {day} {meal_type}, skipping search")
                 continue
-
+            
             search_tasks.append(
                 search_restaurants_for_meal.ainvoke({
                     "query": query,
                     "lat": matching_slot["lat"],
                     "lng": matching_slot["lng"],
+                    "USE_ENTERPRISE_FIELDS": USE_ENTERPRISE_FIELDS,
                     "page_size": 3,
                 })
             )
@@ -441,8 +374,6 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
 
         meals_with_results = []
         for m in meal_search_results:
-            if not m["search_results"]:
-                continue
             # Trim each restaurant to only fields LLM needs for selection
             trimmed_results = []
             for r in m["search_results"]:

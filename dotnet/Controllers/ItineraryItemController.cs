@@ -1,4 +1,4 @@
-﻿using dotnet.Data;
+using dotnet.Data;
 using dotnet.Dtos.ItineraryItem;
 using dotnet.Entites;
 using Microsoft.AspNetCore.Authorization;
@@ -30,7 +30,11 @@ namespace dotnet.Controllers
                 return NotFound();
             }
 
-            var place = await _placesCollection.Find(p => p.PlaceId == itineraryItem.PlaceId).FirstOrDefaultAsync();
+            Place? place = null;
+            if (!string.IsNullOrEmpty(itineraryItem.PlaceId))
+            {
+                place = await _placesCollection.Find(p => p.PlaceId == itineraryItem.PlaceId).FirstOrDefaultAsync();
+            }
 
             return Ok(new ItineraryItemDto
             {
@@ -39,6 +43,7 @@ namespace dotnet.Controllers
                 Place = place,
                 StartTime = itineraryItem.StartTime,
                 Duration = itineraryItem.Duration,
+                Note = itineraryItem.Note,
             });
         }
 
@@ -51,19 +56,30 @@ namespace dotnet.Controllers
                 return NotFound();
             }
 
-            var place = await _placesCollection.Find(p => p.PlaceId == request.PlaceId).FirstOrDefaultAsync();
-            if (place == null)
+            // Must have either PlaceId or Note
+            if (string.IsNullOrEmpty(request.PlaceId) && string.IsNullOrEmpty(request.Note))
             {
-                return NotFound();
+                return BadRequest("Either PlaceId or Note must be provided.");
+            }
+
+            Place? place = null;
+            if (!string.IsNullOrEmpty(request.PlaceId))
+            {
+                place = await _placesCollection.Find(p => p.PlaceId == request.PlaceId).FirstOrDefaultAsync();
+                if (place == null)
+                {
+                    return NotFound("Place not found.");
+                }
             }
 
             var itineraryItem = new ItineraryItem
             {
                 Id = Guid.NewGuid(),
                 ItineraryDayId = itineraryDayId,
-                PlaceId = request.PlaceId,
+                PlaceId = string.IsNullOrEmpty(request.PlaceId) ? null : request.PlaceId,
                 StartTime = request.StartTime,
-                Duration = request.Duration
+                Duration = request.Duration,
+                Note = request.Note,
             };
 
             dbContext.ItineraryItems.Add(itineraryItem);
@@ -75,7 +91,8 @@ namespace dotnet.Controllers
                 ItineraryDayId = itineraryItem.ItineraryDayId,
                 Place = place,
                 StartTime = itineraryItem.StartTime,
-                Duration = itineraryItem.Duration
+                Duration = itineraryItem.Duration,
+                Note = itineraryItem.Note,
             });
         }
 
@@ -87,23 +104,32 @@ namespace dotnet.Controllers
             {
                 return NotFound();
             }
-            var place = await _placesCollection.Find(p => p.PlaceId == itineraryItem.PlaceId).FirstOrDefaultAsync();
-            if (place == null)
+
+            Place? place = null;
+            if (!string.IsNullOrEmpty(request.PlaceId))
             {
-                return NotFound();
+                place = await _placesCollection.Find(p => p.PlaceId == request.PlaceId).FirstOrDefaultAsync();
+                if (place == null)
+                {
+                    return NotFound("Place not found.");
+                }
             }
 
             itineraryItem.ItineraryDayId = request.ItineraryDayId;
+            itineraryItem.PlaceId = string.IsNullOrEmpty(request.PlaceId) ? null : request.PlaceId;
             itineraryItem.StartTime = request.StartTime;
             itineraryItem.Duration = request.Duration;
+            itineraryItem.Note = request.Note;
             await dbContext.SaveChangesAsync();
+            
             return Ok(new ItineraryItemDto
             {
                 Id = itineraryItem.Id,
                 ItineraryDayId = itineraryItem.ItineraryDayId,
                 Place = place,
                 StartTime = itineraryItem.StartTime,
-                Duration = itineraryItem.Duration
+                Duration = itineraryItem.Duration,
+                Note = itineraryItem.Note,
             });
         }
 

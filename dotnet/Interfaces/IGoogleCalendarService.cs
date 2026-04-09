@@ -24,5 +24,6 @@ namespace dotnet.Interfaces
         public string? Location { get; set; }
         public DateTimeOffset Start { get; set; }
         public DateTimeOffset End { get; set; }
+        public string? TimeZone { get; set; }
     }
 }

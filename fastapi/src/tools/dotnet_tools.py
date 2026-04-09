@@ -222,6 +222,8 @@ async def get_weather_forecast(
 # Place Tools
 # ============================================================
 
+_PLACE_DB_CACHE: dict[str, Any] = {}
+
 @tool
 async def get_place_from_db(place_id: str) -> dict[str, Any]:
     """Get a place from the database by its Google Place ID.
@@ -232,8 +234,16 @@ async def get_place_from_db(place_id: str) -> dict[str, Any]:
     Returns:
         Place data if found, or error with status 404 if not found.
     """
-    logger.info(f"[get_place_from_db] placeId={place_id}")
+    if place_id in _PLACE_DB_CACHE:
+        # Avoid redundant logging for cache hits to keep logs clean
+        return _PLACE_DB_CACHE[place_id]
+
+    logger.info(f"[get_place_from_db] Fetching placeId={place_id} from DB")
     result = await dotnet_client.get(f"/api/place/{place_id}")
+    
+    if isinstance(result, dict) and result.get("success"):
+        _PLACE_DB_CACHE[place_id] = result
+        
     return result
 
 

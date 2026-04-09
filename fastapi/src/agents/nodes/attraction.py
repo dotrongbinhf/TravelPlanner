@@ -8,15 +8,29 @@ from src.agents.nodes.utils import _extract_json, _run_agent_with_tools
 from src.tools.search_tools import tavily_search
 from src.services.place_resolution_llm import resolve_all_attractions
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from src.config import settings
 
 logger = logging.getLogger(__name__)
 
-llm_attraction = ChatGoogleGenerativeAI(
-    model="gemini-3.1-flash-lite-preview",
-    google_api_key=settings.GOOGLE_GEMINI_API_KEY,
-    temperature=0.5,
-    streaming=False,
+# USE_VERCEL_AI_GATEWAY = True
+
+llm_attraction = (
+    ChatOpenAI(
+        model="google/gemini-2.5-flash",
+        api_key=settings.VERCEL_AI_GATEWAY_API_KEY,
+        base_url="https://ai-gateway.vercel.sh/v1",
+        temperature=0.3,
+        streaming=False,
+    )
+    if settings.USE_VERCEL_AI_GATEWAY
+    # if USE_VERCEL_AI_GATEWAY
+    else ChatGoogleGenerativeAI(
+        model="gemini-3.1-flash-lite-preview",
+        google_api_key=settings.GOOGLE_GEMINI_API_KEY_ATTRACTION,
+        temperature=0.3,
+        streaming=False,
+    )
 )
 
 ATTRACTION_AGENT_MOCK = {
@@ -38,6 +52,7 @@ ATTRACTION_AGENT_MOCK = {
                 },
                 {
                     "name": "Ho Chi Minh Mausoleum",
+                    "other_name": "Lăng Bác",
                     "suggested_duration_minutes": 120,
                     "must_visit": False,
                     "estimated_entrance_fee": {"total": 0, "note": "Free admission"},
@@ -50,6 +65,7 @@ ATTRACTION_AGENT_MOCK = {
                 },
                 {
                     "name": "Temple of Literature",
+                    "other_name": "Văn Miếu - Quốc Tử Giám",
                     "suggested_duration_minutes": 90,
                     "must_visit": False,
                     "estimated_entrance_fee": {"total": 75000, "note": "30k × 2 adults + 15k × 1 child (50% under 15)"},
@@ -71,6 +87,7 @@ ATTRACTION_AGENT_MOCK = {
                 },
                 {
                     "name": "Hoa Lo Prison Relic",
+                    "other_name": "Hanoi Hilton",
                     "suggested_duration_minutes": 90,
                     "must_visit": False,
                     "estimated_entrance_fee": {"total": 65000, "note": "30k × 2 adults + 5k × 1 child"},
@@ -78,21 +95,19 @@ ATTRACTION_AGENT_MOCK = {
                 },
                 {
                     "name": "Old Quarter",
-                    "suggested_duration_minutes": 120,
+                    "other_name": "Phố cổ Hà Nội",
                     "must_visit": False,
                     "estimated_entrance_fee": {"total": 0, "note": "Free — public area"},
                     "notes": "Ideal for experiencing local culture, street food, and souvenir shopping."
                 },
                 {
                     "name": "Hanoi Opera House",
-                    "suggested_duration_minutes": 45,
                     "must_visit": False,
                     "estimated_entrance_fee": {"total": 0, "note": "Free exterior visit"},
                     "notes": "Beautiful French colonial architecture, great for a photo stop."
                 },
                 {
                     "name": "St. Joseph's Cathedral",
-                    "suggested_duration_minutes": 30,
                     "must_visit": False,
                     "estimated_entrance_fee": {"total": 0, "note": "Free admission"},
                     "notes": "Neo-Gothic cathedral in the heart of the city."
@@ -108,25 +123,25 @@ You suggest tourist attractions based on user preferences and trip context.
 
 ## Input
 You receive two pieces of context from the Orchestrator:
-1. **plan_context**: Shared trip info (departure, destination, dates, num_days, travelers, interest, pace, budget_level, currency, geographic_type, mobility_plan, local_transportation)
-2. **attraction context**: Attraction-specific info (segments with segment_name/days/area_description, notes, user_attractions_preferences with interest/must_visit/to_avoid/notes)
+1. **plan_context**: Shared trip info (departure, destination, dates, num_days, travelers, interest, pace, budget_level, currency, mobility_plan with overview/segments, local_transportation)
+2. **attraction context**: user_attractions_preferences (interest/must_visit/to_avoid/notes)
 
 ## CRITICAL — How to use mobility_plan
 The **mobility_plan** in plan_context tells you HOW the traveler arrives and departs. You MUST read it carefully to decide how much free time is available on each day:
 - Adjust the number and timing of attractions per day accordingly.
 
 ## Process
-1. Read both plan_context and attraction context carefully
-2. Pay close attention to **mobility_plan** to understand arrival/departure timing and adjust Day 1 and last day attractions accordingly
-3. Look at each **segment** — it tells you which days belong to which area
-4. Read the **notes** field in attraction context — it contains critical info like "Day 1 is arrival day", "Day 3 is dedicated to Ba Vi", "Day 4 is departure day", etc.
-5. Use your LLM knowledge to suggest attractions for EACH segment/day following the area assignments and themes
+1. Read plan_context carefully — especially **mobility_plan.overview** for arrival/departure timing
+2. Read **mobility_plan.segments** — each segment has `attraction_search_area` and `attraction_days`
+3. Use segments as SEARCH GUIDANCE: find attractions in each segment's geographic area
+4. Note: `attraction_days` is a SOFT assignment — Itinerary Agent may flexibly schedule across segments
+5. Use your LLM knowledge to suggest attractions for EACH segment following the area
 6. Use **tavily_search** ONLY when:
    - The user explicitly asks for new/trending/hot/recently-opened places
-   - You feel your training data might not cover recent developments at the destination (e.g., newly opened museums, seasonal festivals, temporary exhibitions in 2026)
+   - You feel your training data might not cover recent developments at the destination
    - You need more options to better match unusual or specific user interests
 7. Do NOT use tavily_search for well-known, established attractions
-8. Return place names in the **local language of the destination** (based on the `language` field in plan_context). For example, if language is "vi" and destination is Hanoi, use "Hồ Hoàn Kiếm" instead of "Hoan Kiem Lake", "Văn Miếu - Quốc Tử Giám" instead of "Temple of Literature". This ensures accurate matching when resolving places on Google Maps.
+8. Return place names in the **local language of the destination** (based on the `language` field in plan_context). For example, if language is "vi" and destination is Hanoi, use "Hồ Hoàn Kiếm" instead of "Hoan Kiem Lake". This ensures accurate matching when resolving places on Google Maps.
 
 ## Tool: tavily_search (optional — for discovering new/trending places)
 - query: Search text (e.g., "Top historical attractions in Hanoi", "Top hidden gems in Hanoi")
@@ -141,11 +156,9 @@ EXAMPLE - FINAL OUTPUT STRUCTURE:
     "segments": [
         {
             "segment_name": "Central Hanoi",
-            "days": [0, 1, 3],
             "attractions": [
                 {
                     "name": "Hồ Hoàn Kiếm",
-                    "suggested_duration_minutes": 90,
                     "must_visit": false,
                     "estimated_entrance_fee": {"total": 0, "note": "Free — public area"},
                     "includes": [
@@ -155,23 +168,27 @@ EXAMPLE - FINAL OUTPUT STRUCTURE:
                 },
                 {
                     "name": "Lăng Chủ tịch Hồ Chí Minh",
-                    "suggested_duration_minutes": 120,
+                    "other_name": "Lăng Bác",
                     "must_visit": true,
                     "estimated_entrance_fee": {"total": 0, "note": "Free admission"},
                     "includes": [
                         {"name": "Chùa Một Cột", "estimated_entrance_fee": {"total": 0, "note": "Free"}}
                     ],
                     "notes": "Chùa Một Cột is within walking distance in the same complex"
+                },
+                {
+                    "name": "Nhà tù Hỏa Lò",
+                    "other_name": "Hanoi Hilton",
+                    "must_visit": false,
+                    "estimated_entrance_fee": {"total": 65000, "note": "30k × 2 adults + 5k × 1 child"}
                 }
             ]
         },
         {
             "segment_name": "Ba Vi excursion",
-            "days": [2],
             "attractions": [
                 {
                     "name": "Vườn Quốc gia Ba Vì",
-                    "suggested_duration_minutes": 180,
                     "must_visit": false,
                     "estimated_entrance_fee": {"total": 160000, "note": "60k × 2 adults + 40k child"}
                 }
@@ -180,54 +197,40 @@ EXAMPLE - FINAL OUTPUT STRUCTURE:
     ]
 }
 
-## CRITICAL — About suggested_duration_minutes
-**suggested_duration_minutes** is the ON-SITE VISIT TIME — the time the traveler actually spends AT the attraction exploring, viewing, experiencing it.
-- It does NOT include travel time to/from the attraction. Travel time between attractions will be calculated separately by the Itinerary Agent later.
-- Base your estimate on realistic visit duration for each specific attraction.
-- Adjust based on the user's **pace**:
-  - **relaxed**: Longer on-site time — travelers want to enjoy each place thoroughly
-  - **moderate**: Standard visit durations
-  - **packed**: Shorter on-site time — travelers want to see more places quickly
-
 ## CRITICAL — Understanding Segments
-Each **segment** in the attraction context represents a MOVEMENT PLAN — it tells you WHERE the traveler will be on which days. How you interpret segments depends on the **geographic_type**:
+Each **segment** in mobility_plan.segments represents a GEOGRAPHIC AREA for search. Use the `attraction_search_area` field to know WHERE to look for attractions.
 
-### CENTRALIZED / CENTRALIZED_WITH_OUTLIER (city trip)
-- Each segment defines an **area** to explore (e.g., "Central Hanoi", "Ba Vì excursion")
-- Find attractions that are WITHIN or very NEAR that area
-- City attractions are typically close together, so travelers can visit more places per day
+- For city trips: segments define areas to explore (e.g., "Central Hanoi", "Ba Vì excursion")
+- For road trips: segments represent route legs (e.g., "Hà Giang → Quản Bạ → Yên Minh")
+  - Find attractions, scenic viewpoints, check-in spots ALONG the route
+  - Include a mix: major stops, scenic viewpoints, local markets, natural landmarks
 
-### ROAD_TRIP
-- Each segment represents a **route or leg** of the journey (e.g., "Hà Giang → Quản Bạ → Yên Minh")
-- You MUST find attractions, scenic viewpoints, check-in spots, and interesting stops **ALONG the route** between the segment's origin and destination
-- Include a mix of: major attractions worth a long stop, roadside scenic viewpoints for quick photo stops, local markets or villages worth a brief visit, natural landmarks along the road
-- Road trip attractions should feel like a journey — the route itself is part of the experience
+## Rules — Naming
+- The `name` field contains ONLY the place name — no alternative names, no parenthetical info.
+- If a place has a well-known alternative name that locals commonly use (e.g., "Lăng Bác" for "Lăng Chủ tịch Hồ Chí Minh", "Hanoi Hilton" for "Nhà tù Hỏa Lò"), add it as `other_name`.
+- `other_name` is optional — omit it if the place doesn't have a widely-known alternative name.
+- Well-known, unambiguous places (e.g., "Hồ Hoàn Kiếm", "Hà Nội Opera House") do NOT need an other_name.
 
 ## Rules — How Many Attractions?
 - Decide based on:
-  - **Available time**: How many hours does the traveler actually have on that day? (Consider mobility_plan for arrival/departure days)
-  - **Pace**: relaxed travelers prefer fewer attractions with longer on-site time; packed travelers want more places with shorter visits
-  - **Geographic type**: City trips allow more attractions per day (short commutes); road trips mean fewer major stops (long drives between them) but can include quick roadside stops
-  - **Destination characteristics**: A day in a dense cultural district may have many walkable attractions; a day in a remote nature area may have only a few spread-out spots
-  - You MUST suggest MORE attractions than needed for the available time. Extra non-must-visit attractions serve as alternatives for the user and allow the Itinerary Agent flexibility to fill gaps or replace dropped places.
-
+  - **Available time**: How many hours on each day? (Consider mobility_plan.overview for arrival/departure)
+  - **Pace**: relaxed = fewer per day; packed = more per day
+  - **Trip type**: City trips = more per day (short commutes); road trips = fewer major stops
+- Over-provisioning: You MUST suggest **20-30% MORE** attractions than what would fit in the schedule. This gives the Itinerary Agent flexibility to drop, swap, and optimize.
 
 ## Rules — Content
-- For CENTRALIZED segments: attractions must be IN or NEAR the assigned area
-- For ROAD_TRIP segments: attractions must be ALONG or NEAR the route described in the segment
+- Attractions must be IN or NEAR the segment's `attraction_search_area`
 - Use EXACT place names that exist on Google Maps
-- Include must_visit places from user_attractions_preferences — set must_visit=true for those. All other attractions you suggest on your own get must_visit=false.
-- You MUST suggest MORE attractions than needed for the available time. Extra non-must-visit attractions serve as alternatives for the user and allow the Itinerary Agent flexibility to fill gaps or replace dropped places.
+- Include must_visit places from user_attractions_preferences — set must_visit=true. Others get must_visit=false.
 - Exclude places listed in to_avoid
-- Consider the travelers: children → kid-friendly places, elderly → accessible places
+- Consider the travelers: children → kid-friendly, elderly → accessible
 - Consider budget_level for paid attractions
-- Every attraction MUST have a suggested_duration_minutes — this is ON-SITE time only, NOT including travel
 - Every attraction MUST have a must_visit field (true or false)
-- Every attraction MUST have an estimated_entrance_fee: {"total": <number>, "note": "<explanation>"}. "total" is the fee for the main attraction only, for the ENTIRE group.
-- Each item in "includes" must also have its own estimated_entrance_fee. This allows the Itinerary Agent to include/exclude sub-attractions and adjust the total cost accordingly.
-- Use your knowledge of common pricing — children under ~6 usually free, under ~15 usually 50% off. If free, set total=0.
-- Group your attractions into segments that match EXACTLY the segment_name values from the attraction context. Each segment must include its segment_name and days array (copied from the input). This tells the Itinerary Agent which days each group of attractions can be scheduled on.
-- COMBINE nested/adjacent attractions: When attractions are physically INSIDE or immediately ADJACENT to each other (e.g., Ngoc Son Temple inside Hoan Kiem Lake, One Pillar Pagoda next to Ho Chi Minh Mausoleum complex), COMBINE them into a SINGLE entry under the main attraction name. Set suggested_duration_minutes to cover ALL included visits. List sub-attractions in "includes" as objects with {"name": "...", "estimated_entrance_fee": {...}}. Add a "notes" field explaining the relationship. Do NOT list them as separate entries.
+- Every attraction MUST have an estimated_entrance_fee: {"total": <number>, "note": "<explanation>"}. "total" is for ENTIRE group.
+- Each "includes" item must also have its own estimated_entrance_fee.
+- Use common pricing knowledge — children under ~6 free, under ~15 50% off. If free, total=0.
+- Group attractions into segments matching the segment_name from mobility_plan.segments.
+- COMBINE nested/adjacent attractions: When physically INSIDE or ADJACENT (e.g., Ngoc Son Temple inside Hoan Kiem Lake), COMBINE into one entry. List sub-attractions in "includes" as {"name": "...", "estimated_entrance_fee": {...}}. Add "notes" explaining the relationship.
 - Do NOT suggest transport hubs (bus stations, train stations, airports) as attractions. These are handled separately by the Itinerary Agent.
 - ONLY suggest real, specific places that EXIST on Google Maps with a searchable name. Do NOT suggest generic activities (e.g., "scenic drive along the road", "roadside photo stop", "enjoy the view"). Every attraction must be a concrete, named location.
 """
@@ -291,21 +294,28 @@ Suggest tourist attractions based on this context. Use the plan_context for dest
             logger.error(f"   ❌ Place resolution error: {e}", exc_info=True)
             # Continue with unresolved data — itinerary builder will try to resolve
 
-    # Count total attractions across all segments
+    # --- Phase 3: Filter out unresolved attractions (no placeId) ---
+    # Only resolved attractions are passed to Itinerary Agent
+    total_before_filter = sum(
+        len(seg.get("attractions", []))
+        for seg in attraction_result.get("segments", [])
+    )
+    for seg in attraction_result.get("segments", []):
+        unresolved = [a.get("name", "?") for a in seg.get("attractions", []) if not a.get("placeId")]
+        if unresolved:
+            logger.warning(f"🏛️ [ATTRACTION_AGENT] Filtering {len(unresolved)} unresolved from '{seg.get('segment_name', '?')}': {unresolved}")
+        seg["attractions"] = [a for a in seg.get("attractions", []) if a.get("placeId")]
+
     total_attractions = sum(
         len(seg.get("attractions", []))
         for seg in attraction_result.get("segments", [])
     )
-    resolved_count = sum(
-        1 for seg in attraction_result.get("segments", [])
-        for attr in seg.get("attractions", [])
-        if attr.get("placeId")
-    )
-    logger.info(f"🏛️ [ATTRACTION_AGENT] Node completed: {resolved_count}/{total_attractions} resolved")
+    filtered_count = total_before_filter - total_attractions
+    logger.info(f"🏛️ [ATTRACTION_AGENT] Node completed: {total_attractions} resolved, {filtered_count} filtered out")
     logger.info("=" * 60)
 
     return {
         "agent_outputs": {"attraction_agent": attraction_result},
-        "messages": [AIMessage(content=f"[Attraction Agent] Found {total_attractions} attractions for {destination} ({resolved_count} resolved)")],
+        "messages": [AIMessage(content=f"[Attraction Agent] Found {total_attractions} resolved attractions for {destination} ({filtered_count} filtered)")],
     }
 

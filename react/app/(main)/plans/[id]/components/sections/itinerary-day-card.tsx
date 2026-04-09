@@ -108,10 +108,15 @@ export default function ItineraryDayCard({
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(itineraryDay.title);
 
-  const [isOpenAutocomplete, setIsOpenAutocomplete] = useState(false);
+  const [isOpenAddItem, setIsOpenAddItem] = useState(false);
+  const [newItemNote, setNewItemNote] = useState("");
+  const [newItemPlaceId, setNewItemPlaceId] = useState<string | null>(null);
+  const [newItemPlaceName, setNewItemPlaceName] = useState("");
   const [isAddingItem, setIsAddingItem] = useState(false);
 
   const [editingItem, setEditingItem] = useState<ItineraryItem | null>(null);
+  const [editedPlaceId, setEditedPlaceId] = useState<string | null>(null);
+  const [editedPlaceName, setEditedPlaceName] = useState("");
   const [itemToDelete, setItemToDelete] = useState<ItineraryItem | null>(null);
   const [dayToDelete, setDayToDelete] = useState<string | null>(null);
   const [isGeneratingLink, setIsGeneratingLink] = useState(false);
@@ -164,35 +169,37 @@ export default function ItineraryDayCard({
     setTitle(itineraryDay.title);
   };
 
-  const handleAddPlaceClick = () => {
-    setIsOpenAutocomplete(true);
+  const handleAddItemClick = () => {
+    setIsOpenAddItem(true);
+    setNewItemNote("");
+    setNewItemPlaceId(null);
+    setNewItemPlaceName("");
   };
 
-  const handlePlaceSelect = async (
-    prediction: google.maps.places.AutocompletePrediction,
-  ) => {
-    if (!prediction.place_id) return;
-    setIsOpenAutocomplete(false);
+  const handleInlineSubmit = async () => {
+    if (!newItemNote.trim() && !newItemPlaceId) return;
+    
     setIsAddingItem(true);
-
     try {
-      await ensurePlaceExists(prediction.place_id);
-
-      const existingItems = itineraryDay.itineraryItems ?? [];
-      const autoStartTime = computeAutoStartTime(existingItems);
+      if (newItemPlaceId) {
+        await ensurePlaceExists(newItemPlaceId);
+      }
 
       const response = await createItineraryItem(itineraryDay.id, {
-        placeId: prediction.place_id,
-        startTime: autoStartTime,
-        duration: "02:00",
+        placeId: newItemPlaceId ?? undefined,
+        startTime: undefined,
+        duration: undefined,
+        note: newItemNote.trim() || undefined,
       });
 
       onAddItem(response);
-      toast.success("Added to itinerary");
+      toast.success("Item added successfully");
 
-      // Select the newly added item
+      // Select the newly added item if it's a place. (Selection doesn't do much for note-only).
       const itemsCount = itineraryDay.itineraryItems?.length ?? 0;
       selectPlaceFromItinerary(response, dayIndex, itemsCount, "list");
+      
+      setIsOpenAddItem(false);
     } catch (error) {
       console.error("Error creating itinerary item:", error);
       if (error instanceof AxiosError) {
@@ -238,6 +245,8 @@ export default function ItineraryDayCard({
     itineraryDayId: string,
     startTime?: string,
     duration?: string,
+    note?: string,
+    placeId?: string | null,
   ) => {
     if (!editingItem) return;
 
@@ -246,10 +255,12 @@ export default function ItineraryDayCard({
         itineraryDayId,
         startTime,
         duration,
+        note,
+        placeId,
       });
 
       onUpdateItem(response);
-      toast.success("Updated ItineraryItem");
+      toast.success("Updated Itinerary Item");
       setEditingItem(null);
     } catch (error) {
       console.error("Error updating item:", error);
@@ -445,10 +456,18 @@ export default function ItineraryDayCard({
                 isFirst={di.isOverallFirst}
                 isLast={di.isOverallLast}
                 isActive={
+                  !!selectedPlace.placeId &&
+                  !!di.item.place?.placeId &&
                   selectedPlace.placeId === di.item.place.placeId &&
                   selectedPlace.dayIndex === dayIndex
                 }
-                onEdit={() => !isCrossDayEnd && setEditingItem(di.item)}
+                onEdit={() => {
+                  if (!isCrossDayEnd) {
+                    setEditingItem(di.item);
+                    setEditedPlaceId(di.item.place?.placeId ?? null);
+                    setEditedPlaceName(di.item.place?.title ?? "");
+                  }
+                }}
                 onDelete={() => !isCrossDayEnd && setItemToDelete(di.item)}
                 onClick={() =>
                   selectPlaceFromItinerary(
@@ -470,20 +489,69 @@ export default function ItineraryDayCard({
       )}
 
       <div className="flex flex-col gap-2 relative">
-        {isOpenAutocomplete ? (
-          <div className="relative z-10">
-            <PlaceAutocomplete
-              onPlaceSelect={handlePlaceSelect}
-              onClose={() => setIsOpenAutocomplete(false)}
-            />
+        {isOpenAddItem ? (
+          <div className="relative z-10 bg-white border border-gray-200 rounded-xl p-4 shadow-sm space-y-3">
+            <div className="flex justify-between items-center pb-2 border-b border-gray-100">
+              <h4 className="font-semibold text-sm text-gray-700">Add New Item</h4>
+              <button onClick={() => setIsOpenAddItem(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 mb-1.5 block uppercase tracking-wider">Note (Optional)</label>
+              <textarea
+                value={newItemNote}
+                onChange={(e) => setNewItemNote(e.target.value)}
+                placeholder="Write a note, instructions, or free-text activity..."
+                className="w-full min-h-[60px] text-sm p-2.5 rounded-lg border border-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-y outline-none transition-all"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 mb-1.5 block uppercase tracking-wider">Place (Optional)</label>
+              {newItemPlaceId ? (
+                <div className="flex justify-between items-center p-3 bg-blue-50 border border-blue-100 rounded-lg">
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    <Map size={16} className="text-blue-500 shrink-0" />
+                    <span className="text-sm font-medium text-blue-800 truncate">{newItemPlaceName}</span>
+                  </div>
+                  <button onClick={() => { setNewItemPlaceId(null); setNewItemPlaceName(""); }} className="text-blue-400 hover:text-blue-600 transition-colors ml-2 shrink-0">
+                    <X size={16} />
+                  </button>
+                </div>
+              ) : (
+                <PlaceAutocomplete
+                  onPlaceSelect={(p) => {
+                    if (p.place_id && p.description) {
+                      setNewItemPlaceId(p.place_id);
+                      setNewItemPlaceName(p.description);
+                    }
+                  }}
+                  onClose={() => {}}
+                />
+              )}
+            </div>
+            <div className="flex justify-end pt-2">
+              <Button
+                disabled={isAddingItem || (!newItemNote.trim() && !newItemPlaceId)}
+                onClick={handleInlineSubmit}
+                size="sm"
+                className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4"
+              >
+                {isAddingItem ? (
+                  <><Loader2 size={14} className="mr-2 animate-spin" /> Saving...</>
+                ) : (
+                  "Save Item"
+                )}
+              </Button>
+            </div>
           </div>
         ) : (
           <button
-            className="cursor-pointer px-4 py-3 flex gap-2 items-center justify-center rounded-lg border-2 border-dashed border-gray-300 text-gray-500 hover:border-green-400 hover:text-green-500 hover:bg-green-50 transition-all duration-200"
-            onClick={handleAddPlaceClick}
+            className="cursor-pointer px-4 py-3 flex gap-2 items-center justify-center rounded-lg border-2 border-dashed border-gray-300 text-gray-500 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50 transition-all duration-200"
+            onClick={handleAddItemClick}
           >
             <Plus size={16} strokeWidth={3} />
-            <span className="text-sm font-medium">Add A Place</span>
+            <span className="text-sm font-medium">Add An Item</span>
           </button>
         )}
       </div>
@@ -502,8 +570,16 @@ export default function ItineraryDayCard({
               planStartTime={planStartTime}
               startTime={convertTimeOnlyStringToDate(editingItem.startTime)}
               duration={editingItem.duration || ""}
+              note={editingItem.note || ""}
               setStartTime={handleSelectStartTime}
               setDuration={handleSelectDuration}
+              setNote={(n) => {
+                if (editingItem) setEditingItem({ ...editingItem, note: n });
+              }}
+              placeId={editedPlaceId}
+              setPlaceId={setEditedPlaceId}
+              placeName={editedPlaceName}
+              setPlaceName={setEditedPlaceName}
             />
           }
           onConfirm={() =>
@@ -511,6 +587,8 @@ export default function ItineraryDayCard({
               editingItem.itineraryDayId,
               editingItem.startTime,
               editingItem.duration,
+              editingItem.note ?? undefined,
+              editedPlaceId,
             )
           }
         />

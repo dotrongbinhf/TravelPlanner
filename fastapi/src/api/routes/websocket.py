@@ -109,11 +109,19 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
             elif has_existing:
                 logger.info(f"✅ MemorySaver has existing state for thread {conversation_id}")
 
+
+            # Deduplicate: if history already ends with same user message, don't add again
+            if history_messages and isinstance(history_messages[-1], HumanMessage) and history_messages[-1].content.strip() == user_message.strip():
+                logger.info(f"\u26a0\ufe0f Deduplicating: last history message matches current user message")
+                input_messages = history_messages
+            else:
+                input_messages = history_messages + [HumanMessage(content=user_message)]
+
             # Prepare graph input
             graph_input = {
                 "conversation_id": conversation_id,
                 "plan_id": plan_id,
-                "messages": history_messages + [HumanMessage(content=user_message)],
+                "messages": input_messages,
                 "pending_tasks": [],
                 "completed_tasks": [],
                 "user_context": {},

@@ -7,15 +7,27 @@ from src.agents.state import GraphState
 from src.agents.nodes.utils import _extract_json, _run_agent_with_tools
 from src.tools.dotnet_tools import search_airports, search_flights
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from src.config import settings
+from src.services.place_resolver import resolve_single_place
 
 logger = logging.getLogger(__name__)
 
-llm_flight = ChatGoogleGenerativeAI(
-    model="gemini-3.1-flash-lite-preview",
-    google_api_key=settings.GOOGLE_GEMINI_API_KEY,
-    temperature=0.5,
-    streaming=False,
+llm_flight = (
+    ChatOpenAI(
+        model="google/gemini-3.1-flash-lite-preview",
+        api_key=settings.VERCEL_AI_GATEWAY_API_KEY,
+        base_url="https://ai-gateway.vercel.sh/v1",
+        temperature=0.3,
+        streaming=False,
+    )
+    if settings.USE_VERCEL_AI_GATEWAY
+    else ChatGoogleGenerativeAI(
+        model="gemini-3.1-flash-lite-preview",
+        google_api_key=settings.GOOGLE_GEMINI_API_KEY_FLIGHT,
+        temperature=0.3,
+        streaming=False,
+    )
 )
 
 FLIGHT_AGENT_MOCK= {
@@ -47,8 +59,8 @@ You find flights using search_airports and search_flights tools.
 
 ## Input
 You receive two pieces of context from the Orchestrator:
-1. **plan_context**: Shared trip info (departure city, destination, dates, passengers, budget, currency, mobility_plan)
-2. **flight context**: Flight-specific info (airport hints, infants_in_seat/infants_on_lap, user preferences including type, directions, travel_class, max_price, outbound_times, return_times)
+1. **plan_context**: Shared trip info (departure city, destination, dates, passengers, budget, currency)
+2. **flight context**: Flight-specific info (infants_in_seat/infants_on_lap, user preferences including type, directions, travel_class, max_price, outbound_times, return_times)
 
 ## Determine Search Flow
 
@@ -65,9 +77,9 @@ Read `type` and `directions` from user_flight_preferences:
 
 ## Process
 1. Read both plan_context and flight context carefully
-2. Determine airport IATA codes:
-  - If airport hints already contain IATA codes (e.g., "Tân Sơn Nhất (SGN)"), extract and use those codes DIRECTLY — skip search_airports if confident
-  - If airport hints do NOT contain clear IATA codes, call search_airports to find the nearest airports
+2. Determine airport IATA codes from plan_context.departure and plan_context.destination:
+   - Use your knowledge of common airports (e.g., "Ho Chi Minh City" → SGN, "Hanoi" → HAN)
+   - If uncertain, call search_airports to find the nearest airports
 3. Map user preferences and plan_context to search_flights parameters:
   - travel_class: "economy"→1, "premium_economy"→2, "business"→3, "first"→4
   - For round_trip: outbound_date = plan_context.start_date, return_date = plan_context.end_date
@@ -169,10 +181,10 @@ After EVERY search_flights call, check results. If BOTH best_flights and other_f
    8a. If results exist → choose the best return flight → go to step 9
    8b. If results are EMPTY → RETRY with the 2ND BEST outbound's departure_token
        - If results exist now → choose the best return flight. In recommend_return_note, mention: "Return search with [1st outbound flight_number] returned no results; switched to [2nd outbound flight_number]"
-       - If still EMPTY → FALL BACK to ONE-WAY DOUBLE SEARCH:
-         * Call search_flights with flight_type=2, outbound_date=start_date for outbound
-         * Call search_flights with flight_type=2, outbound_date=end_date, airports SWAPPED for return
-         * Apply No-Results Fallback for each if needed
+       - If still EMPTY → FALL BACK to ONE-WAY DOUBLE SEARCH (with outbound_times/return_times if provided):
+         * Call search_flights with flight_type=2, outbound_date=start_date for outbound, with the ORIGINAL converted outbound_times
+         * Call search_flights with flight_type=2, outbound_date=end_date, airports SWAPPED for return, with the ORIGINAL converted return_times as outbound_times
+         * Apply No-Results Fallback for each if needed (widen time then remove time)
          * In recommend_return_note, explain: "Round-trip return search returned no results for any outbound flight; fell back to separate one-way searches"
          * Set type="one_way" in the output JSON (since actual booking is now two one-way tickets)
 9. Return the final JSON
@@ -250,8 +262,8 @@ For return_only → set outbound_flights_found/recommend_outbound_flight/recomme
 
 
 ## Rules
-- If IATA codes are in the airport hints, go DIRECTLY to search_flights — do NOT waste a call on search_airports
-- Only call search_airports when the origin/destination is ambiguous (e.g., no IATA code provided)
+- If you know the IATA codes from city names, go DIRECTLY to search_flights
+- Only call search_airports when the origin/destination is ambiguous
 - ALWAYS convert outbound_times/return_times from orchestrator's natural language to SerpApi format before calling search_flights
 - For directions="both" (either one_way or round_trip), DO NOT output final JSON until you have results for BOTH outbound and return flights
 - When No-Results Fallback is triggered, mention the adjusted time window in your recommend_note
@@ -259,48 +271,129 @@ For return_only → set outbound_flights_found/recommend_outbound_flight/recomme
 """
 
 
-def _find_price_for_flight(flight_number: str, tool_logs: list[dict]) -> int:
+def _find_flight_data(flight_number: str, tool_logs: list[dict]) -> dict:
     """Find the price of a specific flight from search_flights tool results.
-    
-    Searches through BestFlights and OtherFlights in all search_flights tool calls,
-    matching the recommended flight_number against the FlightSegmentDto.FlightNumber.
-    
-    Returns the Price of the matching FlightGroupDto, or 0 if not found.
+    Returns: {"price": int}
     """
     if not flight_number:
-        return 0
-    
-    # Normalize flight number for matching (remove spaces, lowercase)
+        return {"price": 0}
+
     normalized_target = flight_number.replace(" ", "").lower()
     
-    for log in tool_logs:
+    # Search in REVERSE order — newest search results first
+    for log in reversed(tool_logs):
         if log.get("name") != "search_flights":
             continue
         output = log.get("output", {})
         if not isinstance(output, dict):
             continue
-        
-        # Check both BestFlights and OtherFlights
-        for group_key in ("BestFlights", "OtherFlights"):
-            groups = output.get(group_key) or []
+
+        flight_data = output.get("data", output)
+        if not isinstance(flight_data, dict):
+            continue
+
+        normalized = {k.lower(): v for k, v in flight_data.items()}
+
+        for group_key in ("bestflights", "otherflights"):
+            groups = normalized.get(group_key) or []
             for group in groups:
-                price = group.get("Price", 0)
-                for segment in (group.get("Flights") or []):
-                    seg_fn = (segment.get("FlightNumber") or "").replace(" ", "").lower()
+                price = group.get("Price", group.get("price", 0))
+                flights_list = group.get("Flights", group.get("flights", []))
+                for segment in (flights_list or []):
+                    seg_fn = (segment.get("FlightNumber", segment.get("flightNumber", "")) or "").replace(" ", "").lower()
                     if seg_fn == normalized_target:
-                        return price
-    
-    return 0
+                        logger.info(f"   [FLIGHT_DATA] Matched '{flight_number}': price={price}")
+                        return {"price": price}
+
+    logger.warning(f"   [FLIGHT_DATA] Could not find data for '{flight_number}'")
+    return {"price": 0}
 
 
-def _extract_total_price(flight_result: dict, tool_logs: list[dict]) -> int:
-    """Extract total flight price from tool_logs based on the LLM's chosen flights.
+def _get_google_flights_url(tool_logs: list[dict], search_index_from_end: int = 0) -> str:
+    """Get GoogleFlightsUrl from tool_logs. search_index_from_end=0 means last search call."""
+    search_count = 0
+    for log in reversed(tool_logs):
+        if log.get("name") == "search_flights":
+            if search_count == search_index_from_end:
+                output = log.get("output", {})
+                if isinstance(output, dict):
+                    data = output.get("data", output)
+                    if isinstance(data, dict):
+                        # GoogleFlightsUrl is at top level of the search response
+                        return data.get("GoogleFlightsUrl", data.get("googleFlightsUrl", "")) or ""
+                return ""
+            search_count += 1
+    return ""
+
+
+def _extract_alternatives_from_search(
+    tool_logs: list[dict], chosen_fns: list[str],
+    search_index_from_end: int = 0, max_alts: int = 3,
+    direction_label: str = ""
+) -> list[dict]:
+    """Extract alternative flights from a specific search_flights call."""
+    alternatives = []
+    used_fns = set(chosen_fns)
+    search_count = 0
     
-    Logic:
-    - one_way + both: sum outbound price + return price (2 separate searches)
-    - round_trip + both: return search price is already the total (includes outbound)
-    - outbound_only / return_only: single search price
-    """
+    for log in reversed(tool_logs):
+        if log.get("name") != "search_flights":
+            continue
+        if search_count != search_index_from_end:
+            search_count += 1
+            continue
+            
+        output = log.get("output", {})
+        if not isinstance(output, dict):
+            break
+        flight_data = output.get("data", output)
+        if not isinstance(flight_data, dict):
+            break
+            
+        normalized = {k.lower(): v for k, v in flight_data.items()}
+        
+        for group in (normalized.get("bestflights", []) or []) + (normalized.get("otherflights", []) or []):
+            if len(alternatives) >= max_alts:
+                break
+            price = group.get("Price", group.get("price", 0))
+            total_dur = group.get("TotalDuration", group.get("totalDuration", 0))
+            flights_list = group.get("Flights", group.get("flights", []))
+            if not flights_list:
+                continue
+            first_seg = flights_list[0]
+            fn = first_seg.get("FlightNumber", first_seg.get("flightNumber", ""))
+            code = fn.replace(" ", "").lower()
+            if code in used_fns:
+                continue
+            
+            dep_airport = first_seg.get("DepartureAirport", first_seg.get("departureAirport", {}))
+            arr_airport = flights_list[-1].get("ArrivalAirport", flights_list[-1].get("arrivalAirport", {}))
+            
+            dep_name = dep_airport.get("Name", dep_airport.get("name", "")) if isinstance(dep_airport, dict) else str(dep_airport)
+            dep_time = dep_airport.get("Time", dep_airport.get("time", "")) if isinstance(dep_airport, dict) else ""
+            arr_name = arr_airport.get("Name", arr_airport.get("name", "")) if isinstance(arr_airport, dict) else str(arr_airport)
+            arr_time = arr_airport.get("Time", arr_airport.get("time", "")) if isinstance(arr_airport, dict) else ""
+            airline = first_seg.get("Airline", first_seg.get("airline", ""))
+            
+            alt = {
+                "flight_number": fn,
+                "airline": airline,
+                "departure": f"{dep_name} {dep_time}".strip(),
+                "arrival": f"{arr_name} {arr_time}".strip(),
+                "price": price,
+                "total_duration_min": total_dur,
+            }
+            if direction_label:
+                alt["direction"] = direction_label
+            alternatives.append(alt)
+            used_fns.add(code)
+        break
+    
+    return alternatives
+
+
+def _extract_total_price_and_enrich(flight_result: dict, tool_logs: list[dict]) -> int:
+    """Extract total flight price and enrich flight object with google_flights_url and alternatives."""
     flight_type = flight_result.get("type", "one_way")
     directions = flight_result.get("directions", "both")
     
@@ -312,26 +405,62 @@ def _extract_total_price(flight_result: dict, tool_logs: list[dict]) -> int:
     
     if outbound_flight:
         outbound_fn = outbound_flight.get("flight_number", "")
-        outbound_price = _find_price_for_flight(outbound_fn, tool_logs)
+        data = _find_flight_data(outbound_fn, tool_logs)
+        outbound_price = data["price"]
     
     if return_flight:
         return_fn = return_flight.get("flight_number", "")
-        return_price = _find_price_for_flight(return_fn, tool_logs)
+        data = _find_flight_data(return_fn, tool_logs)
+        return_price = data["price"]
     
     if flight_type == "round_trip":
-        # For round-trip, the return search result contains the combined total
-        # If we have return_price, use it; otherwise fall back to outbound_price
         total = return_price if return_price else outbound_price
     elif directions == "both":
-        # One-way double search: sum both legs
         total = outbound_price + return_price
     else:
-        # Single direction
         total = outbound_price or return_price
     
-    logger.info(f"   [FLIGHT_AGENT] Extracted totalPrice: {total} "
-                f"(outbound={outbound_price}, return={return_price}, "
-                f"type={flight_type}, directions={directions})")
+    # Extract google_flights_url and alternatives based on flight type
+    chosen_fns = []
+    if outbound_flight:
+        chosen_fns.append(outbound_flight.get("flight_number", "").replace(" ", "").lower())
+    if return_flight:
+        chosen_fns.append(return_flight.get("flight_number", "").replace(" ", "").lower())
+    
+    if flight_type == "round_trip":
+        # Roundtrip: outbound search is first (index=1 from end), return search is last (index=0)
+        # The google_flights_url from the OUTBOUND search is the main link
+        # Count how many search_flights calls there are
+        search_count = sum(1 for log in tool_logs if log.get("name") == "search_flights")
+        outbound_idx = search_count - 1 if search_count > 1 else 0
+        
+        flight_result["google_flights_url"] = _get_google_flights_url(tool_logs, outbound_idx)
+        # Only show alternatives from the outbound search
+        flight_result["alternatives"] = _extract_alternatives_from_search(
+            tool_logs, chosen_fns, search_index_from_end=outbound_idx
+        )
+    elif directions == "both":
+        # Two one-way searches: outbound (older) and return (newer)
+        outbound_url = _get_google_flights_url(tool_logs, search_index_from_end=1)
+        return_url = _get_google_flights_url(tool_logs, search_index_from_end=0)
+        if outbound_flight:
+            outbound_flight["google_flights_url"] = outbound_url
+        if return_flight:
+            return_flight["google_flights_url"] = return_url
+        
+        outbound_alts = _extract_alternatives_from_search(
+            tool_logs, chosen_fns, search_index_from_end=1, direction_label="outbound"
+        )
+        return_alts = _extract_alternatives_from_search(
+            tool_logs, chosen_fns, search_index_from_end=0, direction_label="return"
+        )
+        flight_result["alternatives"] = outbound_alts + return_alts
+    else:
+        # Single direction
+        flight_result["google_flights_url"] = _get_google_flights_url(tool_logs)
+        flight_result["alternatives"] = _extract_alternatives_from_search(tool_logs, chosen_fns)
+
+    logger.info(f"   [FLIGHT_AGENT] Extracted totalPrice: {total}, alts={len(flight_result.get('alternatives', []))}")
     return total
 
 
@@ -361,7 +490,7 @@ async def flight_agent_node(state: GraphState) -> dict[str, Any]:
 Flight-specific context:
 {json.dumps(flight_ctx, indent=2, ensure_ascii=False)}
 
-Search for flights based on this context. Use the plan_context for dates, passengers, and budget info. Use the flight context for airport hints, trip type, passengers specific (infants_in_seat, infants_on_lap), and preferences."""
+Search for flights based on this context. Use the plan_context for dates, passengers, and budget info. Use the flight context for trip type, passengers specific (infants_in_seat, infants_on_lap), and preferences."""
 
         llm_messages = [
             SystemMessage(content=FLIGHT_AGENT_SYSTEM),
@@ -376,8 +505,8 @@ Search for flights based on this context. Use the plan_context for dates, passen
         flight_result = _extract_json(result.content)
         flight_result["tools"] = tool_logs
 
-        # Extract totalPrice programmatically from search results
-        flight_result["totalPrice"] = _extract_total_price(flight_result, tool_logs)
+        # Extract totalPrice and links programmatically from search results
+        flight_result["totalPrice"] = _extract_total_price_and_enrich(flight_result, tool_logs)
 
         # Mock
         # flight_result = _extract_json(FLIGHT_AGENT_MOCK)
@@ -385,6 +514,49 @@ Search for flights based on this context. Use the plan_context for dates, passen
     except Exception as e:
         logger.error(f"   ❌ Flight Agent error: {e}", exc_info=True)
         flight_result = {"flights_found": False, "error": str(e)}
+
+    # --- Phase 2: Resolve airport names to placeIds (deduplicated) ---
+    if not flight_result.get("error"):
+        import asyncio as _aio
+        # Collect all unique airport names
+        airport_names: dict[str, None] = {}  # use dict as ordered set
+        for flight_key in ("recommend_outbound_flight", "recommend_return_flight"):
+            flight_info = flight_result.get(flight_key)
+            if not flight_info:
+                continue
+            for prefix in ("departure", "arrival"):
+                name = flight_info.get(f"{prefix}_airport_name", "")
+                if name:
+                    airport_names[name] = None
+
+        # Resolve unique names in parallel
+        resolved_airports: dict[str, str] = {}  # name → placeId
+        if airport_names:
+            async def _resolve_airport(name: str) -> tuple[str, str | None]:
+                try:
+                    res = await resolve_single_place(name)
+                    pid = res.get("placeId") if res else None
+                    if pid:
+                        logger.info(f"   ✅ Airport '{name}' → placeId={pid}")
+                    return name, pid
+                except Exception as e:
+                    logger.error(f"   ⚠️ Airport resolve failed for '{name}': {e}")
+                    return name, None
+
+            results = await _aio.gather(*[_resolve_airport(n) for n in airport_names])
+            for name, pid in results:
+                if pid:
+                    resolved_airports[name] = pid
+
+        # Apply resolved placeIds back to both flight objects
+        for flight_key in ("recommend_outbound_flight", "recommend_return_flight"):
+            flight_info = flight_result.get(flight_key)
+            if not flight_info:
+                continue
+            for prefix in ("departure", "arrival"):
+                name = flight_info.get(f"{prefix}_airport_name", "")
+                if name in resolved_airports:
+                    flight_info[f"{prefix}_airport_placeId"] = resolved_airports[name]
 
     logger.info("✈️ [FLIGHT_AGENT] Node completed")
     logger.info("=" * 60)

@@ -18,11 +18,13 @@ interface ExpenseCardProps {
   name: string;
   amount: string;
   category: ExpenseCategory;
+  groupName?: string;
   currencyLocale: string;
   currencySymbol: string;
   onNameChange: (value: string) => void;
   onAmountChange: (value: string) => void;
   onCategoryChange: (value: ExpenseCategory) => void;
+  onGroupNameChange?: (value: string) => void;
   onConfirm: () => void;
   onCancel: () => void;
   onEdit?: () => void;
@@ -37,11 +39,13 @@ export default function ExpenseCard({
   name,
   amount,
   category,
+  groupName,
   currencyLocale,
   currencySymbol,
   onNameChange,
   onAmountChange,
   onCategoryChange,
+  onGroupNameChange,
   onConfirm,
   onCancel,
   onEdit,
@@ -70,7 +74,7 @@ export default function ExpenseCard({
     return (
       <div
         ref={containerRef}
-        className="p-3 bg-gray-100 rounded-lg flex items-start justify-between border-2 border-blue-400"
+        className="p-3.5 bg-blue-50/30 rounded-xl flex items-start justify-between ring-2 ring-blue-400 border-transparent shadow-sm transition-all"
       >
         <div className="flex items-center gap-3 flex-1 overflow-hidden">
           {/* Visual Dot */}
@@ -112,6 +116,18 @@ export default function ExpenseCard({
                 ))}
               </SelectContent>
             </Select>
+
+            {/* Optional Group Name Input */}
+            {onGroupNameChange && (
+              <input
+                type="text"
+                value={groupName || ""}
+                onChange={(e) => onGroupNameChange(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Group (e.g., Phí tham quan)"
+                className="font-medium text-xs bg-transparent rounded-sm p-1 border border-2 border-dashed border-gray-400 focus:border-blue-500 outline-none placeholder:text-gray-400 w-full min-w-0"
+              />
+            )}
           </div>
         </div>
 
@@ -161,7 +177,7 @@ export default function ExpenseCard({
   );
 
   return (
-    <div className="group p-3 bg-gray-100 rounded-lg flex items-center justify-between">
+    <div className="group p-3.5 bg-white border border-gray-100 rounded-xl flex items-center justify-between shadow-sm hover:shadow-md hover:border-blue-100 transition-all duration-200">
       <div className="flex items-center gap-3 flex-1">
         <div
           className="w-3 h-3 rounded-full"

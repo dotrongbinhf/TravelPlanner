@@ -14,24 +14,33 @@ Runs in parallel with Restaurant Agent after Itinerary phase.
 
 import json
 import logging
-from datetime import datetime, date, timedelta
 from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 from src.agents.state import GraphState
 from src.agents.nodes.utils import _extract_json, _run_agent_with_tools
-from src.tools.dotnet_tools import get_weather_forecast
 from src.tools.search_tools import tavily_search
 from src.config import settings
 
 logger = logging.getLogger(__name__)
 
-llm_preparation = ChatGoogleGenerativeAI(
-    model="gemini-3.1-flash-lite-preview",
-    google_api_key=settings.GOOGLE_GEMINI_API_KEY,
-    temperature=0.5,
-    streaming=False,
+llm_preparation = (
+    ChatOpenAI(
+        model="google/gemini-3.1-flash-lite-preview",
+        api_key=settings.VERCEL_AI_GATEWAY_API_KEY,
+        base_url="https://ai-gateway.vercel.sh/v1",
+        temperature=0.3,
+        streaming=False,
+    )
+    if settings.USE_VERCEL_AI_GATEWAY
+    else ChatGoogleGenerativeAI(
+        model="gemini-3.1-flash-lite-preview",
+        google_api_key=settings.GOOGLE_GEMINI_API_KEY_PREPARATION,
+        temperature=0.3,
+        streaming=False,
+    )
 )
 
 PREPARATION_AGENT_SYSTEM = """You are the Preparation Agent for a travel planning system.
@@ -53,7 +62,7 @@ You estimate NON-ITINERARY costs only. Do NOT include:
 
 ## Budget Categories — MUST use these exact "type" values:
 - "Food & Drinks" — snacks, coffee, drinks, street food BETWEEN main meals
-- "Transport" — local transportation (taxi/Grab, bus, metro between attractions), or long-distance (departure to destination) transport if not flight
+- "Transport" — LOCAL transportation only (taxi/Grab, bus, metro between attractions). Do NOT include departure-to-destination transport costs — these are already estimated in mobility_plan.departure_logistics.estimated_cost and return_logistics.estimated_cost
 - "Activities" — minor entry fees, parking, bike rentals, boat rides, or activities not covered by Attraction Agent
 - "Shopping" — souvenirs, gifts, local products
 - "Other" — SIM card, internet, tips, contingency, any miscellaneous expenses
@@ -84,7 +93,6 @@ Respond in the language specified in the `language` field of the trip context (e
     "currency": "VND",
     "breakdown": [
       {"type": "Transport", "name": "Grab/taxi between attractions", "amount": 600000, "details": "~100k/trip × 6 trips between spread-out sites"},
-      {"type": "Transport", "name": "Airport transfer", "amount": 200000, "details": "Grab from Noi Bai to hotel ~200k"},
       {"type": "Food & Drinks", "name": "Street snacks & coffee", "amount": 300000, "details": "Egg coffee, street food between meals ~75k/day × 4 days"},
       {"type": "Food & Drinks", "name": "Bottled water", "amount": 100000, "details": "Water for hot outdoor days visiting temples"},
       {"type": "Shopping", "name": "Souvenirs & gifts", "amount": 500000, "details": "Local products, small gifts for entire trip"},
@@ -125,151 +133,7 @@ Respond in the language specified in the `language` field of the trip context (e
 """
 
 
-# ============================================================================
-# PROGRAMMATIC WEATHER FETCH
-# ============================================================================
 
-async def _fetch_weather_for_trip(
-    destination: str,
-    start_date_str: str,
-    end_date_str: str,
-) -> dict[str, Any]:
-    """Fetch weather forecast programmatically and trim to trip dates.
-
-    Returns per-day weather with simplified, LLM-friendly format.
-    """
-    today = date.today()
-
-    try:
-        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
-        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
-    except (ValueError, TypeError):
-        logger.warning("[weather] Invalid dates, using defaults")
-        return {
-            "daily": [],
-            "covered_days": 0,
-            "total_trip_days": 0,
-            "outside_range_note": "Could not parse trip dates for weather forecast.",
-        }
-
-    total_trip_days = (end_date - start_date).days + 1
-    days_until_end = (end_date - today).days + 1
-    days_to_fetch = min(max(days_until_end, 1), 16)
-
-    logger.info(
-        f"[weather] Trip: {start_date_str} to {end_date_str} ({total_trip_days} days), "
-        f"today={today}, fetching {days_to_fetch} days forecast"
-    )
-
-    # Call the weather API programmatically
-    try:
-        raw_result = await get_weather_forecast.ainvoke({
-            "city": destination,
-            "days": days_to_fetch,
-        })
-    except Exception as e:
-        logger.error(f"[weather] API call failed: {e}")
-        return {
-            "daily": [],
-            "covered_days": 0,
-            "total_trip_days": total_trip_days,
-            "outside_range_note": f"Weather API error: {str(e)}",
-        }
-
-    # Extract the forecast list
-    # API returns: {success: true, status_code: 200, data: {list: [...], ...}}
-    forecast_list = []
-    if isinstance(raw_result, dict):
-        inner = raw_result.get("data", raw_result)
-        if isinstance(inner, dict):
-            forecast_list = inner.get("list", inner.get("forecast", []))
-        elif isinstance(inner, list):
-            forecast_list = inner
-        if not forecast_list:
-            forecast_list = raw_result.get("list", [])
-    elif isinstance(raw_result, list):
-        forecast_list = raw_result
-
-    logger.info(f"[weather] Raw forecast entries: {len(forecast_list)}")
-
-    # Trim to trip dates and format per-day summary
-    daily_weather = []
-    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-
-    for entry in forecast_list:
-        entry_date = None
-
-        if "dt" in entry:
-            try:
-                entry_date = datetime.fromtimestamp(entry["dt"]).date()
-            except (ValueError, TypeError, OSError):
-                pass
-        elif "date" in entry:
-            try:
-                entry_date = datetime.strptime(str(entry["date"])[:10], "%Y-%m-%d").date()
-            except (ValueError, TypeError):
-                pass
-
-        if not entry_date or not (start_date <= entry_date <= end_date):
-            continue
-
-        # Build simplified per-day weather
-        day_idx = (entry_date - start_date).days
-        temp = entry.get("temp", {})
-        weather_list = entry.get("weather", [{}])
-        condition = weather_list[0].get("description", "Unknown") if weather_list else "Unknown"
-
-        day_weather = {
-            "day": day_idx,
-            "date": entry_date.isoformat(),
-            "day_of_week": day_names[entry_date.weekday()],
-            "condition": condition,
-            "temp_min": temp.get("min", temp.get("night", 0)),
-            "temp_max": temp.get("max", temp.get("day", 0)),
-            "humidity": entry.get("humidity", 0),
-        }
-
-        # Add rain probability if available
-        if "pop" in entry:
-            day_weather["rain_chance_pct"] = round(entry["pop"] * 100)
-        if entry.get("rain"):
-            day_weather["rain_mm"] = entry["rain"]
-
-        daily_weather.append(day_weather)
-
-    # Check 16-day range limit
-    outside_range_note = None
-    max_forecast_date = today + timedelta(days=15)
-
-    if start_date > max_forecast_date:
-        outside_range_note = (
-            f"All trip dates ({start_date_str} to {end_date_str}) are beyond the 16-day "
-            f"forecast window (max {max_forecast_date.isoformat()}). "
-            f"Weather data is based on historical/seasonal patterns for {destination}."
-        )
-    elif end_date > max_forecast_date:
-        outside_range_note = (
-            f"Weather forecast covers {start_date_str} to {max_forecast_date.isoformat()}. "
-            f"Days after {max_forecast_date.isoformat()} are outside the 16-day forecast range."
-        )
-
-    result = {
-        "daily": daily_weather,
-        "covered_days": len(daily_weather),
-        "total_trip_days": total_trip_days,
-        "outside_range_note": outside_range_note,
-    }
-
-    logger.info(
-        f"[weather] Result: {len(daily_weather)}/{total_trip_days} days covered, "
-        f"outside_range={outside_range_note is not None}"
-    )
-    return result
-
-
-# ============================================================================
-# ITINERARY SUMMARY EXTRACTOR
-# ============================================================================
 
 def _extract_itinerary_summary(itinerary_data: dict) -> list[dict]:
     """Extract a simplified itinerary summary for the Preparation Agent.
@@ -325,13 +189,19 @@ async def preparation_agent_node(state: GraphState) -> dict[str, Any]:
     preparation_result = {}
 
     try:
-        # ── Step 1: Fetch weather programmatically ───────────────────
-        logger.info("🎒 [PREPARATION_AGENT] Fetching weather...")
-        weather_data = await _fetch_weather_for_trip(
-            destination=destination,
-            start_date_str=plan_context.get("start_date", ""),
-            end_date_str=plan_context.get("end_date", ""),
-        )
+        # ── Step 1: Get weather data (pre-fetched by weather node) ────
+        weather_data = agent_outputs.get("weather", {})
+        if weather_data and weather_data.get("daily"):
+            logger.info(f"🎒 [PREPARATION_AGENT] Using pre-fetched weather: {weather_data.get('covered_days', 0)} days")
+        else:
+            # Fallback: fetch ourselves if weather node didn't run
+            logger.info("🎒 [PREPARATION_AGENT] No pre-fetched weather, fetching...")
+            from src.agents.nodes.weather_fetch import _fetch_weather_for_trip
+            weather_data = await _fetch_weather_for_trip(
+                destination=destination,
+                start_date_str=plan_context.get("start_date", ""),
+                end_date_str=plan_context.get("end_date", ""),
+            )
 
         # ── Step 2: Extract itinerary summary ────────────────────────
         itinerary_data = agent_outputs.get("itinerary_agent", {})

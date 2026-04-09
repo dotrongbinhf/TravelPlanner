@@ -30,7 +30,6 @@ namespace dotnet.Controllers
                 return BadRequest(response.Error);
             }
 
-            // Trim: keep only Properties (max 5), flatten rates, remove tokens/links
             var trimmedProperties = (response.Properties ?? new())
                 .Take(5)
                 .Select(p => new
@@ -44,10 +43,12 @@ namespace dotnet.Controllers
                     RatePerNight = p.RatePerNight?.Lowest,
                     TotalRate = p.TotalRate?.Lowest,
                     p.NearbyPlaces,
+                    p.HotelClass,
                     p.OverallRating,
                     p.Reviews,
                     p.LocationRating,
                     p.ReviewsBreakdown,
+                    p.Amenities,
                 });
 
             return Ok(new { Properties = trimmedProperties });

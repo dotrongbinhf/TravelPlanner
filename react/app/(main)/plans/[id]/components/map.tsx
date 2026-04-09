@@ -122,9 +122,11 @@ export default function GoogleMapIntegration({
     // find all bed markers and track earliest day per placeId
     for (const m of markersData) {
       if (m.isBed) {
-        const pid = m.item.place.placeId;
-        if (!bedPlaceSeen.has(pid) || m.dayIndex < bedPlaceSeen.get(pid)!) {
-          bedPlaceSeen.set(pid, m.dayIndex);
+        const pid = m.item.place?.placeId;
+        if (pid) {
+          if (!bedPlaceSeen.has(pid) || m.dayIndex < bedPlaceSeen.get(pid)!) {
+            bedPlaceSeen.set(pid, m.dayIndex);
+          }
         }
       }
     }
@@ -139,7 +141,12 @@ export default function GoogleMapIntegration({
             (a.startTime ?? "").localeCompare(b.startTime ?? ""),
           );
           const lastOfPrev = prevItems[prevItems.length - 1];
-          if (lastOfPrev && lastOfPrev.place.placeId === m.item.place.placeId) {
+          if (
+            lastOfPrev &&
+            lastOfPrev.place?.placeId &&
+            m.item.place?.placeId &&
+            lastOfPrev.place.placeId === m.item.place.placeId
+          ) {
             // This first item is same place as prev day's last (bed) → skip
             skippedPlaceIds.add(`${m.dayIndex}-${m.item.place.placeId}`);
             continue;
@@ -149,15 +156,17 @@ export default function GoogleMapIntegration({
 
       // For bed markers with duplicate placeId, only keep the first occurrence
       if (m.isBed) {
-        const pid = m.item.place.placeId;
-        const earliestDay = bedPlaceSeen.get(pid);
-        if (earliestDay !== undefined && m.dayIndex !== earliestDay) {
-          // Check if there's already a bed marker for this place from earliest day
-          const alreadyHasBed = result.some(
-            (r) => r.isBed && r.item.place.placeId === pid,
-          );
-          if (alreadyHasBed) {
-            continue; // Skip duplicate bed marker
+        const pid = m.item.place?.placeId;
+        if (pid) {
+          const earliestDay = bedPlaceSeen.get(pid);
+          if (earliestDay !== undefined && m.dayIndex !== earliestDay) {
+            // Check if there's already a bed marker for this place from earliest day
+            const alreadyHasBed = result.some(
+              (r) => r.isBed && r.item.place?.placeId === pid,
+            );
+            if (alreadyHasBed) {
+              continue; // Skip duplicate bed marker
+            }
           }
         }
       }
@@ -279,7 +288,9 @@ export default function GoogleMapIntegration({
           if (
             lastItemOfCurrentDay &&
             firstItemOfNextDay &&
-            lastItemOfCurrentDay.place.id !== firstItemOfNextDay.place.id
+            lastItemOfCurrentDay.place?.placeId &&
+            firstItemOfNextDay.place?.placeId &&
+            lastItemOfCurrentDay.place.placeId !== firstItemOfNextDay.place.placeId
           ) {
             const connectionRoute = await getRouteBetweenTwoItems(
               lastItemOfCurrentDay.id,
@@ -429,6 +440,8 @@ export default function GoogleMapIntegration({
                 isLast={isOverallLast}
                 isBed={isBed}
                 isActive={
+                  !!selectedPlace.placeId &&
+                  !!place?.placeId &&
                   selectedPlace.placeId === place.placeId &&
                   (selectedPlace.dayIndex === dayIndex ||
                     selectedPlace.dayIndex === selectedDayIndex)
@@ -531,8 +544,10 @@ export default function GoogleMapIntegration({
 
                     // Skip if same place (e.g. same hotel)
                     if (
+                      lastItemOfCurrentDay.place?.placeId &&
+                      firstItemOfNextDay.place?.placeId &&
                       lastItemOfCurrentDay.place.placeId ===
-                      firstItemOfNextDay.place.placeId
+                        firstItemOfNextDay.place.placeId
                     ) {
                       return null;
                     }

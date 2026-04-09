@@ -21,7 +21,10 @@ def _get_scheduled_attractions(itinerary_data: dict) -> dict[str, list[str]]:
     scheduled = {}
     for day_data in itinerary_data.get("days", []):
         for stop in day_data.get("stops", []):
-            if stop.get("role") == "attraction":
+            # Handle role as list (new format) or string (legacy)
+            role = stop.get("role", [])
+            roles = set(role) if isinstance(role, list) else {role} if isinstance(role, str) else set()
+            if "attraction" in roles:
                 name = stop.get("name", "")
                 includes = stop.get("includes", [])
                 if name:
@@ -61,24 +64,26 @@ def aggregate_all_costs(
         total_price = flight_data.get("totalPrice", 0)
         outbound = flight_data.get("recommend_outbound_flight")
         return_f = flight_data.get("recommend_return_flight")
-        if outbound:
-            flight_number = outbound.get("flight_number", "")
-            dep = outbound.get("departure_airport_name", "")
-            arr = outbound.get("arrival_airport_name", "")
+        if outbound and return_f:
+            # Round trip
+            out_fn = outbound.get("flight_number", "")
+            ret_fn = return_f.get("flight_number", "")
             flight_items.append({
-                "name": f"{flight_number} ({dep} → {arr})",
-                "amount": total_price if not return_f else 0,
-                "note": "Chuyến bay đi (giá đã được gộp)" if return_f else "Chuyến bay đi"
+                "name": f"{out_fn} ⇌ {ret_fn}",
+                "amount": total_price,
             })
-        if return_f:
-            flight_number = return_f.get("flight_number", "")
-            dep = return_f.get("departure_airport_name", "")
-            arr = return_f.get("arrival_airport_name", "")
-            flight_items.append({
-                "name": f"{flight_number} ({dep} → {arr})",
-                "amount": total_price if outbound else total_price,
-                "note": "Chuyến bay về (tổng giá vé)" if outbound else "Chuyến bay về"
-            })
+        else:
+            # One way flights
+            if outbound:
+                flight_items.append({
+                    "name": outbound.get("flight_number", "Outbound Flight"),
+                    "amount": total_price,
+                })
+            elif return_f:
+                flight_items.append({
+                    "name": return_f.get("flight_number", "Return Flight"),
+                    "amount": total_price,
+                })
             
         flight_subtotal += total_price
     if flight_items:
@@ -120,6 +125,7 @@ def aggregate_all_costs(
     attraction_subtotal = 0
     if itinerary_data and attraction_data:
         scheduled = _get_scheduled_attractions(itinerary_data)
+        
         for sched_name, sched_includes in scheduled.items():
             attr_info = _find_attraction_data(sched_name, attraction_data)
             if not attr_info:
@@ -142,11 +148,16 @@ def aggregate_all_costs(
                     inc_total = inc_fee.get("total", 0)
                     inc_note = inc_fee.get("note", "")
                     attraction_items.append({
-                        "name": f"  └ {inc_name}",
+                        "name": inc_name,
                         "amount": inc_total,
                         "note": inc_note,
                     })
                     attraction_subtotal += inc_total
+    # If there are multiple attraction items, group them under a localized header
+    if len(attraction_items) > 1:
+        attr_group_name = "Phí tham quan" if plan_context.get("language") == "vi" else "Attraction Fees"
+        for item in attraction_items:
+            item["groupName"] = attr_group_name
     if attraction_items:
         result["categories"]["attractions"] = {
             "items": attraction_items,
@@ -157,18 +168,29 @@ def aggregate_all_costs(
     restaurant_items = []
     restaurant_subtotal = 0
     if restaurant_data and not restaurant_data.get("skipped"):
+        is_vi = plan_context.get("language") == "vi"
         for meal in restaurant_data.get("meals", []):
-            name = meal.get("name", "")
             cost = meal.get("estimated_cost_total", 0)
             day = meal.get("day", 0)
-            meal_type = meal.get("meal_type", "")
-            note = meal.get("note", "")
+            meal_type = meal.get("meal_type", "").capitalize()
+            # If meal_type is breakfast, lunch, dinner -> translate if needed
+            if is_vi:
+                meal_transl = {"breakfast": "Sáng", "lunch": "Trưa", "dinner": "Tối"}
+                mt_lower = meal_type.lower()
+                meal_type = meal_transl.get(mt_lower, meal_type)
+                
+            day_prefix = "Ngày" if is_vi else "Day"
+            
             restaurant_items.append({
-                "name": f"{name} (Day {day} {meal_type})",
+                "name": f"{day_prefix} {day} - {meal_type}",
                 "amount": cost,
-                "note": note,
             })
             restaurant_subtotal += cost
+    # If multiple meals, group them under a localized header
+    if len(restaurant_items) > 1:
+        meal_group_name = "Các bữa ăn" if plan_context.get("language") == "vi" else "Meals"
+        for item in restaurant_items:
+            item["groupName"] = meal_group_name
     if restaurant_items:
         result["categories"]["restaurants"] = {
             "items": restaurant_items,
@@ -195,6 +217,38 @@ def aggregate_all_costs(
         result["categories"]["other"] = {
             "items": other_items,
             "subtotal": other_subtotal,
+        }
+    # ── 6. Transport costs (from mobility_plan) ──────────────────────
+    mobility_plan = plan_context.get("mobility_plan") or {}
+    dep_log = mobility_plan.get("departure_logistics") or {}
+    ret_log = mobility_plan.get("return_logistics") or {}
+    transport_items = []
+    transport_subtotal = 0
+
+    dep_mode = dep_log.get("mode", "")
+    if dep_mode and dep_mode != "flight":
+        dep_cost = dep_log.get("estimated_cost", 0)
+        if isinstance(dep_cost, (int, float)) and dep_cost > 0:
+            transport_items.append({
+                "name": f"Di chuyển đi ({dep_mode})",
+                "amount": dep_cost,
+                "note": dep_log.get("estimated_cost_note", ""),
+            })
+            transport_subtotal += dep_cost
+
+        ret_cost = ret_log.get("estimated_cost", 0)
+        if isinstance(ret_cost, (int, float)) and ret_cost > 0:
+            transport_items.append({
+                "name": f"Di chuyển về ({ret_log.get('mode', dep_mode)})",
+                "amount": ret_cost,
+                "note": ret_log.get("estimated_cost_note", ""),
+            })
+            transport_subtotal += ret_cost
+
+    if transport_items:
+        result["categories"]["transport"] = {
+            "items": transport_items,
+            "subtotal": transport_subtotal,
         }
     # ── Grand total ──────────────────────────────────────────────────
     result["grand_total"] = sum(

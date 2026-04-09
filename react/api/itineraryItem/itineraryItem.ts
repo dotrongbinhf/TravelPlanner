@@ -18,6 +18,7 @@ export const createItineraryItem = async (
     placeId: data.placeId,
     startTime: data.startTime,
     duration: convertHHmmToTimeSpan(data.duration),
+    note: data.note,
   } as CreateItineraryItemRequest;
   const response = await API.post<ItineraryItem>(
     `${APP_CONFIG_URL}?itineraryDayId=${itineraryDayId}`,
@@ -32,8 +33,10 @@ export const updateItineraryItem = async (
 ) => {
   const payload = {
     itineraryDayId: data.itineraryDayId,
+    placeId: data.placeId,
     startTime: data.startTime,
     duration: convertHHmmToTimeSpan(data.duration),
+    note: data.note,
   } as UpdateItineraryItemRequest;
   const response = await API.patch<ItineraryItem>(
     `${APP_CONFIG_URL}/${itineraryItemId}`,

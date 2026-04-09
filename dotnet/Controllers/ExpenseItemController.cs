@@ -1,4 +1,4 @@
-﻿using dotnet.Data;
+using dotnet.Data;
 using dotnet.Entites;
 using dotnet.Dtos.ExpenseItem;
 using Microsoft.AspNetCore.Authorization;
@@ -29,7 +29,8 @@ namespace dotnet.Controllers
                 PlanId = expenseItem.PlanId,
                 Category = expenseItem.Category,
                 Name = expenseItem.Name,
-                Amount = expenseItem.Amount
+                Amount = expenseItem.Amount,
+                GroupName = expenseItem.GroupName,
             });
         }
 
@@ -45,7 +46,8 @@ namespace dotnet.Controllers
                 PlanId = planId,
                 Category = request.Category,
                 Name = request.Name,
-                Amount = request.Amount
+                Amount = request.Amount,
+                GroupName = request.GroupName,
             };
 
             dbContext.ExpenseItems.Add(expenseItem);
@@ -57,7 +59,8 @@ namespace dotnet.Controllers
                 PlanId = expenseItem.PlanId,
                 Category = expenseItem.Category,
                 Name = expenseItem.Name,
-                Amount = expenseItem.Amount
+                Amount = expenseItem.Amount,
+                GroupName = expenseItem.GroupName,
             });
         }
 
@@ -70,6 +73,7 @@ namespace dotnet.Controllers
             expenseItem.Category = request.Category;
             expenseItem.Name = request.Name;
             expenseItem.Amount = request.Amount;
+            expenseItem.GroupName = request.GroupName;
 
             await dbContext.SaveChangesAsync();
 
@@ -79,7 +83,8 @@ namespace dotnet.Controllers
                 PlanId = expenseItem.PlanId,
                 Category = expenseItem.Category,
                 Name = expenseItem.Name,
-                Amount = expenseItem.Amount
+                Amount = expenseItem.Amount,
+                GroupName = expenseItem.GroupName,
             });
         }
 

@@ -48,19 +48,22 @@ export function buildDisplayItems(
   const isLastDay = dayIndex === totalDays - 1;
   const isFirstDay = dayIndex === 0;
 
+  const sortByTime = (a: ItineraryItem, b: ItineraryItem) => {
+    if (!a.startTime && !b.startTime) return 0; // Maintain insertion order for both empty
+    if (!a.startTime) return 1; // Empty string goes to bottom
+    if (!b.startTime) return -1;
+    return a.startTime.localeCompare(b.startTime);
+  };
+
   // Sort items by start time
-  const sortedItems = [...(day.itineraryItems || [])].sort((a, b) =>
-    (a.startTime ?? "").localeCompare(b.startTime ?? ""),
-  );
+  const sortedItems = [...(day.itineraryItems || [])].sort(sortByTime);
 
   const displayItems: DisplayItem[] = [];
 
   // 1. Check previous day for cross-day items → inject cross-day-end at the top
   if (dayIndex > 0) {
     const prevDay = sortedDays[dayIndex - 1];
-    const prevSortedItems = [...(prevDay.itineraryItems || [])].sort((a, b) =>
-      (a.startTime ?? "").localeCompare(b.startTime ?? ""),
-    );
+    const prevSortedItems = [...(prevDay.itineraryItems || [])].sort(sortByTime);
 
     prevSortedItems.forEach((item) => {
       if (isCrossDayEvent(item.startTime, item.duration)) {

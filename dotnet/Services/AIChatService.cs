@@ -119,7 +119,9 @@ namespace dotnet.Services
                     ConversationId = m.ConversationId,
                     Content = m.Content,
                     MessageRole = m.MessageRole,
-                    CreatedAt = m.CreatedAt
+                    CreatedAt = m.CreatedAt,
+                    GeneratedPlanData = m.GeneratedPlanData,
+                    ApplyGeneratedPlanAt = m.ApplyGeneratedPlanAt
                 })
                 .ToListAsync();
 
@@ -143,7 +145,8 @@ namespace dotnet.Services
                 Id = Guid.NewGuid(),
                 ConversationId = createMessageDto.ConversationId,
                 Content = createMessageDto.Content,
-                MessageRole = createMessageDto.MessageRole
+                MessageRole = createMessageDto.MessageRole,
+                GeneratedPlanData = createMessageDto.GeneratedPlanData
             };
 
             conversation.ModifiedAt = DateTimeOffset.UtcNow;
@@ -158,7 +161,38 @@ namespace dotnet.Services
                 ConversationId = message.ConversationId,
                 Content = message.Content,
                 MessageRole = message.MessageRole,
-                CreatedAt = message.CreatedAt
+                CreatedAt = message.CreatedAt,
+                GeneratedPlanData = message.GeneratedPlanData,
+                ApplyGeneratedPlanAt = message.ApplyGeneratedPlanAt
+            };
+        }
+
+        public async Task<MessageDto> MarkMessageApplied(Guid messageId)
+        {
+            var userId = _currentUser.Id;
+            var message = await _context.Messages
+                .Include(m => m.Conversation)
+                .ThenInclude(c => c.Plan)
+                .ThenInclude(p => p.Participants)
+                .FirstOrDefaultAsync(m => m.Id == messageId);
+
+            if (message == null) throw new KeyNotFoundException("Message not found");
+            if (!message.Conversation.Plan.Participants.Any(p => p.UserId == userId))
+                throw new UnauthorizedAccessException("You don't have access to this message");
+
+            message.ApplyGeneratedPlanAt = DateTimeOffset.UtcNow;
+            _context.Messages.Update(message);
+            await _context.SaveChangesAsync();
+
+            return new MessageDto
+            {
+                Id = message.Id,
+                ConversationId = message.ConversationId,
+                Content = message.Content,
+                MessageRole = message.MessageRole,
+                CreatedAt = message.CreatedAt,
+                GeneratedPlanData = message.GeneratedPlanData,
+                ApplyGeneratedPlanAt = message.ApplyGeneratedPlanAt
             };
         }
 

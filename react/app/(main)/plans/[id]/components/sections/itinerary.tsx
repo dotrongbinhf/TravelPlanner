@@ -2,7 +2,13 @@
 
 import { DateRangePicker } from "@/components/date-range-picker";
 import { forwardRef, useEffect, useState, useCallback } from "react";
-import { List, LayoutGrid, Loader2, CalendarRange } from "lucide-react";
+import {
+  List,
+  LayoutGrid,
+  Loader2,
+  CalendarRange,
+  CalendarOff,
+} from "lucide-react";
 import { updatePlanBasicInfo } from "@/api/plan/plan";
 import toast from "react-hot-toast";
 import { ItineraryDay } from "@/types/itineraryDay";
@@ -66,7 +72,11 @@ const Itinerary = forwardRef<HTMLDivElement, ItineraryProps>(function Itinerary(
     connectGoogle,
     syncCalendar,
     disconnectAccount,
+    unsyncCalendar,
+    isUnsyncing,
   } = useGoogleCalendar();
+
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
   const getLastSyncText = useCallback(() => {
     if (!lastSyncGoogleCalendarAt) return null;
@@ -126,6 +136,24 @@ const Itinerary = forwardRef<HTMLDivElement, ItineraryProps>(function Itinerary(
           );
         }
       }
+    } catch {
+      // Errors are handled in the hook
+    }
+  };
+
+  const handleUnsyncGoogleCalendar = async () => {
+    try {
+      await unsyncCalendar(planId);
+      onSyncComplete("");
+      onItineraryDaysUpdate(
+        itineraryDays.map((day) => ({
+          ...day,
+          itineraryItems: day.itineraryItems?.map((item) => ({
+            ...item,
+            googleCalendarEventId: undefined,
+          })),
+        })),
+      );
     } catch {
       // Errors are handled in the hook
     }
@@ -327,79 +355,109 @@ const Itinerary = forwardRef<HTMLDivElement, ItineraryProps>(function Itinerary(
             </Tabs>
           </TooltipProvider>
 
-          {/* Google Calendar Sync Button */}
-          <TooltipProvider>
-            <Tooltip onOpenChange={(open) => open && handleTooltipOpen()}>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={handleSyncGoogleCalendar}
-                  disabled={isSyncing}
-                  className="flex-shrink-0 cursor-pointer flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed h-[42px]"
-                >
-                  {isSyncing ? (
-                    <Loader2 className="w-5 h-5 animate-spin text-gray-500" />
-                  ) : (
-                    <Image
-                      src="/images/plans/google-calendar.png"
-                      alt="Google Calendar"
-                      width={20}
-                      height={20}
-                    />
+          {/* Google Calendar Sync Split Button */}
+          <div className="flex items-center h-[42px] bg-white rounded-lg border border-gray-300 overflow-hidden flex-shrink-0 px-3 flex gap-2">
+            <TooltipProvider>
+              <Tooltip onOpenChange={(open) => open && handleTooltipOpen()}>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={handleSyncGoogleCalendar}
+                    disabled={isSyncing || isUnsyncing}
+                    className={`cursor-pointer flex items-center gap-2 h-full disabled:opacity-50 disabled:cursor-not-allowed outline-none`}
+                  >
+                    {isSyncing || isUnsyncing ? (
+                      <Loader2 className="w-5 h-5 animate-spin text-gray-500" />
+                    ) : (
+                      <Image
+                        src="/images/plans/google-calendar.png"
+                        alt="Google Calendar"
+                        width={20}
+                        height={20}
+                      />
+                    )}
+                    <span className="text-xs font-medium text-gray-700">
+                      {isUnsyncing
+                        ? "Clearing..."
+                        : isSyncing
+                          ? "Syncing..."
+                          : isConnected
+                            ? "Sync"
+                            : "Connect"}
+                    </span>
+                  </button>
+                </TooltipTrigger>
+                {!isDropdownOpen && (
+                  <TooltipContent>
+                    <p>{tooltipText ?? "Google Calendar"}</p>
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
+
+            {googleAvatarUrl && (
+              <DropdownMenu onOpenChange={(open) => setIsDropdownOpen(open)}>
+                <DropdownMenuTrigger asChild>
+                  <button className="h-full outline-none flex items-center justify-center cursor-pointer">
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <img
+                            src={googleAvatarUrl}
+                            alt={googleEmail ?? "Google"}
+                            className="w-6 h-6 rounded-full ring-1 ring-gray-200"
+                            referrerPolicy="no-referrer"
+                          />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>{googleEmail}</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {!!lastSyncGoogleCalendarAt && (
+                    <DropdownMenuItem
+                      className="cursor-pointer rounded-md flex items-center gap-2"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleUnsyncGoogleCalendar();
+                      }}
+                    >
+                      <div className="rounded-md p-1.5 bg-orange-400 flex items-center justify-center">
+                        <CalendarOff
+                          size={16}
+                          className="text-white"
+                          style={{ width: 16, height: 16 }}
+                        />
+                      </div>
+                      <span className="text-gray-700 font-semibold text-sm">
+                        Clear Synced Events
+                      </span>
+                    </DropdownMenuItem>
                   )}
-                  <span className="text-xs font-medium text-gray-700">
-                    {isSyncing
-                      ? "Syncing..."
-                      : isConnected
-                        ? "Sync"
-                        : "Connect"}
-                  </span>
-                  {googleAvatarUrl && (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <div
-                          className="relative cursor-pointer"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                          }}
-                        >
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <img
-                                  src={googleAvatarUrl}
-                                  alt={googleEmail ?? "Google"}
-                                  className="w-6 h-6 rounded-full ring-1 ring-gray-200"
-                                  referrerPolicy="no-referrer"
-                                />
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>{googleEmail}</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </div>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem
-                          className="text-red-600 focus:bg-red-50 focus:text-red-700 cursor-pointer"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            disconnectAccount();
-                          }}
-                        >
-                          <LogOut className="w-4 h-4 mr-2" />
-                          Disconnect Account
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{tooltipText ?? "Google Calendar"}</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+                  <DropdownMenuItem
+                    className="cursor-pointer rounded-md flex items-center gap-2"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      disconnectAccount();
+                    }}
+                  >
+                    <div className="rounded-md p-1.5 bg-red-400 flex items-center justify-center">
+                      <LogOut
+                        size={16}
+                        className="text-white"
+                        style={{ width: 16, height: 16 }}
+                      />
+                    </div>
+                    <span className="text-gray-700 font-semibold text-sm">
+                      Disconnect Account
+                    </span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
 
           <DateRangePicker
             startDate={startTime}

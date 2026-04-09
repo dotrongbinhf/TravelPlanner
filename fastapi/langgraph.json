@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "travel_planner": "./src/agents/graph.py:studio_graph"
+  },
+  "env": ".env"
+}

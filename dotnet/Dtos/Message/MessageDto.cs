@@ -10,5 +10,7 @@ namespace dotnet.Dtos.Message
         public string Content { get; set; } = string.Empty;
         public MessageRole MessageRole { get; set; }
         public DateTimeOffset CreatedAt { get; set; }
+        public string? GeneratedPlanData { get; set; }
+        public DateTimeOffset? ApplyGeneratedPlanAt { get; set; }
     }
 }

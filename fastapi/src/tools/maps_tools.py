@@ -104,8 +104,6 @@ async def places_text_search_id_only(
 # ============================================================================
 
 # Toggle to switch between Pro (free 5000/mo) and Enterprise (free 1000/mo) field masks
-USE_ENTERPRISE_FIELDS = False
-
 _FIELD_MASK_PRO = ",".join([
     "places.id", "places.displayName", "places.formattedAddress",
     "places.location", "places.primaryType", "places.businessStatus",
@@ -156,6 +154,7 @@ async def search_restaurants_for_meal(
     query: str,
     lat: float,
     lng: float,
+    USE_ENTERPRISE_FIELDS: bool = False,
     page_size: int = 5,
 ) -> list[dict]:
     """Search for restaurants near a location using Google Places Text Search with fallback chain.

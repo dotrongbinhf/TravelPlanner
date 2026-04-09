@@ -91,7 +91,7 @@ namespace dotnet.Controllers
         }
 
         [HttpPost("sync/{planId:Guid}")]
-        public async Task<ActionResult<SyncGoogleCalendarResponse>> SyncCalendar(Guid planId)
+        public async Task<ActionResult<SyncGoogleCalendarResponse>> SyncCalendar(Guid planId, [FromQuery] int timeZoneOffsetMinutes = 0, [FromQuery] string timeZone = "UTC")
         {
             var userId = _currentUser.Id;
             if (userId == null) return Unauthorized();
@@ -129,7 +129,7 @@ namespace dotnet.Controllers
 
             // Get all places for event details
             var allItems = plan.ItineraryDays.SelectMany(d => d.ItineraryItems).ToList();
-            var placeIds = allItems.Select(i => i.PlaceId).Distinct().ToList();
+            var placeIds = allItems.Where(i => !string.IsNullOrEmpty(i.PlaceId)).Select(i => i.PlaceId).Distinct().ToList();
             var placesDict = await _placesCollection
                 .Find(p => placeIds.Contains(p.PlaceId))
                 .ToListAsync()
@@ -159,66 +159,90 @@ namespace dotnet.Controllers
 
             // 2. Handle active items
             var activeItems = allItems.Where(i => !i.IsDeleted).ToList();
-            foreach (var item in activeItems)
+            var semaphore = new SemaphoreSlim(3);
+            var syncTasks = activeItems.Select(async item =>
             {
-                var day = plan.ItineraryDays.First(d => d.Id == item.ItineraryDayId);
-                var dayDate = plan.StartTime.AddDays(day.Order);
-                var place = placesDict.GetValueOrDefault(item.PlaceId);
-
-                var calendarEvent = new GoogleCalendarEvent
+                await semaphore.WaitAsync();
+                try
                 {
-                    Summary = place?.Title ?? "Itinerary Event",
-                    Description = $"Category: {place?.Category ?? "N/A"}\nPlan: {plan.Name}\nDay {day.Order + 1}: {day.Title}",
-                    Location = place?.Address,
-                    Start = new DateTimeOffset(
-                        dayDate.Year, dayDate.Month, dayDate.Day,
-                        item.StartTime.Hour, item.StartTime.Minute, 0,
-                        dayDate.Offset),
-                    End = new DateTimeOffset(
-                        dayDate.Year, dayDate.Month, dayDate.Day,
-                        item.StartTime.Hour, item.StartTime.Minute, 0,
-                        dayDate.Offset).Add(item.Duration)
-                };
+                    // plan.StartTime was sent as UTC. TimeZoneOffsetMinutes is the difference.
+                    var localPlanStartTime = plan.StartTime.AddMinutes(-timeZoneOffsetMinutes);
+                    var day = plan.ItineraryDays.First(d => d.Id == item.ItineraryDayId);
+                    var dayDate = localPlanStartTime.AddDays(day.Order);
+                    var place = string.IsNullOrEmpty(item.PlaceId) ? null : placesDict.GetValueOrDefault(item.PlaceId);
 
-                if (!string.IsNullOrEmpty(item.GoogleCalendarEventId))
-                {
-                    // Try to update existing event
-                    try
+                    var startHour = item.StartTime?.Hour ?? 9;
+                    var startMinute = item.StartTime?.Minute ?? 0;
+                    var duration = item.Duration ?? TimeSpan.FromHours(1);
+
+                    var calendarEvent = new GoogleCalendarEvent
                     {
-                        await _googleCalendarService.UpdateEventAsync(accessToken, item.GoogleCalendarEventId, calendarEvent);
-                        updatedCount++;
-                        eventMappings.Add(new EventMapping
+                        Summary = place?.Title ?? item.Note ?? "Itinerary Event",
+                        Description = $"Category: {place?.Category ?? "N/A"}\nPlan: {plan.Name}\nDay {day.Order + 1}: {day.Title}\nNote: {item.Note}",
+                        Location = place?.Address,
+                        Start = new DateTimeOffset(
+                            dayDate.Year, dayDate.Month, dayDate.Day,
+                            startHour, startMinute, 0,
+                            TimeSpan.Zero),
+                        End = new DateTimeOffset(
+                            dayDate.Year, dayDate.Month, dayDate.Day,
+                            startHour, startMinute, 0,
+                            TimeSpan.Zero).Add(duration),
+                        TimeZone = timeZone
+                    };
+
+                    if (!string.IsNullOrEmpty(item.GoogleCalendarEventId))
+                    {
+                        try
                         {
-                            ItineraryItemId = item.Id,
-                            GoogleCalendarEventId = item.GoogleCalendarEventId
-                        });
+                            await _googleCalendarService.UpdateEventAsync(accessToken, item.GoogleCalendarEventId, calendarEvent);
+                            Interlocked.Increment(ref updatedCount);
+                            lock (eventMappings)
+                            {
+                                eventMappings.Add(new EventMapping
+                                {
+                                    ItineraryItemId = item.Id,
+                                    GoogleCalendarEventId = item.GoogleCalendarEventId
+                                });
+                            }
+                        }
+                        catch (KeyNotFoundException)
+                        {
+                            var newEventId = await _googleCalendarService.CreateEventAsync(accessToken, calendarEvent);
+                            item.GoogleCalendarEventId = newEventId;
+                            Interlocked.Increment(ref createdCount);
+                            lock (eventMappings)
+                            {
+                                eventMappings.Add(new EventMapping
+                                {
+                                    ItineraryItemId = item.Id,
+                                    GoogleCalendarEventId = newEventId
+                                });
+                            }
+                        }
                     }
-                    catch (KeyNotFoundException)
+                    else
                     {
-                        // Event was deleted from Google Calendar, create new one
                         var newEventId = await _googleCalendarService.CreateEventAsync(accessToken, calendarEvent);
                         item.GoogleCalendarEventId = newEventId;
-                        createdCount++;
-                        eventMappings.Add(new EventMapping
+                        Interlocked.Increment(ref createdCount);
+                        lock (eventMappings)
                         {
-                            ItineraryItemId = item.Id,
-                            GoogleCalendarEventId = newEventId
-                        });
+                            eventMappings.Add(new EventMapping
+                            {
+                                ItineraryItemId = item.Id,
+                                GoogleCalendarEventId = newEventId
+                            });
+                        }
                     }
                 }
-                else
+                finally
                 {
-                    // Create new event
-                    var newEventId = await _googleCalendarService.CreateEventAsync(accessToken, calendarEvent);
-                    item.GoogleCalendarEventId = newEventId;
-                    createdCount++;
-                    eventMappings.Add(new EventMapping
-                    {
-                        ItineraryItemId = item.Id,
-                        GoogleCalendarEventId = newEventId
-                    });
+                    semaphore.Release();
                 }
-            }
+            });
+
+            await Task.WhenAll(syncTasks);
 
             // Update plan sync timestamp
             var syncedAt = DateTimeOffset.UtcNow;
@@ -233,6 +257,74 @@ namespace dotnet.Controllers
                 DeletedCount = deletedCount,
                 EventMappings = eventMappings
             });
+        }
+
+        [HttpPost("unsync/{planId:Guid}")]
+        public async Task<IActionResult> UnsyncCalendar(Guid planId)
+        {
+            var userId = _currentUser.Id;
+            if (userId == null) return Unauthorized();
+
+            var user = await _dbContext.Users.FindAsync(userId.Value);
+            if (user == null) return NotFound("User not found");
+
+            if (string.IsNullOrEmpty(user.GoogleRefreshToken))
+            {
+                return BadRequest("Google Calendar not connected.");
+            }
+
+            var plan = await _dbContext.Plans
+                .Where(p => p.Id == planId)
+                .Include(p => p.ItineraryDays)
+                    .ThenInclude(d => d.ItineraryItems)
+                .FirstOrDefaultAsync();
+
+            if (plan == null) return NotFound("Plan not found");
+
+            string accessToken;
+            try
+            {
+                accessToken = await _googleCalendarService.RefreshAccessTokenAsync(user.GoogleRefreshToken);
+            }
+            catch (Exception)
+            {
+                user.GoogleRefreshToken = null;
+                await _dbContext.SaveChangesAsync();
+                return BadRequest("Google Calendar session expired. Please reconnect.");
+            }
+
+            var allItems = plan.ItineraryDays.SelectMany(d => d.ItineraryItems).ToList();
+            var syncedItems = allItems.Where(i => !string.IsNullOrEmpty(i.GoogleCalendarEventId)).ToList();
+            
+            var semaphore = new SemaphoreSlim(3);
+            var unsyncTasks = syncedItems.Select(async item =>
+            {
+                await semaphore.WaitAsync();
+                try
+                {
+                    try
+                    {
+                        await _googleCalendarService.DeleteEventAsync(accessToken, item.GoogleCalendarEventId);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Failed to delete event {item.GoogleCalendarEventId} from Google Calendar: {ex.Message}");
+                    }
+                    // Only detach if we didn't crash before this point
+                    item.GoogleCalendarEventId = null;
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            });
+
+            await Task.WhenAll(unsyncTasks);
+
+            plan.LastSyncGoogleCalendarAt = null;
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new { Message = "Unsynced successfully" });
         }
 
         [HttpPost("disconnect")]

@@ -1,4 +1,4 @@
-﻿using dotnet.Enums;
+using dotnet.Enums;
 
 namespace dotnet.Dtos.ExpenseItem
 {
@@ -7,5 +7,6 @@ namespace dotnet.Dtos.ExpenseItem
         public ExpenseCategory Category { get; set; } = ExpenseCategory.Other;
         public string Name { get; set; } = string.Empty;
         public double Amount { get; set; }
+        public string? GroupName { get; set; }
     }
 }

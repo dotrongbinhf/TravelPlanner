@@ -14,31 +14,6 @@ from src.config import settings
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# LLM Instances
-# ============================================================
-
-llm_fast = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=settings.GOOGLE_GEMINI_API_KEY,
-    temperature=0.3,
-    streaming=False,
-)
-
-llm_streaming = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=settings.GOOGLE_GEMINI_API_KEY,
-    temperature=0.7,
-    streaming=True,
-)
-
-llm_agent = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=settings.GOOGLE_GEMINI_API_KEY,
-    temperature=0.5,
-    streaming=False,
-)
-
-# ============================================================
 # Helper Functions
 # ============================================================
 
@@ -111,17 +86,34 @@ def _get_conversation_context(state: GraphState, max_messages: int = 10) -> list
     return context
 
 
+
+MAX_TOOL_MESSAGE_CHARS = 4000
+
+def _truncate_tool_result(tool_result_str: str) -> str:
+    """Truncate tool result for LLM context while keeping it useful.
+    Full results are preserved in tool_logs for programmatic extraction."""
+    if len(tool_result_str) <= MAX_TOOL_MESSAGE_CHARS:
+        return tool_result_str
+    return tool_result_str[:MAX_TOOL_MESSAGE_CHARS] + "\n...[TRUNCATED for context window — full data saved in tool_logs]"
+
+
 async def _run_agent_with_tools(
     llm,
     messages: list,
     tools: list,
     max_iterations: int = 5,
     agent_name: str = "agent",
+    slim_tool_output: callable = None,
 ) -> tuple[Any, list[dict]]:
     """ReAct tool-calling loop: LLM → tool calls → LLM → ... → final response.
     
     When the LLM emits multiple tool calls in a single turn, they are executed
     concurrently via asyncio.gather for faster results.
+    
+    Args:
+        slim_tool_output: Optional function(tool_result: dict) -> dict that
+            reduces tool output before sending to LLM. Full output is always
+            preserved in tool_logs for programmatic use.
     
     Returns:
         A tuple of (final_llm_result, tool_logs) where tool_logs is a list of
@@ -157,9 +149,11 @@ async def _run_agent_with_tools(
             if tool_fn:
                 try:
                     tool_result = await tool_fn.ainvoke(tool_args)
-                    tool_result_str = json.dumps(tool_result, default=str, ensure_ascii=False)
                     tool_logs.append({"name": tool_name, "input": tool_args, "output": tool_result})
-                    messages.append(ToolMessage(content=tool_result_str, tool_call_id=tool_id))
+                    # Slim for LLM context if callback provided, keep full in tool_logs
+                    llm_result = slim_tool_output(tool_result) if slim_tool_output else tool_result
+                    llm_result_str = json.dumps(llm_result, default=str, ensure_ascii=False)
+                    messages.append(ToolMessage(content=_truncate_tool_result(llm_result_str), tool_call_id=tool_id))
                 except Exception as e:
                     logger.error(f"   [{agent_name}] Tool {tool_name} error: {e}")
                     tool_logs.append({"name": tool_name, "input": tool_args, "output": {"error": str(e)}})
@@ -187,10 +181,12 @@ async def _run_agent_with_tools(
                     )
                 try:
                     t_result = await t_fn.ainvoke(t_args)
-                    t_result_str = json.dumps(t_result, default=str, ensure_ascii=False)
+                    # Slim for LLM context if callback provided
+                    t_llm_result = slim_tool_output(t_result) if slim_tool_output else t_result
+                    t_llm_result_str = json.dumps(t_llm_result, default=str, ensure_ascii=False)
                     return (
                         {"name": t_name, "input": t_args, "output": t_result},
-                        t_result_str,
+                        t_llm_result_str,
                         t_id,
                     )
                 except Exception as e:
@@ -209,7 +205,7 @@ async def _run_agent_with_tools(
             # Append results in original order (important for LLM context)
             for log_entry, result_str, tool_id in results:
                 tool_logs.append(log_entry)
-                messages.append(ToolMessage(content=result_str, tool_call_id=tool_id))
+                messages.append(ToolMessage(content=_truncate_tool_result(result_str), tool_call_id=tool_id))
 
     logger.warning(f"   [{agent_name}] Max iterations reached, forcing final response")
     result = await llm.ainvoke(messages)

@@ -20,6 +20,19 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: str = ""
     GOOGLE_MAPS_API_KEY: str = ""
     XAI_API_KEY: str = ""
+    USE_VERCEL_AI_GATEWAY: bool = False
+    VERCEL_AI_GATEWAY_API_KEY: str = ""
+    USE_ENTERPRISE_FIELDS: bool = False
+    USE_ROUTE_MATRIX: bool = False
+
+    GOOGLE_GEMINI_API_KEY_ORCHESTRATOR: str = ""
+    GOOGLE_GEMINI_API_KEY_FLIGHT: str = ""
+    GOOGLE_GEMINI_API_KEY_HOTEL: str = ""
+    GOOGLE_GEMINI_API_KEY_ATTRACTION: str = ""
+    GOOGLE_GEMINI_API_KEY_ITINERARY: str = ""
+    GOOGLE_GEMINI_API_KEY_RESTAURANT: str = ""
+    GOOGLE_GEMINI_API_KEY_PREPARATION: str = ""
+    GOOGLE_GEMINI_API_KEY_SYNTHESIZE: str = ""
     
     # External services
     DOTNET_API_URL: str = "https://localhost:5001"

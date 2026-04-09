@@ -9,26 +9,392 @@ LLM-based pipeline that transforms agent outputs into LLM scheduling input:
 5. Return structured data for LLM scheduling
 """
 
+import asyncio
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
-# Reuse from original itinerary_builder
-from src.services.itinerary_builder import (
-    extract_place_names,
-    resolve_all_places,
-    parse_open_hours_to_time_window,
-    WEEKDAY_NAMES,
-    _get_location_coords,
-    _parse_hub_time,
-    _flight_time_to_minutes,
-)
-
-# Reuse distance matrix builder from itinerary_tools
+from src.tools.maps_tools import places_text_search_id_only
+from src.tools.dotnet_tools import get_place_from_db
 from src.tools.itinerary_tools import _build_distance_matrix
 from src.tools.maps_tools import LOCAL_TRANSPORT_MAP
 
 logger = logging.getLogger(__name__)
+
+# Day-of-week mapping: Python weekday() → OpenHours key
+WEEKDAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+# ============================================================================
+# Copied from itinerary_builder.py — self-contained
+# ============================================================================
+
+def extract_place_names(
+    agent_outputs: dict[str, Any],
+    plan_context: dict[str, Any] | None = None,
+) -> dict[str, list[dict]]:
+    """
+    Extract place names from flight/hotel/attraction agent outputs.
+    Reads departure_logistics from mobility_plan for non-flight trips.
+    """
+    result = {"airports": [], "hotels": [], "attractions": []}
+    plan_context = plan_context or {}
+
+    # --- Flight ---
+    flight = agent_outputs.get("flight_agent", {})
+    if flight and not flight.get("skipped"):
+        outbound = flight.get("recommend_outbound_flight", {})
+        if outbound:
+            result["airports"].append({
+                "name": outbound.get("departure_airport_name", ""),
+                "role": "outbound_departure",
+                "time": outbound.get("departure_time", ""),
+                "placeId": outbound.get("departure_airport_placeId"),
+            })
+            result["airports"].append({
+                "name": outbound.get("arrival_airport_name", ""),
+                "role": "outbound_arrival",
+                "time": outbound.get("arrival_time", ""),
+                "placeId": outbound.get("arrival_airport_placeId"),
+            })
+
+        return_flight = flight.get("recommend_return_flight", {})
+        if return_flight:
+            result["airports"].append({
+                "name": return_flight.get("departure_airport_name", ""),
+                "role": "return_departure",
+                "time": return_flight.get("departure_time", ""),
+                "placeId": return_flight.get("departure_airport_placeId"),
+            })
+            result["airports"].append({
+                "name": return_flight.get("arrival_airport_name", ""),
+                "role": "return_arrival",
+                "time": return_flight.get("arrival_time", ""),
+                "placeId": return_flight.get("arrival_airport_placeId"),
+            })
+
+    # --- Non-flight: extract from departure_logistics / return_logistics ---
+    if not result["airports"]:
+        mobility_plan = plan_context.get("mobility_plan") or {}
+        dep_log = mobility_plan.get("departure_logistics") or {}
+        ret_log = mobility_plan.get("return_logistics") or {}
+        mode = dep_log.get("mode")
+
+        if mode and mode != "flight":
+            # Departure hub (destination side)
+            hub_name = dep_log.get("hub_name")
+            if hub_name:
+                result["airports"].append({
+                    "name": hub_name,
+                    "role": "outbound_arrival",
+                    "time": dep_log.get("ready_time") or dep_log.get("arrival_time", "07:00"),
+                    "placeId": dep_log.get("hub_placeId"),
+                })
+            # Return hub (destination side)
+            ret_hub = ret_log.get("hub_name")
+            if ret_hub:
+                result["airports"].append({
+                    "name": ret_hub,
+                    "role": "return_departure",
+                    "time": ret_log.get("departure_time", "15:00"),
+                    "placeId": ret_log.get("hub_placeId"),
+                })
+
+    # --- Hotel ---
+    hotel = agent_outputs.get("hotel_agent", {})
+    if hotel and not hotel.get("skipped"):
+        for segment in hotel.get("segments", []):
+            hotel_name = segment.get("recommend_hotel_name", "")
+            if hotel_name:
+                result["hotels"].append({
+                    "name": hotel_name,
+                    "check_in": segment.get("check_in", ""),
+                    "check_in_time": segment.get("check_in_time", ""),
+                    "check_out": segment.get("check_out", ""),
+                    "check_out_time": segment.get("check_out_time", ""),
+                    "segment_name": segment.get("segment_name", ""),
+                    "placeId": segment.get("recommend_hotel_placeId"),
+                })
+
+    # --- Attractions ---
+    attraction = agent_outputs.get("attraction_agent", {})
+    if attraction and not attraction.get("skipped"):
+        for segment in attraction.get("segments", []):
+            seg_name = segment.get("segment_name", "")
+            for attr in segment.get("attractions", []):
+                attr_name = attr.get("name", "")
+                if attr_name:
+                    attr_entry = {
+                        "name": attr_name,
+                        "must_visit": attr.get("must_visit", False),
+                        "segment_name": seg_name,
+                        "includes": attr.get("includes", []),
+                        "notes": attr.get("notes", ""),
+                        "estimated_entrance_fee": attr.get("estimated_entrance_fee", {"total": 0, "note": ""}),
+                    }
+                    if attr.get("placeId"):
+                        attr_entry["placeId"] = attr["placeId"]
+                    result["attractions"].append(attr_entry)
+
+    return result
+
+
+async def _resolve_single_place(
+    name: str,
+    location_bias: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """Resolve a single place name via Text Search → DB lookup."""
+    logger.info(f"[resolve] Resolving: '{name}'")
+
+    try:
+        search_results = await places_text_search_id_only.ainvoke({
+            "query": name,
+            "location_bias": location_bias or "",
+        })
+    except Exception as e:
+        logger.error(f"[resolve] Text search failed for '{name}': {e}")
+        return None
+
+    if not search_results or not isinstance(search_results, list) or len(search_results) == 0:
+        logger.warning(f"[resolve] No results for '{name}'")
+        return None
+    if isinstance(search_results[0], dict) and "error" in search_results[0]:
+        logger.error(f"[resolve] Search error for '{name}': {search_results[0]['error']}")
+        return None
+
+    place_id = search_results[0].get("place_id", "")
+    if not place_id:
+        return None
+
+    logger.info(f"[resolve] Found PlaceId: {place_id} for '{name}'")
+
+    try:
+        db_result = await get_place_from_db.ainvoke({"place_id": place_id})
+    except Exception as e:
+        logger.error(f"[resolve] DB lookup failed for '{name}' (placeId={place_id}): {e}")
+        return None
+
+    if isinstance(db_result, dict) and db_result.get("success"):
+        place_data = db_result.get("data", {})
+        place_data["_resolved_name"] = name
+        logger.info(f"[resolve] Resolved: '{name}' → {place_data.get('title', 'unknown')}")
+        return place_data
+
+    logger.warning(f"[resolve] Could not resolve '{name}' (placeId={place_id})")
+    return None
+
+
+async def resolve_all_places(
+    place_names: dict[str, list[dict]],
+    location_bias: Optional[str] = None,
+    max_concurrent: int = 5,
+) -> dict[str, list[dict]]:
+    """Resolve all extracted place names. Uses pre-resolved placeIds when available."""
+    resolved = {"airports": [], "hotels": [], "attractions": []}
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def _resolve_with_limit(name: str) -> Optional[dict]:
+        async with semaphore:
+            return await _resolve_single_place(name, location_bias)
+
+    async def _resolve_by_place_id(place_id: str, name: str) -> Optional[dict]:
+        async with semaphore:
+            logger.info(f"[resolve] Pre-resolved: '{name}' → placeId={place_id}")
+            try:
+                db_result = await get_place_from_db.ainvoke({"place_id": place_id})
+                if isinstance(db_result, dict) and db_result.get("success"):
+                    place_data = db_result.get("data", {})
+                    place_data["_resolved_name"] = name
+                    return place_data
+            except Exception as e:
+                logger.error(f"[resolve] DB lookup failed for pre-resolved '{name}': {e}")
+            return None
+
+    # Deduplicate airports
+    unique_airport_names: list[str] = []
+    seen_airports: set[str] = set()
+    airport_place_ids: dict[str, str] = {}  # name → placeId
+    for airport_info in place_names.get("airports", []):
+        name = airport_info["name"]
+        if name not in seen_airports:
+            seen_airports.add(name)
+            unique_airport_names.append(name)
+            if airport_info.get("placeId"):
+                airport_place_ids[name] = airport_info["placeId"]
+
+    hotels_list = place_names.get("hotels", [])
+    attractions_list = place_names.get("attractions", [])
+
+    # Build tasks — use pre-resolved placeId when available
+    airport_tasks = [
+        _resolve_by_place_id(airport_place_ids[n], n) if n in airport_place_ids
+        else _resolve_with_limit(n)
+        for n in unique_airport_names
+    ]
+    hotel_tasks = [
+        _resolve_by_place_id(h["placeId"], h["name"]) if h.get("placeId")
+        else _resolve_with_limit(h["name"])
+        for h in hotels_list
+    ]
+    attraction_tasks = [
+        _resolve_by_place_id(a["placeId"], a["name"]) if a.get("placeId")
+        else _resolve_with_limit(a["name"])
+        for a in attractions_list
+    ]
+
+    all_tasks = airport_tasks + hotel_tasks + attraction_tasks
+    all_results = await asyncio.gather(*all_tasks) if all_tasks else []
+
+    ap_count = len(airport_tasks)
+    ht_count = len(hotel_tasks)
+
+    airport_results = all_results[:ap_count]
+    hotel_results = all_results[ap_count:ap_count + ht_count]
+    attraction_results = all_results[ap_count + ht_count:]
+
+    airport_cache = dict(zip(unique_airport_names, airport_results))
+    for airport_info in place_names.get("airports", []):
+        name = airport_info["name"]
+        resolved["airports"].append({**airport_info, "resolved": airport_cache.get(name)})
+
+    for hotel_info, place_data in zip(hotels_list, hotel_results):
+        resolved["hotels"].append({**hotel_info, "resolved": place_data})
+
+    for attr_info, place_data in zip(attractions_list, attraction_results):
+        resolved["attractions"].append({**attr_info, "resolved": place_data})
+
+    return resolved
+
+
+def _parse_time_str(time_str: str) -> int:
+    """Parse a time string to minutes since midnight. Handles 12h and 24h formats."""
+    s = time_str.strip()
+    s = s.replace('\u202f', ' ').replace('\u00a0', ' ').strip()
+
+    is_pm = False
+    is_am = False
+    upper = s.upper()
+    if 'PM' in upper:
+        is_pm = True
+        s = re.sub(r'[APap][Mm]', '', s).strip()
+    elif 'AM' in upper:
+        is_am = True
+        s = re.sub(r'[APap][Mm]', '', s).strip()
+
+    parts = s.split(':')
+    hours = int(parts[0].strip())
+    minutes = int(parts[1].strip()) if len(parts) > 1 else 0
+
+    if is_pm and hours != 12:
+        hours += 12
+    elif is_am and hours == 12:
+        hours = 0
+
+    return hours * 60 + minutes
+
+
+def _parse_time_range(range_str: str) -> Optional[tuple[int, int]]:
+    """Parse a single time range string."""
+    s = range_str.strip()
+    s_lower = s.lower()
+
+    if s_lower in ('closed', ''):
+        return None
+    if 'open 24' in s_lower or '24 hours' in s_lower:
+        return (0, 1440)
+
+    s = s.replace('–', '-').replace('—', '-')
+    parts = s.split('-')
+    if len(parts) != 2:
+        return None
+
+    open_str = parts[0].strip()
+    close_str = parts[1].strip()
+
+    close_upper = close_str.upper().replace('\u202f', ' ').replace('\u00a0', ' ')
+    open_upper = open_str.upper().replace('\u202f', ' ').replace('\u00a0', ' ')
+
+    has_period_in_open = 'AM' in open_upper or 'PM' in open_upper
+    has_period_in_close = 'AM' in close_upper or 'PM' in close_upper
+
+    if not has_period_in_open and has_period_in_close:
+        period = 'AM' if 'AM' in close_upper else 'PM'
+        open_str = open_str + ' ' + period
+
+    try:
+        open_min = _parse_time_str(open_str)
+        close_min = _parse_time_str(close_str)
+        if close_min > open_min:
+            return (open_min, close_min)
+    except (ValueError, IndexError):
+        pass
+
+    return None
+
+
+def parse_open_hours_to_time_window(
+    open_hours: dict[str, list[str]],
+    day_name: str,
+) -> Optional[tuple[int, int]]:
+    """Convert openHours for a specific day to a time window (minutes since midnight)."""
+    if not open_hours:
+        return (480, 1320)  # Default: 08:00-22:00
+
+    hours_list = open_hours.get(day_name, [])
+
+    if not hours_list:
+        all_empty = all(len(v) == 0 for v in open_hours.values())
+        if all_empty:
+            return (480, 1320)
+        return None
+
+    if len(hours_list) == 1:
+        single = hours_list[0].strip().lower()
+        if single == 'closed':
+            return None
+        if 'open 24' in single or '24 hours' in single:
+            return (0, 1440)
+
+    earliest = 1440
+    latest = 0
+    any_parsed = False
+
+    for time_range in hours_list:
+        result = _parse_time_range(time_range)
+        if result is not None:
+            earliest = min(earliest, result[0])
+            latest = max(latest, result[1])
+            any_parsed = True
+
+    if not any_parsed or earliest >= latest:
+        return (480, 1080)
+
+    return (earliest, latest)
+
+
+def _get_location_coords(place_data: Optional[dict]) -> Optional[dict[str, float]]:
+    """Extract lat/lng from resolved place data."""
+    if not place_data:
+        return None
+    location = place_data.get("location", {})
+    coords = location.get("coordinates", [])
+    if len(coords) >= 2:
+        return {"lat": coords[1], "lng": coords[0]}
+    return None
+
+
+def _parse_hub_time(time_str: str) -> int:
+    """Parse transport hub time like '09:00' to minutes since midnight."""
+    s = time_str.strip().split()[0]
+    parts = s.split(":")
+    return int(parts[0]) * 60 + int(parts[1])
+
+
+def _flight_time_to_minutes(time_str: str) -> int:
+    """Convert flight time like '09:00' to minutes since midnight."""
+    parts = time_str.split(":")
+    return int(parts[0]) * 60 + int(parts[1])
 
 
 def _parse_hotel_time(time_str: str) -> str:
@@ -99,14 +465,14 @@ def build_location_list(
             continue
         coords = _get_location_coords(ap.get("resolved"))
         if coords:
-            hub_name = ap.get("resolved", {}).get("title", ap["name"])
+            hub_name = (ap.get("resolved") or {}).get("title", ap["name"])
             _add_if_unique(hub_name, coords["lat"], coords["lng"], role)
 
     # --- Hotels ---
     for hotel_info in resolved_places.get("hotels", []):
         coords = _get_location_coords(hotel_info.get("resolved"))
         if coords:
-            hotel_name = hotel_info.get("resolved", {}).get("title", hotel_info["name"])
+            hotel_name = (hotel_info.get("resolved") or {}).get("title", hotel_info["name"])
             _add_if_unique(hotel_name, coords["lat"], coords["lng"], "hotel")
 
     # --- Attractions ---
@@ -176,7 +542,6 @@ def build_attractions_info(
 
         attr_name = resolved.get("title", attr_info["name"])
         open_hours = resolved.get("openHours", {})
-        duration = attr_info.get("suggested_duration_minutes", 60)
         is_must_visit = attr_info.get("must_visit", False)
         segment_name = attr_info.get("segment_name", "")
 
@@ -209,7 +574,6 @@ def build_attractions_info(
         attractions_info.append({
             "name": attr_name,
             "opening_hours": hours_by_day,
-            "suggested_duration_minutes": duration,
             "must_visit": is_must_visit,
             "segment_name": segment_name,
             "includes": attr_info.get("includes", []),
@@ -242,39 +606,51 @@ def build_schedule_constraints(
     """
     num_days = plan_context.get("num_days", 1)
     start_date_str = plan_context.get("start_date", "")
-    travel_by = plan_context.get("travel_by", "flight")
     mobility_plan = plan_context.get("mobility_plan") or {}
-    is_flight = travel_by == "flight"
 
     constraints = {
         "num_days": num_days,
         "start_date": start_date_str,
         "pace": plan_context.get("pace", "moderate"),
         "local_transportation": plan_context.get("local_transportation", "car"),
-        "travel_by": travel_by,
     }
 
     # --- Day 0 arrival info ---
-    if is_flight and flight_data and not flight_data.get("skipped"):
+    dep_log = mobility_plan.get("departure_logistics") or {}
+    dep_mode = dep_log.get("mode", "")
+
+    if dep_mode == "flight" and flight_data and not flight_data.get("skipped"):
         outbound = flight_data.get("recommend_outbound_flight", {})
         if outbound:
             constraints["day_0_arrival"] = {
                 "location": outbound.get("arrival_airport_name", "Airport"),
                 "arrival_time": outbound.get("arrival_time", "09:00"),
-                "note": "Arrive by flight. Need to drop luggage at hotel before exploring.",
+                "flight_number": outbound.get("flight_number", ""),
+                "airline": outbound.get("airline", ""),
+                "departure_airport": outbound.get("departure_airport_name", ""),
+                "departure_time": outbound.get("departure_time", ""),
+                "note": "Arrive by flight.",
             }
-    else:
-        transport_hubs = mobility_plan.get("transport_hubs") or {}
-        if transport_hubs:
-            constraints["day_0_arrival"] = {
-                "location": transport_hubs.get("outbound_arrival", ""),
-                "arrival_time": transport_hubs.get("outbound_arrival_time", ""),
-                "ready_time": transport_hubs.get("outbound_ready_time", ""),
-                "note": "Arrive by " + travel_by,
-            }
+    elif dep_mode in ("coach", "train") and dep_log.get("hub_name"):
+        constraints["day_0_arrival"] = {
+            "location": dep_log.get("hub_name", ""),
+            "start_time": dep_log.get("start_time", ""),
+            "arrival_time": dep_log.get("arrival_time", ""),
+            "note": dep_log.get("note", f"Arrive by {dep_mode}"),
+        }
+    elif dep_mode in ("car", "motorbike"):
+        constraints["day_0_arrival"] = {
+            "start_time": dep_log.get("start_time", ""),
+            "arrival_time": dep_log.get("arrival_time", ""),
+            "note": dep_log.get("note", f"Self-drive from {plan_context.get('departure', '')}."),
+        }
+    # else: local trip, departure_logistics is null → no arrival constraint
 
     # --- Last day deadline ---
-    if is_flight and flight_data and not flight_data.get("skipped"):
+    ret_log = mobility_plan.get("return_logistics") or {}
+    ret_mode = ret_log.get("mode", "")
+
+    if ret_mode == "flight" and flight_data and not flight_data.get("skipped"):
         return_flight = flight_data.get("recommend_return_flight", {})
         if return_flight:
             dep_time = return_flight.get("departure_time", "")
@@ -289,18 +665,40 @@ def build_schedule_constraints(
                     "location": dep_airport,
                     "deadline_time": deadline_time,
                     "flight_departure": dep_time,
-                    "note": f"Must arrive at {dep_airport} by {deadline_time} (2h before {dep_time} flight). Need to pick up luggage from hotel before heading to airport.",
+                    "flight_number": return_flight.get("flight_number", ""),
+                    "airline": return_flight.get("airline", ""),
+                    "arrival_airport": return_flight.get("arrival_airport_name", ""),
+                    "arrival_time": return_flight.get("arrival_time", ""),
+                    "note": f"Must arrive at {dep_airport} by {deadline_time} (2h before {dep_time} flight).",
                 }
-    else:
-        transport_hubs = mobility_plan.get("transport_hubs") or {}
-        return_dep_time = transport_hubs.get("return_departure_time", "")
-        return_departure = transport_hubs.get("return_departure", "")
-        if return_dep_time:
-            constraints["last_day_deadline"] = {
-                "location": return_departure,
-                "deadline_time": return_dep_time,
-                "note": f"Must be at {return_departure} by {return_dep_time} for the return journey.",
-            }
+    elif ret_mode in ("coach", "train") and ret_log.get("hub_name"):
+        ret_start = ret_log.get("start_time", "")
+        # 30-min buffer: arrive at hub 30 min before departure for boarding/tickets
+        if ret_start:
+            parts = ret_start.split(":")
+            start_min = int(parts[0]) * 60 + int(parts[1])
+            dl_min = max(0, start_min - 30)
+            dl_time = f"{dl_min // 60:02d}:{dl_min % 60:02d}"
+        else:
+            dl_time = ""
+        constraints["last_day_deadline"] = {
+            "mode": ret_mode,
+            "location": ret_log.get("hub_name", ""),
+            "deadline_time": dl_time,
+            "start_time": ret_start,
+            "arrival_time": ret_log.get("arrival_time", ""),
+            "note": ret_log.get("note", f"Must arrive at {ret_log.get('hub_name', '')} by {dl_time} (~30 min before {ret_start} {ret_mode})."),
+        }
+    elif ret_mode in ("car", "motorbike"):
+        ret_start = ret_log.get("start_time", "")
+        constraints["last_day_deadline"] = {
+            "mode": ret_mode,
+            "deadline_time": ret_start,  # exact time, no buffer needed
+            "start_time": ret_start,
+            "arrival_time": ret_log.get("arrival_time", ""),
+            "note": ret_log.get("note", f"Self-drive return journey, depart at {ret_start}."),
+        }
+    # else: local trip → no hard deadline
 
     # --- Hotels per night (with actual times from API) ---
     hotels = resolved_places.get("hotels", [])
@@ -308,7 +706,7 @@ def build_schedule_constraints(
     start_date = datetime.strptime(start_date_str, "%Y-%m-%d") if start_date_str else None
 
     for h in hotels:
-        name = h.get("resolved", {}).get("title", h.get("name", "Hotel"))
+        name = (h.get("resolved") or {}).get("title", h.get("name", "Hotel"))
         ci_date = h.get("check_in", "")
         co_date = h.get("check_out", "")
 
@@ -347,34 +745,45 @@ def build_schedule_constraints(
         hotel_schedule.append(hotel_entry)
 
     constraints["hotels"] = hotel_schedule
-
-    # --- Luggage logistics (flight only) ---
-    if is_flight:
-        constraints["luggage"] = {
-            "drop_luggage": "Drop luggage at hotel before exploring on day 0 (hotel may allow luggage storage before check-in time)",
-            "pick_up_luggage": "Pick up luggage from hotel before heading to airport on last day",
+    
+    if hotel_schedule:
+        constraints["accommodation_context"] = {
+            "type": "hotel",
+            "note": "Travelers are staying at hotels. You MUST strictly respect check-in and check-out times provided in the `hotels` constraint. Resting is only possible after check-in."
+        }
+    else:
+        constraints["accommodation_context"] = {
+            "type": "home",
+            "note": "Travelers are staying at their own home (or an unmanaged location). NO check-in or check-out is needed. They can return home to `rest` at literally ANY time they want."
         }
 
-    # --- Midday rest (SUGGESTION — Itinerary Agent decides based on actual schedule) ---
-    midday_rest_days = mobility_plan.get("midday_rest_days")
-    if midday_rest_days:
-        constraints["midday_rest_days"] = midday_rest_days
-        constraints["midday_rest_note"] = (
-            "The Orchestrator SUGGESTS midday rest on these days, but YOU decide based on the actual schedule."
-            "Skip midday rest if: the day starts late, the schedule is already short, or there's not enough time. "
-            "Add midday rest if: travelers have young children/infants and started early, or the day is long and hot."
-            "ONLY on the check-in day: room is available from check-in time, so rest MUST be AFTER check-in time."
-        )
+    # --- Luggage context (tells LLM whether luggage management is needed) ---
+    local_transport = plan_context.get("local_transportation", "")
+    if dep_mode == "flight" or dep_mode in ("coach", "train"):
+        constraints["luggage_context"] = {
+            "needs_luggage_management": True,
+            "note": (
+                "Travelers arrive with luggage at a transport hub. "
+                "They need to drop luggage at hotel if arriving before check-in, "
+                "or check-in directly if arriving after check-in time. "
+                "On departure day, if they have time after checkout, they can store luggage and pick up later."
+            ),
+        }
+    elif local_transport in ("car", "motorbike") or dep_mode in ("car", "motorbike"):
+        constraints["luggage_context"] = {
+            "needs_luggage_management": False,
+            "note": "Self-drive: luggage stays in vehicle. No luggage_drop or luggage_pickup needed.",
+        }
+    else:
+        constraints["luggage_context"] = {
+            "needs_luggage_management": False,
+            "note": "Local trip or simple transfer. No special luggage handling.",
+        }
 
-    # --- Souvenir shopping ---
-    souvenir = mobility_plan.get("souvenir_shopping")
-    if souvenir:
-        constraints["souvenir_shopping"] = True
-
-    # --- Mobility plan text ---
-    plan_text = mobility_plan.get("plan", "")
-    if plan_text:
-        constraints["mobility_plan_description"] = plan_text
+    # --- Mobility plan overview (context for LLM scheduler) ---
+    overview = mobility_plan.get("overview", "")
+    if overview:
+        constraints["mobility_plan_overview"] = overview
 
     return constraints
 

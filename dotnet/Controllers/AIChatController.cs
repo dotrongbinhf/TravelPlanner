@@ -111,5 +111,23 @@ namespace dotnet.Controllers
                 return Forbid();
             }
         }
+
+        [HttpPatch("messages/{messageId}/applied")]
+        public async Task<IActionResult> MarkMessageApplied([FromRoute] Guid messageId)
+        {
+            try
+            {
+                var result = await _aiChatService.MarkMessageApplied(messageId);
+                return Ok(result);
+            }
+            catch (KeyNotFoundException)
+            {
+                return NotFound();
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Forbid();
+            }
+        }
     }
 }

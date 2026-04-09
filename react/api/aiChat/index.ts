@@ -62,3 +62,10 @@ export const deleteConversation = async (conversationId: string) => {
   );
   return response.data;
 };
+
+export const markMessageApplied = async (messageId: string) => {
+  const response = await API.patch<Message>(
+    `${APP_CONFIG_URL}/messages/${messageId}/applied`
+  );
+  return response.data;
+};

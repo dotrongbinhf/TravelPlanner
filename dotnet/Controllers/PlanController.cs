@@ -75,8 +75,9 @@ namespace dotnet.Controllers
             var placeIds = result.ItineraryDays
                 .SelectMany(iday => iday.ItineraryItems)
                 .Select(ii => ii.PlaceId)
+                .Where(pid => pid != null)
                 .Distinct()
-                .ToList();
+                .ToList()!;
 
             var placesDict = await _placesCollection
                 .Find(p => placeIds.Contains(p.PlaceId))
@@ -129,6 +130,7 @@ namespace dotnet.Controllers
                         Category = ei.Category,
                         Name = ei.Name,
                         Amount = ei.Amount,
+                        GroupName = ei.GroupName,
                     }).ToList(),
                 Participants = result.Participants.Select(p => new Dtos.Participant.ParticipantDto
                 {
@@ -156,9 +158,10 @@ namespace dotnet.Controllers
                             {
                                 Id = ii.Id,
                                 ItineraryDayId = ii.ItineraryDayId,
-                                Place = placesDict.GetValueOrDefault(ii.PlaceId),
+                                Place = ii.PlaceId != null ? placesDict.GetValueOrDefault(ii.PlaceId) : null,
                                 StartTime = ii.StartTime,
                                 Duration = ii.Duration,
+                                Note = ii.Note,
                                 GoogleCalendarEventId = ii.GoogleCalendarEventId
                             }).ToList()
                     }).ToList()
@@ -304,8 +307,9 @@ namespace dotnet.Controllers
             var placeIds = newItineraryDays
                 .SelectMany(iday => iday.ItineraryItems)
                 .Select(ii => ii.PlaceId)
+                .Where(pid => pid != null)
                 .Distinct()
-                .ToList();
+                .ToList()!;
 
             var placesDict = await _placesCollection
                 .Find(p => placeIds.Contains(p.PlaceId))
@@ -335,9 +339,10 @@ namespace dotnet.Controllers
                     {
                         Id = ii.Id,
                         ItineraryDayId = ii.ItineraryDayId,
-                        Place = placesDict.GetValueOrDefault(ii.PlaceId),
+                        Place = ii.PlaceId != null ? placesDict.GetValueOrDefault(ii.PlaceId) : null,
                         StartTime = ii.StartTime,
                         Duration = ii.Duration,
+                        Note = ii.Note,
                         GoogleCalendarEventId = ii.GoogleCalendarEventId
                     }).ToList()
                 }).ToList()
@@ -638,12 +643,8 @@ namespace dotnet.Controllers
                     {
                         var placeId = aiItem.PlaceId;
 
-                        // Skip items without PlaceId (generic activities like "Explore Old Quarter")
-                        if (string.IsNullOrEmpty(placeId))
-                            continue;
-
-                        // For restaurant stops (lunch/dinner), ensure place exists in MongoDB
-                        if (aiItem.Role == "lunch" || aiItem.Role == "dinner")
+                        // For restaurant stops (lunch/dinner) with PlaceId, ensure place exists in MongoDB
+                        if (!string.IsNullOrEmpty(placeId) && (aiItem.Role == "lunch" || aiItem.Role == "dinner"))
                         {
                             var existingPlace = await _placesCollection
                                 .Find(p => p.PlaceId == placeId)
@@ -681,9 +682,10 @@ namespace dotnet.Controllers
                         {
                             Id = Guid.NewGuid(),
                             ItineraryDayId = itineraryDay.Id,
-                            PlaceId = placeId,
+                            PlaceId = string.IsNullOrEmpty(placeId) ? null : placeId,
                             StartTime = startTime,
                             Duration = duration,
+                            Note = aiItem.Note,
                         };
                         dbContext.ItineraryItems.Add(itineraryItem);
                     }
@@ -706,8 +708,10 @@ namespace dotnet.Controllers
                         Category = category,
                         Name = aiExpense.Name,
                         Amount = aiExpense.Amount,
+                        GroupName = aiExpense.GroupName,
                     };
                     dbContext.ExpenseItems.Add(expenseItem);
+
                 }
             }
 
@@ -778,8 +782,9 @@ namespace dotnet.Controllers
             var placeIds = result.ItineraryDays
                 .SelectMany(iday => iday.ItineraryItems)
                 .Select(ii => ii.PlaceId)
+                .Where(pid => pid != null)
                 .Distinct()
-                .ToList();
+                .ToList()!;
 
             var placesDict = await _placesCollection
                 .Find(p => placeIds.Contains(p.PlaceId))
@@ -832,6 +837,7 @@ namespace dotnet.Controllers
                         Category = ei.Category,
                         Name = ei.Name,
                         Amount = ei.Amount,
+                        GroupName = ei.GroupName,
                     }).ToList(),
                 Participants = result.Participants.Select(p => new Dtos.Participant.ParticipantDto
                 {
@@ -859,9 +865,10 @@ namespace dotnet.Controllers
                             {
                                 Id = ii.Id,
                                 ItineraryDayId = ii.ItineraryDayId,
-                                Place = placesDict.GetValueOrDefault(ii.PlaceId),
+                                Place = ii.PlaceId != null ? placesDict.GetValueOrDefault(ii.PlaceId) : null,
                                 StartTime = ii.StartTime,
                                 Duration = ii.Duration,
+                                Note = ii.Note,
                                 GoogleCalendarEventId = ii.GoogleCalendarEventId
                             }).ToList()
                     }).ToList()

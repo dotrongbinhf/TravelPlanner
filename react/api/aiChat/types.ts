@@ -27,12 +27,15 @@ export type Message = {
   content: string;
   messageRole: MessageRole;
   createdAt: string;
+  generatedPlanData?: string | null;
+  applyGeneratedPlanAt?: string | null;
 };
 
 export type CreateMessageRequest = {
   conversationId: string;
   content: string;
   messageRole?: MessageRole;
+  generatedPlanData?: string;
 };
 
 // Agent streaming event types (received via SignalR from .NET → FastAPI)

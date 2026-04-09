@@ -39,6 +39,7 @@ import {
   getMessagesByConversationId,
   addMessage,
   deleteConversation,
+  markMessageApplied,
 } from "@/api/aiChat";
 import { Conversation, MessageRole } from "@/api/aiChat/types";
 import { useParams } from "next/navigation";
@@ -221,6 +222,8 @@ export default function AIChat({
     id: m.id,
     role: m.messageRole === MessageRole.Assistant ? "assistant" : "user",
     content: m.content,
+    generatedPlanData: m.generatedPlanData || null,
+    applyGeneratedPlanAt: m.applyGeneratedPlanAt || null,
   }));
 
   // When streaming is done but the message hasn't been saved to backend yet,
@@ -251,10 +254,16 @@ export default function AIChat({
     ) {
       const saveAIResponse = async () => {
         try {
+          // Include generatedPlanData (apply_data) if available
+          const applyData = streamState.structuredData
+            ? (streamState.structuredData as any)?.apply_data
+            : undefined;
+
           const newMsg = await addMessage(targetConversationId, {
             conversationId: targetConversationId,
             content: streamState.streamedContent,
             messageRole: MessageRole.Assistant,
+            generatedPlanData: applyData ? JSON.stringify(applyData) : undefined,
           });
           // Only update messages list if still viewing the same conversation
           if (streamingConversationIdRef.current === activeConversationId) {
@@ -456,8 +465,23 @@ export default function AIChat({
           completedAgents={isStreaming ? streamState.completedAgents : undefined}
           isStreaming={isStreaming}
           structuredData={streamState.structuredData}
-          onApplyPlan={async (mode) => {
-            const applyData = (streamState.structuredData as any)?.apply_data;
+          onApplyPlan={async (mode, messageId) => {
+            // Resolve apply data: from specific message (DB) or from live stream
+            let applyData: any = null;
+            if (messageId && messageId !== "streaming") {
+              const msg = backendMessages.find((m: any) => m.id === messageId);
+              if (msg?.generatedPlanData) {
+                try {
+                  applyData = JSON.parse(msg.generatedPlanData);
+                } catch {
+                  toast.error("Invalid plan data");
+                  return;
+                }
+              }
+            }
+            if (!applyData) {
+              applyData = (streamState.structuredData as any)?.apply_data;
+            }
             if (!applyData) {
               toast.error("No plan data available to apply");
               return;
@@ -473,6 +497,22 @@ export default function AIChat({
                   ? "Plan updated successfully!"
                   : "New plan created successfully!"
               );
+
+              // Mark the message as applied in DB
+              if (messageId && messageId !== "streaming") {
+                try {
+                  const updatedMsg = await markMessageApplied(messageId);
+                  setBackendMessages((prev) =>
+                    prev.map((m: any) =>
+                      m.id === messageId ? { ...m, applyGeneratedPlanAt: updatedMsg.applyGeneratedPlanAt } : m
+                    )
+                  );
+                } catch {
+                  // Non-critical: apply succeeded, just couldn't mark timestamp
+                  console.warn("Failed to mark message as applied");
+                }
+              }
+
               if (onPlanUpdated) {
                 onPlanUpdated(updatedPlan);
               }

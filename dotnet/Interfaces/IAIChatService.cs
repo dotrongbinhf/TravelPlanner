@@ -13,6 +13,7 @@ namespace dotnet.Interfaces
         Task<ConversationDto> UpdateConversationTitle(Guid conversationId, UpdateConversationTitleDto updateDto);
         Task<IEnumerable<MessageDto>> GetMessagesByConversationId(Guid conversationId);
         Task<MessageDto> AddMessage(CreateMessageDto createMessageDto);
+        Task<MessageDto> MarkMessageApplied(Guid messageId);
         Task<bool> DeleteConversation(Guid conversationId);
     }
 }

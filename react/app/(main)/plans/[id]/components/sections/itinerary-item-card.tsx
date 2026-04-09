@@ -9,6 +9,7 @@ import {
   Flag,
   BedDouble,
   Moon,
+  StickyNote,
 } from "lucide-react";
 import ActionMenu from "@/components/action-menu";
 import { cn } from "@/lib/utils";
@@ -49,7 +50,7 @@ export default function ItineraryItemCard({
   displayEndTime,
   isBed = false,
 }: ItineraryItemCardProps) {
-  const { place, startTime, duration } = item;
+  const { place, startTime, duration, note } = item;
 
   const getEndTime = (start?: string, dur?: string) => {
     if (!start || !dur) return undefined;
@@ -147,7 +148,7 @@ export default function ItineraryItemCard({
       {/* Place Card */}
       <div
         className={cn(
-          "flex gap-2 p-2 rounded-lg border border-2 bg-white transition-all relative cursor-pointer",
+          "flex flex-col gap-2 p-2 rounded-lg border border-2 bg-white transition-all relative cursor-pointer",
           isActive
             ? "ring-2 ring-offset-1 shadow-md"
             : "border-gray-100 hover:border-gray-200 hover:shadow-sm",
@@ -199,58 +200,83 @@ export default function ItineraryItemCard({
           </div>
         )}
 
-        {/* Thumbnail */}
-        <div className="w-20 h-20 rounded-md overflow-hidden bg-gray-100 shrink-0 relative">
-          {place?.thumbnail ? (
-            <img
-              src={place.thumbnail}
-              alt={place.title}
-              className="w-full h-full object-cover"
-              onError={(e) => {
-                e.currentTarget.src = "/images/plans/alternative-place.jpg";
-              }}
-            />
-          ) : (
-            <div className="absolute inset-0 flex items-center justify-center text-gray-400">
-              <MapPin size={24} />
-            </div>
-          )}
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 min-w-0 flex flex-col gap-1 pr-6">
-          {" "}
-          {/* Added padding right for menu space */}
-          <h4 className="font-semibold text-gray-900 truncate text-sm leading-tight">
-            {place?.title || "Unknown Place"}
-          </h4>
-          {place?.address && (
-            <p className="text-xs text-gray-500 truncate">{place.address}</p>
-          )}
-          {place?.category && (
-            <span className="text-[10px] uppercase font-bold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded border shrink-0 tracking-wide w-fit">
-              {place.category}
-            </span>
-          )}
-          <div className="mt-auto flex items-center gap-2">
-            {/* Rating */}
-            {place?.reviewRating != null && (
-              <div className="flex items-center gap-1 text-xs font-medium text-gray-700 bg-yellow-50 px-1.5 py-0.5 rounded border border-yellow-100">
-                <span className="text-yellow-700 font-bold">
-                  {place.reviewRating.toFixed(1)}
-                </span>
-                <Star size={10} className="fill-yellow-500 text-yellow-500" />
-              </div>
+        {/* Note Content Block */}
+        {note && (
+          <div
+            className={cn(
+              "pr-8 pl-1 pb-1 whitespace-pre-wrap",
+              place
+                ? "text-gray-600 text-sm font-medium mb-1"
+                : "text-gray-800 text-sm font-medium pt-1",
             )}
-
-            {/* Review Count */}
-            {place?.reviewCount != null && (
-              <span className="text-xs text-gray-400">
-                ({place.reviewCount.toLocaleString()} reviews)
-              </span>
-            )}
+          >
+            {note}
           </div>
-        </div>
+        )}
+
+        {/* Place Block */}
+        {place && (
+          <div className="flex gap-2 mt-auto">
+            {/* Thumbnail */}
+            <div className="w-20 h-20 rounded-md overflow-hidden bg-gray-100 shrink-0 relative">
+              {place.thumbnail ? (
+                <img
+                  src={place.thumbnail}
+                  alt={place.title}
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    e.currentTarget.src = "/images/plans/alternative-place.jpg";
+                  }}
+                />
+              ) : (
+                <div className="absolute inset-0 flex items-center justify-center text-gray-400">
+                  <MapPin size={24} />
+                </div>
+              )}
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 min-w-0 flex flex-col gap-1 pr-6 justify-center">
+              <h4 className="font-semibold text-gray-900 truncate text-sm leading-tight">
+                {place.title}
+              </h4>
+              
+              {place.address && (
+                <p className="text-xs text-gray-500 truncate">{place.address}</p>
+              )}
+              {place.category && (
+                <span className="text-[10px] uppercase font-bold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded border shrink-0 tracking-wide w-fit">
+                  {place.category}
+                </span>
+              )}
+              <div className="mt-1 flex items-center gap-2">
+                {/* Rating */}
+                {place.reviewRating != null && place.reviewRating > 0 && (
+                  <div className="flex items-center gap-1 text-xs font-medium text-gray-700 bg-yellow-50 px-1.5 py-0.5 rounded border border-yellow-100">
+                    <span className="text-yellow-700 font-bold">
+                      {place.reviewRating.toFixed(1)}
+                    </span>
+                    <Star size={10} className="fill-yellow-500 text-yellow-500" />
+                  </div>
+                )}
+
+                {/* Review Count */}
+                {place.reviewCount != null && place.reviewCount > 0 && (
+                  <span className="text-xs text-gray-400">
+                    ({place.reviewCount.toLocaleString()} reviews)
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Fallback if neither exists */}
+        {!place && !note && (
+          <div className="text-sm font-medium text-gray-500 italic pl-1 py-2">
+            Empty item
+          </div>
+        )}
       </div>
     </div>
   );

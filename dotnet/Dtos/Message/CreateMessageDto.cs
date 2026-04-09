@@ -11,5 +11,6 @@ namespace dotnet.Dtos.Message
         [Required]
         public string Content { get; set; } = string.Empty;
         public MessageRole MessageRole { get; set; } = MessageRole.User;
+        public string? GeneratedPlanData { get; set; }
     }
 }
