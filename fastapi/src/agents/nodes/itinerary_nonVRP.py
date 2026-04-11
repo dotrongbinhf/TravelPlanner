@@ -102,14 +102,16 @@ Check `accommodation_context` in constraints:
 - **luggage_drop**: Drop luggage at hotel reception BEFORE check-in time (room not ready yet). If arriving AFTER check-in time, just use check_in — no separate luggage_drop needed.
 - **luggage_pickup**: Pick up stored luggage from hotel. Needed when travelers checked out earlier but still had time to explore before departing.
 
-**IMPORTANT — Check-in scheduling priority:**
-When lunch ends and the hotel check-in time is approaching (within ~60 min), DO NOT squeeze in a short outdoor activity just to fill time. Instead:
-- **Extend the meal slightly** if the gap is small (e.g., lunch 12:00-13:30, check-in at 14:00 → extend lunch to 14:00 or add a short walk/café stop, then check-in)
-- **Go directly to hotel** for check-in + rest, then explore refreshed in the late afternoon
-- This is especially important in hot climates where early afternoon is the worst time for outdoor sightseeing
+**IMPORTANT — Check-in scheduling priority (CRUCIAL RULE!):**
+When a meal (like lunch) ends and the hotel check-in time is approaching (e.g., lunch ends at 13:00 or 13:30, but check-in is at 14:00), **NEVER squeeze an attraction into that small intermediate gap**. Adding an attraction visit right before check-in, especially after a flight or at midday, is exhausting and completely illogical.
+Instead, you MUST do one of the following to bridge the gap naturally:
+1. **Extend the meal's duration**: Simply make the lunch `departure` match the time you need to leave for the hotel. It is perfectly fine to have a 1.5 to 2-hour lunch to relax at the restaurant before heading to the hotel.
+2. **Add a `generic` leisure stop**: Schedule a 15-30 min "Ngồi cà phê nghỉ ngơi" or "Thư giãn" stop.
+3. **Just extend gap between meal and check-in**: lunch ends at 13:30 but go to hotel just 15 minutes -> add 15 minutes gap between meal and check-in so arrival to check-in hotel at 14:00.
+**DO NOT** schedule sightseeing attractions (`attraction`) during this pre-check-in midday gap. 
 
 **IMPORTANT — Avoid unnecessary hotel round-trips:**
-Do NOT schedule a mid-day detour BACK to the hotel just for check-in. Travelers should not ping-pong between hotel and attractions. Instead, fold check-in into a natural break in the day.
+Do NOT schedule a mid-day detour BACK to the hotel just for check-in if travelers are already far away doing activities. However, if they just arrived from the airport/station, the natural flow is going to the hotel first, having lunch, checking in, and then starting to explore.
 
 Think about it naturally:
 - Arrive early morning by flight → hotel → luggage_drop → explore nearby → lunch → check_in + rest (combine naturally after lunch, room is ready by then) → afternoon/evening exploring

@@ -21,6 +21,7 @@ interface MapMenuProps {
   setShowDirections: (show: boolean) => void;
   filterMode: "all" | "byDay";
   setFilterMode: (mode: "all" | "byDay") => void;
+  mapMode?: "plan" | "aiExplore";
   className?: string;
 }
 
@@ -31,6 +32,7 @@ export default function MapMenu({
   setShowDirections,
   filterMode,
   setFilterMode,
+  mapMode = "plan",
   className,
 }: MapMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -56,19 +58,32 @@ export default function MapMenu({
 
   return (
     <div className={cn("flex flex-col items-center", className)}>
-      {/* Toggle Button */}
-      <Button
-        variant="ghost"
-        size="icon"
-        className={cn(
-          "h-8 w-8 rounded-full bg-white/95 backdrop-blur-sm shadow-lg border border-gray-200 hover:bg-white transition-transform",
-          isOpen && "rotate-180",
+      <div className="flex items-center gap-1.5">
+        {/* AI Explore mode badge */}
+        {mapMode === "aiExplore" && (
+          <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-violet-100 border border-violet-200 text-violet-700 text-[10px] font-bold uppercase tracking-wide animate-in fade-in duration-300">
+            <div className="relative">
+              <div className="w-1.5 h-1.5 rounded-full bg-violet-500" />
+              <div className="absolute inset-0 w-1.5 h-1.5 rounded-full bg-violet-400 animate-ping" />
+            </div>
+            AI Explore
+          </div>
         )}
-        onClick={() => setIsOpen(!isOpen)}
-        ref={triggerRef}
-      >
-        <ChevronDown size={16} className="text-gray-600" />
-      </Button>
+
+        {/* Toggle Button */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "h-8 w-8 rounded-full bg-white/95 backdrop-blur-sm shadow-lg border border-gray-200 hover:bg-white transition-transform",
+            isOpen && "rotate-180",
+          )}
+          onClick={() => setIsOpen(!isOpen)}
+          ref={triggerRef}
+        >
+          <ChevronDown size={16} className="text-gray-600" />
+        </Button>
+      </div>
 
       {/* Menu Content */}
       {isOpen && (

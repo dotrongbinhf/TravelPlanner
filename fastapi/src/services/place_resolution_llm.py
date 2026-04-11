@@ -14,7 +14,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, Optional
+from typing import Any, Callable, Coroutine, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -229,6 +229,7 @@ def _code_verify(
             "idx": i,
             "placeId": candidate["placeId"],
             "title": candidate["title"],
+            "db_data": candidate.get("db_data"),
         })
 
     return verified, failed
@@ -238,6 +239,7 @@ async def resolve_all_attractions(
     attraction_result: dict[str, Any],
     destination: str = "",
     location_bias: Optional[str] = None,
+    on_place_resolved: Optional[Callable[[dict[str, Any]], Coroutine]] = None,
 ) -> dict[str, Any]:
     """Resolve all attraction names in segments to verified placeIds.
 
@@ -366,9 +368,36 @@ async def resolve_all_attractions(
     for v in verified:
         idx = v["idx"]
         if idx not in duplicate_indices:
-            resolved_map[idx] = {"placeId": v["placeId"], "title": v["title"]}
+            db_data = v.get("db_data") or {}
+            location = db_data.get("location")
+            resolved_map[idx] = {
+                "placeId": v["placeId"],
+                "title": v["title"],
+                "location": location,
+            }
 
-    _apply_to_segments(attraction_result, all_attractions, resolved_map, duplicate_indices)
+    _apply_to_segments(attraction_result, all_attractions, resolved_map, duplicate_indices, on_place_resolved=on_place_resolved)
+
+    # Fire callback for each resolved place
+    if on_place_resolved:
+        for v in verified:
+            if v["idx"] not in duplicate_indices:
+                db_data = v.get("db_data") or {}
+                location = db_data.get("location") or {}
+                coords = location.get("coordinates", [0, 0])
+                lat = coords[1] if len(coords) > 1 else 0
+                lng = coords[0] if len(coords) > 0 else 0
+                if lat != 0 and lng != 0:
+                    try:
+                        await on_place_resolved({
+                            "placeId": v["placeId"],
+                            "name": v["title"],
+                            "lat": lat,
+                            "lng": lng,
+                            "agentName": "attraction_agent",
+                        })
+                    except Exception as e:
+                        logger.error(f"[resolve] on_place_resolved callback failed: {e}")
 
     logger.info(f"[resolve] Final: {len(resolved_map)}/{len(all_attractions)} resolved, "
                 f"{len(duplicate_indices)} duplicates removed")
@@ -381,6 +410,7 @@ def _apply_to_segments(
     all_attractions: list[dict],
     resolved_map: dict[int, dict],
     duplicate_indices: set[int],
+    on_place_resolved: Optional[Callable] = None,
 ) -> None:
     """Apply resolved placeId + name back to segments."""
     segments = attraction_result.get("segments", [])
@@ -405,6 +435,8 @@ def _apply_to_segments(
             resolved = resolved_map[global_idx]
             attraction["name"] = resolved["title"]
             attraction["placeId"] = resolved["placeId"]
+            if resolved.get("location"):
+                attraction["_location"] = resolved["location"]
 
     # Remove duplicates (reverse order to preserve indices)
     for seg_idx in range(len(segments)):

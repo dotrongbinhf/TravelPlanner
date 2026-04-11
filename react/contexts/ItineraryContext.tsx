@@ -9,6 +9,7 @@ import {
 } from "react";
 import { Place } from "@/types/place";
 import { ItineraryItem } from "@/types/itineraryItem";
+import { ResolvedPlace } from "@/api/aiChat/types";
 
 interface SelectedPlaceState {
   placeId: string | null;
@@ -40,6 +41,13 @@ interface ItineraryContextValue {
   setFilterMode: (mode: "all" | "byDay") => void;
   selectedDayIndex: number;
   setSelectedDayIndex: (index: number) => void;
+
+  // Map mode (plan vs AI explore)
+  mapMode: "plan" | "aiExplore";
+  setMapMode: (mode: "plan" | "aiExplore") => void;
+  aiResolvedPlaces: ResolvedPlace[];
+  setAiResolvedPlaces: (places: ResolvedPlace[]) => void;
+  clearAiResolvedPlaces: () => void;
 }
 
 const ItineraryContext = createContext<ItineraryContextValue | null>(null);
@@ -77,6 +85,14 @@ export function ItineraryProvider({
   const [showDirections, setShowDirections] = useState(false);
   const [filterMode, setFilterMode] = useState<"all" | "byDay">("byDay");
   const [selectedDayIndex, setSelectedDayIndex] = useState(0);
+
+  // Map mode and AI resolved places
+  const [mapMode, setMapMode] = useState<"plan" | "aiExplore">("plan");
+  const [aiResolvedPlaces, setAiResolvedPlaces] = useState<ResolvedPlace[]>([]);
+
+  const clearAiResolvedPlaces = useCallback(() => {
+    setAiResolvedPlaces([]);
+  }, []);
 
   const handleSetShowMarkers = useCallback((show: boolean) => {
     setShowMarkers(show);
@@ -153,6 +169,11 @@ export function ItineraryProvider({
     setFilterMode: handleSetFilterMode,
     selectedDayIndex,
     setSelectedDayIndex,
+    mapMode,
+    setMapMode,
+    aiResolvedPlaces,
+    setAiResolvedPlaces,
+    clearAiResolvedPlaces,
   };
 
   return (

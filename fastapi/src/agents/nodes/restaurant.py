@@ -436,6 +436,20 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
             if not isinstance(selected_meals, list):
                 selected_meals = selected_meals.get("meals", []) if isinstance(selected_meals, dict) else []
 
+            # Re-inject coordinates from original search results for map rendering
+            placeid_to_location = {}
+            for m in meal_search_results:
+                for r in m.get("search_results", []):
+                    pid = r.get("place_id")
+                    if pid:
+                        placeid_to_location[pid] = {"lat": r.get("lat", 0), "lng": r.get("lng", 0)}
+            
+            for meal in selected_meals:
+                pid = meal.get("place_id")
+                if pid and pid in placeid_to_location:
+                    loc = placeid_to_location[pid]
+                    meal["_location"] = {"coordinates": [loc["lng"], loc["lat"]]}
+
             restaurant_result = {"meals": selected_meals}
 
         logger.info(f"   Phase 3: Selected {len(restaurant_result.get('meals', []))} restaurants")

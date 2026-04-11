@@ -10,6 +10,8 @@ import {
   Globe,
   ExternalLink,
   Maximize2,
+  Replace,
+  Loader2,
 } from "lucide-react";
 import { format } from "date-fns";
 import { OpenHours, Place } from "@/types/place";
@@ -25,6 +27,8 @@ import { ItineraryItem } from "@/types/itineraryItem";
 import { AxiosError } from "axios";
 import toast from "react-hot-toast";
 import ItineraryItemEditor from "../sections/itinerary-item-editor";
+import { updateItineraryItem } from "@/api/itineraryItem/itineraryItem";
+import { getDayColor } from "@/constants/day-colors";
 
 interface PlaceDetailDialogProps {
   placeId: string;
@@ -33,6 +37,7 @@ interface PlaceDetailDialogProps {
   onClose: () => void;
   plan: Plan | null;
   onAddItem: (item: ItineraryItem) => void;
+  onReplaceItem?: (item: ItineraryItem) => void;
 }
 
 export default function PlaceDetailDialog({
@@ -42,6 +47,7 @@ export default function PlaceDetailDialog({
   onClose,
   plan,
   onAddItem,
+  onReplaceItem,
 }: PlaceDetailDialogProps) {
   const placesLib = useMapsLibrary("places");
   const [place, setPlace] = useState<Place | null>(null);
@@ -51,6 +57,8 @@ export default function PlaceDetailDialog({
   const [startTime, setStartTime] = useState<Date | undefined>();
   const [duration, setDuration] = useState<string>("");
   const [isOpenDialog, setIsOpenDialog] = useState(false);
+  const [isReplaceOpen, setIsReplaceOpen] = useState(false);
+  const [replacingItemId, setReplacingItemId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("overview");
 
   const getSelectedDate = () => {
@@ -102,6 +110,39 @@ export default function PlaceDetailDialog({
       setAdding(false);
     }
   };
+
+  // Handler for replacing an existing item's place
+  const handleReplacePlace = async (itemId: string, dayId: string) => {
+    if (!place) return;
+    setReplacingItemId(itemId);
+    try {
+      const response = await updateItineraryItem(itemId, {
+        itineraryDayId: dayId,
+        placeId: place.placeId,
+      });
+      toast.success(`Place set to "${place.title}"`);
+      if (onReplaceItem) onReplaceItem(response);
+      setIsReplaceOpen(false);
+    } catch (error) {
+      console.error("Failed to replace place:", error);
+      toast.error("Failed to set place");
+    } finally {
+      setReplacingItemId(null);
+    }
+  };
+
+  // Get items that have no place assigned (candidates for replace)
+  const unplacedItemsByDay = plan?.itineraryDays
+    ?.slice()
+    .sort((a, b) => a.order - b.order)
+    .map((day, dayIdx) => ({
+      day,
+      dayIdx,
+      items: (day.itineraryItems || []).filter(
+        (item) => !item.place?.placeId,
+      ),
+    }))
+    .filter((d) => d.items.length > 0) ?? [];
 
   useEffect(() => {
     // If existingPlace is provided, use it directly
@@ -558,10 +599,68 @@ export default function PlaceDetailDialog({
                   </div>
 
                   {/* Footer Action */}
-                  <div className="p-3 flex justify-end gap-3 shrink-0">
+                  <div className="p-3 flex justify-end gap-2 shrink-0">
                     <Button variant="outline" onClick={onClose}>
                       Close
                     </Button>
+
+                    {/* Replace Place Button */}
+                    {!hideAddButton && onReplaceItem && unplacedItemsByDay.length > 0 && (
+                      <div className="relative">
+                        <Button
+                          variant="outline"
+                          onClick={() => setIsReplaceOpen(!isReplaceOpen)}
+                          className="border-amber-200 text-amber-700 hover:bg-amber-50"
+                        >
+                          <Replace className="w-4 h-4 mr-1.5" />
+                          Set as Place
+                        </Button>
+
+                        {isReplaceOpen && (
+                          <div className="absolute bottom-full mb-1 right-0 bg-white rounded-xl shadow-xl border border-gray-200 p-2 min-w-[220px] max-h-[260px] overflow-y-auto custom-scrollbar z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider px-2 pt-1 pb-1.5">
+                              Assign to item
+                            </div>
+                            {unplacedItemsByDay.map(({ day, dayIdx, items }) => (
+                              <div key={day.id} className="mb-1">
+                                <div className="flex items-center gap-1.5 px-2 py-0.5">
+                                  <div
+                                    className="w-2 h-2 rounded-full"
+                                    style={{ backgroundColor: getDayColor(dayIdx) }}
+                                  />
+                                  <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                                    Day {dayIdx + 1}
+                                  </span>
+                                </div>
+                                {items.map((item, idx) => (
+                                  <button
+                                    key={item.id}
+                                    disabled={replacingItemId === item.id}
+                                    onClick={() => handleReplacePlace(item.id, day.id)}
+                                    className="cursor-pointer w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-amber-50 transition-colors text-left disabled:opacity-50"
+                                  >
+                                    {replacingItemId === item.id ? (
+                                      <Loader2 size={12} className="animate-spin text-amber-500" />
+                                    ) : (
+                                      <div
+                                        className="w-4 h-4 rounded-full flex items-center justify-center text-white text-[9px] font-bold"
+                                        style={{ backgroundColor: getDayColor(dayIdx) }}
+                                      >
+                                        {idx + 1}
+                                      </div>
+                                    )}
+                                    <span className="text-xs text-gray-700 truncate">
+                                      {item.note || "Empty item"}
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {!hideAddButton && (
                       <Button
                         onClick={() => setIsOpenDialog(true)}

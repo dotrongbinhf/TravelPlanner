@@ -47,6 +47,7 @@ import toast from "react-hot-toast";
 import { useAgentStream } from "@/hooks/useAgentStream";
 import { applyAIPlan } from "@/api/plan/plan";
 import { Plan } from "@/types/plan";
+import { useItineraryContext } from "@/contexts/ItineraryContext";
 
 interface AIChatProps {
   readonly planName: string;
@@ -93,6 +94,34 @@ export default function AIChat({
     streamState,
     isStreaming,
   } = useAgentStream();
+
+  // Map mode integration
+  const {
+    setMapMode,
+    setAiResolvedPlaces,
+    clearAiResolvedPlaces,
+  } = useItineraryContext();
+
+  // Switch to AI Explore mode when streaming starts
+  useEffect(() => {
+    if (isStreaming) {
+      setMapMode("aiExplore");
+    }
+  }, [isStreaming, setMapMode]);
+
+  // Sync resolved places from stream to context
+  useEffect(() => {
+    if (streamState.resolvedPlaces.length > 0) {
+      setAiResolvedPlaces(streamState.resolvedPlaces);
+    }
+  }, [streamState.resolvedPlaces, setAiResolvedPlaces]);
+
+  // Wrapped close handler: reset map mode and clear AI places
+  const handleClose = useCallback(() => {
+    setMapMode("plan");
+    clearAiResolvedPlaces();
+    onClose();
+  }, [onClose, setMapMode, clearAiResolvedPlaces]);
 
   // Fetch Conversations
   const fetchConversations = useCallback(async () => {
@@ -443,7 +472,7 @@ export default function AIChat({
           <Button
             variant="ghost"
             size="icon"
-            onClick={onClose}
+            onClick={handleClose}
             className="h-8 w-8 rounded-lg hover:bg-gray-100 hover:text-gray-500"
           >
             <X className="w-4 h-4" />

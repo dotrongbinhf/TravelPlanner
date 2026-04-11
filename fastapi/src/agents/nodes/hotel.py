@@ -248,6 +248,8 @@ Search for hotels based on this context. Use the plan_context for dates, passeng
                 resolved = await resolve_single_place(hotel_name, location_bias=location_bias)
                 if resolved and resolved.get("placeId"):
                     seg["recommend_hotel_placeId"] = resolved["placeId"]
+                    if "location" in resolved:
+                        seg["_location"] = resolved["location"]
                     logger.info(f"   ✅ Hotel '{hotel_name}' → placeId={resolved['placeId']}")
             except Exception as e:
                 logger.error(f"   ⚠️ Hotel resolve failed for '{hotel_name}': {e}")

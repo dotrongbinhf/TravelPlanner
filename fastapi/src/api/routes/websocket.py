@@ -41,6 +41,66 @@ async def send_event(websocket: WebSocket, event: AgentEvent):
         logger.error(f"Failed to send WebSocket event: {e}")
 
 
+
+async def _emit_resolved_places(websocket: WebSocket, agent_name: str, agent_data: dict):
+    """Extract resolved places from agent output and emit PLACE_RESOLVED events.
+
+    Supports:
+    - attraction_agent: segments[].attractions[] with placeId + db_data.location
+    - hotel_agent: hotels[] with placeId + location
+    - restaurant_agent: restaurants[] with placeId + location
+    """
+    places = []
+
+    if agent_name == "attraction_agent":
+        for seg in agent_data.get("segments", []):
+            for attr in seg.get("attractions", []):
+                pid = attr.get("placeId")
+                name = attr.get("name", "")
+                if not pid or not name:
+                    continue
+                # _location is set by _apply_to_segments with GeoJSON format
+                location = attr.get("_location") or {}
+                coords = location.get("coordinates", [])
+                if len(coords) >= 2:
+                    places.append({"placeId": pid, "name": name, "lat": coords[1], "lng": coords[0], "agentName": agent_name})
+
+    elif agent_name == "hotel_agent":
+        for seg in agent_data.get("segments", []):
+            pid = seg.get("recommend_hotel_placeId")
+            name = seg.get("recommend_hotel_name", "")
+            if not pid or not name:
+                continue
+            location = seg.get("_location") or {}
+            coords = location.get("coordinates", [])
+            if len(coords) >= 2:
+                places.append({"placeId": pid, "name": name, "lat": coords[1], "lng": coords[0], "agentName": agent_name})
+
+    elif agent_name == "restaurant_agent":
+        for meal in agent_data.get("meals", []):
+            pid = meal.get("place_id")
+            name = meal.get("name", "")
+            if not pid or not name:
+                continue
+            location = meal.get("_location") or {}
+            coords = location.get("coordinates", [])
+            if len(coords) >= 2:
+                places.append({"placeId": pid, "name": name, "lat": coords[1], "lng": coords[0], "agentName": agent_name})
+
+    for place in places:
+        try:
+            await send_event(websocket, AgentEvent(
+                event_type=EventType.PLACE_RESOLVED,
+                agent_name=agent_name,
+                place_data=place,
+            ))
+        except Exception as e:
+            logger.error(f"Failed to emit place_resolved event: {e}")
+
+    if places:
+        logger.info(f"📍 Emitted {len(places)} place_resolved events for {agent_name}")
+
+
 @router.websocket("/ws/agent/{conversation_id}")
 async def agent_websocket(websocket: WebSocket, conversation_id: str):
     """
@@ -208,6 +268,9 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                                     output_summary = agent_data.get("summary",
                                         agent_data.get("status",
                                         agent_data.get("search_summary", "")))
+
+                                    # --- Emit per-place PLACE_RESOLVED events ---
+                                    await _emit_resolved_places(websocket, agent_name, agent_data)
 
                         logger.info(f"⏹️  Agent ended: {agent_name}")
                         await send_event(websocket, AgentEvent(

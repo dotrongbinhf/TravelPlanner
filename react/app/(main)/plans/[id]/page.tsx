@@ -11,12 +11,13 @@ import { AxiosError } from "axios";
 import toast from "react-hot-toast";
 import { APIProvider } from "@vis.gl/react-google-maps";
 import { ItineraryItem } from "@/types/itineraryItem";
-import { ItineraryProvider } from "../../../../contexts/ItineraryContext";
+import { ItineraryProvider, useItineraryContext } from "../../../../contexts/ItineraryContext";
 import {
   MessageCircle,
   Map as MapIcon,
   ClipboardList,
   BotMessageSquare,
+  MapPinned,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +26,94 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+
+const RightPanelControls = ({
+  rightPanelView,
+  setRightPanelView,
+}: {
+  rightPanelView: "map" | "planner";
+  setRightPanelView: (v: "map" | "planner") => void;
+}) => {
+  const { mapMode, setMapMode } = useItineraryContext();
+
+  return (
+    <div className="absolute top-2 right-2 z-10 flex flex-col gap-2 items-end">
+      <TooltipProvider delayDuration={100}>
+        <div className="flex items-center rounded-lg border border-gray-300 bg-white/90 backdrop-blur-sm shadow-md overflow-hidden">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => setRightPanelView("planner")}
+                className={`flex items-center justify-center p-2.5 transition-all duration-200 ${
+                  rightPanelView === "planner"
+                    ? "bg-blue-600 text-white shadow-inner"
+                    : "text-gray-600 hover:text-blue-600 hover:bg-blue-50"
+                }`}
+              >
+                <ClipboardList className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              Planner
+            </TooltipContent>
+          </Tooltip>
+
+          <div className="w-[1px] h-5 bg-gray-200" />
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => setRightPanelView("map")}
+                className={`flex items-center justify-center p-2.5 transition-all duration-200 ${
+                  rightPanelView === "map"
+                    ? "bg-blue-600 text-white shadow-inner"
+                    : "text-gray-600 hover:text-blue-600 hover:bg-blue-50"
+                }`}
+              >
+                <MapIcon className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              Map View
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      </TooltipProvider>
+
+      {/* Map Mode Sub-Toggle (Plan vs Chatbot) */}
+      {rightPanelView === "map" && (
+        <TooltipProvider delayDuration={100}>
+          <div className="flex items-center rounded-lg border border-gray-300 bg-white/90 backdrop-blur-sm shadow-md overflow-hidden animate-in fade-in slide-in-from-top-2">
+            <button
+              onClick={() => setMapMode("plan")}
+              className={`flex items-center justify-center px-3 py-1.5 transition-all duration-200 text-xs font-medium ${
+                mapMode === "plan"
+                  ? "bg-blue-600 text-white shadow-inner"
+                  : "text-gray-600 hover:text-blue-600 hover:bg-blue-50"
+              }`}
+            >
+              <MapPinned className="w-3 h-3 mr-1.5" />
+              My Plan
+            </button>
+            <div className="w-[1px] h-4 bg-gray-200" />
+            <button
+              onClick={() => setMapMode("aiExplore")}
+              className={`flex items-center justify-center px-3 py-1.5 transition-all duration-200 text-xs font-medium ${
+                mapMode === "aiExplore"
+                  ? "bg-blue-600 text-white shadow-inner"
+                  : "text-gray-600 hover:text-blue-600 hover:bg-blue-50"
+              }`}
+            >
+              <BotMessageSquare className="w-3 h-3 mr-1.5" />
+              Chatbot
+            </button>
+          </div>
+        </TooltipProvider>
+      )}
+    </div>
+  );
+};
+
 export default function PlanIdPage() {
   const params = useParams();
   const id = params.id as string;
@@ -96,14 +185,26 @@ export default function PlanIdPage() {
       if (!prev) return null;
       return {
         ...prev,
-        itineraryDays: prev.itineraryDays?.map((d) =>
-          d.id === newItem.itineraryDayId
-            ? {
-                ...d,
-                itineraryItems: [...(d.itineraryItems || []), newItem],
-              }
-            : d,
-        ),
+        itineraryDays: prev.itineraryDays?.map((d) => {
+          // Check if this item already exists in this day (replace case)
+          const existingIdx = (d.itineraryItems || []).findIndex(
+            (i) => i.id === newItem.id,
+          );
+          if (existingIdx !== -1) {
+            // Replace existing item
+            const updatedItems = [...(d.itineraryItems || [])];
+            updatedItems[existingIdx] = newItem;
+            return { ...d, itineraryItems: updatedItems };
+          }
+          // Add new item to the matching day
+          if (d.id === newItem.itineraryDayId) {
+            return {
+              ...d,
+              itineraryItems: [...(d.itineraryItems || []), newItem],
+            };
+          }
+          return d;
+        }),
       };
     });
   };
@@ -168,49 +269,10 @@ export default function PlanIdPage() {
           >
             {/* Toggle button Group - only visible when AI chat is active */}
             {isAIChatActive && (
-              <div className="absolute top-2 right-2 z-10">
-                <TooltipProvider delayDuration={100}>
-                  <div className="flex items-center rounded-lg border border-gray-300 bg-white/90 backdrop-blur-sm shadow-md overflow-hidden">
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          onClick={() => setRightPanelView("planner")}
-                          className={`flex items-center justify-center p-2.5 transition-all duration-200 ${
-                            rightPanelView === "planner"
-                              ? "bg-blue-600 text-white shadow-inner"
-                              : "text-gray-600 hover:text-blue-600 hover:bg-blue-50"
-                          }`}
-                        >
-                          <ClipboardList className="w-4 h-4" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom" className="text-xs">
-                        Planner
-                      </TooltipContent>
-                    </Tooltip>
-
-                    <div className="w-[1px] h-5 bg-gray-200" />
-
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          onClick={() => setRightPanelView("map")}
-                          className={`flex items-center justify-center p-2.5 transition-all duration-200 ${
-                            rightPanelView === "map"
-                              ? "bg-blue-600 text-white shadow-inner"
-                              : "text-gray-600 hover:text-blue-600 hover:bg-blue-50"
-                          }`}
-                        >
-                          <MapIcon className="w-4 h-4" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom" className="text-xs">
-                        Map
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                </TooltipProvider>
-              </div>
+              <RightPanelControls
+                rightPanelView={rightPanelView}
+                setRightPanelView={setRightPanelView}
+              />
             )}
             {/* Right panel content */}
             {!isAIChatActive || rightPanelView === "map" ? (
