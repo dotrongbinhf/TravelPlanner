@@ -57,11 +57,6 @@ namespace dotnet.Dtos.AgentEvent
         /// </summary>
         public object? StructuredData { get; set; }
 
-        /// <summary>
-        /// Resolved place data (for place_resolved events).
-        /// Contains placeId, name, lat, lng, agentName.
-        /// </summary>
-        public object? PlaceData { get; set; }
 
         /// <summary>
         /// Timestamp of the event

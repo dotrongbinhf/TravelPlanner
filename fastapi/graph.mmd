@@ -5,6 +5,7 @@ config:
 ---
 graph TD;
 	__start__([<p>__start__</p>]):::first
+	intent(intent)
 	orchestrator(orchestrator)
 	flight(flight)
 	hotel(hotel)
@@ -14,13 +15,27 @@ graph TD;
 	restaurant(restaurant)
 	preparation(preparation)
 	synthesize(synthesize)
+	select_apply(select_apply)
 	__end__([<p>__end__</p>]):::last
-	__start__ --> orchestrator;
-	attraction --> itinerary;
-	flight --> itinerary;
-	hotel --> itinerary;
-	itinerary --> preparation;
-	itinerary --> restaurant;
+	__start__ --> intent;
+	attraction -.-> itinerary;
+	attraction -.-> synthesize;
+	flight -.-> itinerary;
+	flight -.-> synthesize;
+	hotel -.-> itinerary;
+	hotel -.-> synthesize;
+	intent -.-> __end__;
+	intent -.-> attraction;
+	intent -.-> flight;
+	intent -.-> hotel;
+	intent -.-> itinerary;
+	intent -.-> orchestrator;
+	intent -.-> preparation;
+	intent -.-> restaurant;
+	intent -.-> select_apply;
+	itinerary -.-> preparation;
+	itinerary -.-> restaurant;
+	itinerary -.-> synthesize;
 	orchestrator -.-> __end__;
 	orchestrator -.-> attraction;
 	orchestrator -.-> flight;
@@ -28,6 +43,9 @@ graph TD;
 	orchestrator -.-> weather;
 	preparation --> synthesize;
 	restaurant --> synthesize;
+	select_apply -.-> __end__;
+	select_apply -.-> itinerary;
+	select_apply -.-> synthesize;
 	weather --> itinerary;
 	synthesize --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2

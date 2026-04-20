@@ -130,7 +130,6 @@ namespace dotnet.Controllers
                         Category = ei.Category,
                         Name = ei.Name,
                         Amount = ei.Amount,
-                        GroupName = ei.GroupName,
                     }).ToList(),
                 Participants = result.Participants.Select(p => new Dtos.Participant.ParticipantDto
                 {
@@ -601,28 +600,41 @@ namespace dotnet.Controllers
                 if (!string.IsNullOrEmpty(request.CurrencyCode))
                     targetPlan.CurrencyCode = request.CurrencyCode;
 
-                // Delete existing data (cascade will handle children)
-                var existingDays = await dbContext.ItineraryDays
-                    .Where(d => d.PlanId == targetPlan.Id)
-                    .Include(d => d.ItineraryItems)
-                    .ToListAsync();
-                dbContext.ItineraryDays.RemoveRange(existingDays);
+                // Delete existing data ONLY for sections that are being applied
+                // (null sections = not changed, keep existing)
+                if (request.ItineraryDays != null)
+                {
+                    var existingDays = await dbContext.ItineraryDays
+                        .Where(d => d.PlanId == targetPlan.Id)
+                        .Include(d => d.ItineraryItems)
+                        .ToListAsync();
+                    dbContext.ItineraryDays.RemoveRange(existingDays);
+                }
 
-                var existingExpenses = await dbContext.ExpenseItems
-                    .Where(e => e.PlanId == targetPlan.Id)
-                    .ToListAsync();
-                dbContext.ExpenseItems.RemoveRange(existingExpenses);
+                if (request.ExpenseItems != null)
+                {
+                    var existingExpenses = await dbContext.ExpenseItems
+                        .Where(e => e.PlanId == targetPlan.Id)
+                        .ToListAsync();
+                    dbContext.ExpenseItems.RemoveRange(existingExpenses);
+                }
 
-                var existingPackingLists = await dbContext.PackingLists
-                    .Where(p => p.PlanId == targetPlan.Id)
-                    .Include(p => p.PackingItems)
-                    .ToListAsync();
-                dbContext.PackingLists.RemoveRange(existingPackingLists);
+                if (request.PackingLists != null)
+                {
+                    var existingPackingLists = await dbContext.PackingLists
+                        .Where(p => p.PlanId == targetPlan.Id)
+                        .Include(p => p.PackingItems)
+                        .ToListAsync();
+                    dbContext.PackingLists.RemoveRange(existingPackingLists);
+                }
 
-                var existingNotes = await dbContext.Notes
-                    .Where(n => n.PlanId == targetPlan.Id)
-                    .ToListAsync();
-                dbContext.Notes.RemoveRange(existingNotes);
+                if (request.Notes != null)
+                {
+                    var existingNotes = await dbContext.Notes
+                        .Where(n => n.PlanId == targetPlan.Id)
+                        .ToListAsync();
+                    dbContext.Notes.RemoveRange(existingNotes);
+                }
             }
 
             // ── Apply Itinerary ──────────────────────────────────────
@@ -708,7 +720,6 @@ namespace dotnet.Controllers
                         Category = category,
                         Name = aiExpense.Name,
                         Amount = aiExpense.Amount,
-                        GroupName = aiExpense.GroupName,
                     };
                     dbContext.ExpenseItems.Add(expenseItem);
 
@@ -837,7 +848,6 @@ namespace dotnet.Controllers
                         Category = ei.Category,
                         Name = ei.Name,
                         Amount = ei.Amount,
-                        GroupName = ei.GroupName,
                     }).ToList(),
                 Participants = result.Participants.Select(p => new Dtos.Participant.ParticipantDto
                 {

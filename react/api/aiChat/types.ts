@@ -38,14 +38,7 @@ export type CreateMessageRequest = {
   generatedPlanData?: string;
 };
 
-// Resolved place data streamed from agents in real-time
-export type ResolvedPlace = {
-  placeId: string;
-  name: string;
-  lat: number;
-  lng: number;
-  agentName: string;
-};
+
 
 // Agent streaming event types (received via SignalR from .NET → FastAPI)
 export type AgentEvent = {
@@ -56,7 +49,6 @@ export type AgentEvent = {
     | "tool_end"
     | "text_chunk"
     | "structured_data"
-    | "place_resolved"
     | "workflow_complete"
     | "error";
   agentName?: string;
@@ -67,7 +59,6 @@ export type AgentEvent = {
   outputSummary?: string;
   finalResponse?: string;
   structuredData?: Record<string, unknown>;
-  placeData?: ResolvedPlace;
   errorMessage?: string;
   timestamp?: string;
 };
@@ -78,7 +69,6 @@ export type AgentStreamState = {
   completedAgents: string[];
   streamedContent: string;
   structuredData: Record<string, unknown> | null;
-  resolvedPlaces: ResolvedPlace[];
   isComplete: boolean;
   error: string | null;
 };

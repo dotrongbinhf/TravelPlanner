@@ -5,7 +5,6 @@ import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import PlaceDetailDialog from "./maps/place-detail-dialog";
 import ItineraryMarker from "./maps/itinerary-marker";
 import GroupedItineraryMarker from "./maps/grouped-itinerary-marker";
-import AiExploreMarker from "./maps/ai-explore-marker";
 import UnplacedItemsPanel, { UnplacedItem } from "./maps/unplaced-items-panel";
 import MapMenu from "./maps/map-menu";
 import ItineraryDayNavigator from "./maps/itineraryDay-navigator";
@@ -65,9 +64,8 @@ export default function GoogleMapIntegration({
     filterMode,
     setFilterMode,
     selectedDayIndex,
+    selectedDayIndex,
     setSelectedDayIndex,
-    mapMode,
-    aiResolvedPlaces,
   } = useItineraryContext();
 
   const itineraryDays = plan?.itineraryDays ?? [];
@@ -432,26 +430,6 @@ export default function GoogleMapIntegration({
     });
   }, [markersData]);
 
-  // Auto center on the FIRST attraction AI resolved place
-  const hasCenteredOnFirstAttraction = useRef(false);
-
-  useEffect(() => {
-    if (aiResolvedPlaces.length === 0) {
-      hasCenteredOnFirstAttraction.current = false;
-      return;
-    }
-
-    if (mapMode === "aiExplore" && map && !hasCenteredOnFirstAttraction.current) {
-      const firstAttraction = aiResolvedPlaces.find(rp => rp.agentName === "attraction_agent");
-      if (firstAttraction) {
-        // Center with a moderate zoom to give an overview
-        map.panTo({ lat: firstAttraction.lat, lng: firstAttraction.lng });
-        map.setZoom(13.5); 
-        hasCenteredOnFirstAttraction.current = true;
-      }
-    }
-  }, [aiResolvedPlaces, mapMode, map]);
-
   const handleMapClick = (e: any) => {
     if (e.detail?.placeId) {
       console.log("Clicked POI:", e.detail.placeId);
@@ -487,7 +465,7 @@ export default function GoogleMapIntegration({
             !selectedPlace.isFromItinerary && <Marker position={clickedPos} />}
 
           {/* Single Itinerary Markers */}
-          {mapMode !== "aiExplore" && singleMarkers.map((marker) => {
+          {singleMarkers.map((marker) => {
             const {
               item,
               dayIndex,
@@ -540,7 +518,7 @@ export default function GoogleMapIntegration({
           })}
 
           {/* Grouped Itinerary Markers (same place, multiple items) */}
-          {mapMode !== "aiExplore" && groupedMarkerEntries.map(({ placeId, markers }) => {
+          {groupedMarkerEntries.map(({ placeId, markers }) => {
             const firstMarker = markers[0];
             const place = firstMarker.item.place;
             if (!place?.location?.coordinates) return null;
@@ -572,22 +550,6 @@ export default function GoogleMapIntegration({
               />
             );
           })}
-
-          {/* AI Explore Markers (shown during agent streaming) */}
-          {mapMode === "aiExplore" &&
-            aiResolvedPlaces.map((rp) => (
-              <AiExploreMarker
-                key={`ai-${rp.placeId}`}
-                position={{ lat: rp.lat, lng: rp.lng }}
-                name={rp.name}
-                agentName={rp.agentName}
-                isActive={
-                  !!selectedPlace.placeId &&
-                  selectedPlace.placeId === rp.placeId
-                }
-                onClick={() => selectPlaceFromMap(rp.placeId)}
-              />
-            ))}
 
           {/* Directions Renderer */}
           {showDirections &&
@@ -717,7 +679,6 @@ export default function GoogleMapIntegration({
             setShowDirections={setShowDirections}
             filterMode={filterMode}
             setFilterMode={setFilterMode}
-            mapMode={mapMode}
           />
         </div>
 

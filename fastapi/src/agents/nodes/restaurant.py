@@ -19,7 +19,7 @@ from langchain_openai import ChatOpenAI
 
 from src.agents.state import GraphState
 from src.agents.nodes.utils import _extract_json
-from src.tools.maps_tools import search_restaurants_for_meal
+from src.tools.maps_tools import search_restaurants_for_meal, places_text_search_full
 from src.config import settings
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ USE_ENTERPRISE_FIELDS = settings.USE_ENTERPRISE_FIELDS
 
 llm_restaurant = (
     ChatOpenAI(
-        model="google/gemini-3.1-flash-lite-preview",
+        model=settings.MODEL_NAME,
         api_key=settings.VERCEL_AI_GATEWAY_API_KEY,
         base_url="https://ai-gateway.vercel.sh/v1",
         temperature=0.3,
@@ -36,8 +36,8 @@ llm_restaurant = (
     )
     if settings.USE_VERCEL_AI_GATEWAY
     else ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite-preview",
-        google_api_key=settings.GOOGLE_GEMINI_API_KEY_RESTAURANT,
+        model="gemini-2.5-flash-lite",
+        google_api_key=settings.GOOGLE_GEMINI_API_KEY_RESTAURANT or settings.GOOGLE_GEMINI_API_KEY,
         temperature=0.3,
         streaming=False,
     )
@@ -56,6 +56,7 @@ For each meal slot, generate a suitable Text Search query to find restaurants on
 
 ## Rules
 - Queries should be cuisine/restaurant TYPE (e.g., "Vietnamese traditional restaurant", "Seafood restaurant", "Pho restaurant")
+- Do NOT include location names, landmarks, or "near X" in the query. The system already searches nearby the relevant location automatically.
 - Ensure VARIETY across days — don't repeat the same cuisine type for every meal
 - Queries can repeat the same cuisine type but on DIFFERENT days
 - Some meals can simply use "restaurant" if no strong preference applies
@@ -67,11 +68,11 @@ For each meal slot, generate a suitable Text Search query to find restaurants on
 Return ONLY a JSON array of meal plan entries. No text before or after.
 
 [
-  { "day": 0, "meal_type": "lunch", "query": "Vietnamese Pho restaurant" },
-  { "day": 0, "meal_type": "dinner", "query": "Vietnamese traditional restaurant" },
-  { "day": 1, "meal_type": "lunch", "query": "Bun Cha restaurant" },
-  { "day": 1, "meal_type": "dinner", "query": "Seafood restaurant" },
-  { "day": 2, "meal_type": "lunch", "query": "restaurant" }
+  { "day": 1, "meal_type": "lunch", "query": "Pho restaurant" },
+  { "day": 1, "meal_type": "dinner", "query": "Vietnamese traditional restaurant" },
+  { "day": 2, "meal_type": "lunch", "query": "Bun Cha restaurant" },
+  { "day": 2, "meal_type": "dinner", "query": "Seafood restaurant" },
+  { "day": 3, "meal_type": "lunch", "query": "restaurant" }
 ]
 """
 
@@ -82,18 +83,18 @@ Return ONLY a JSON array of meal plan entries. No text before or after.
 
 SELECTION_SYSTEM = """You are a restaurant selection specialist for travelers.
 
-Given search results for each meal in a trip, select the best restaurant per meal.
+Given search results for each meal in a trip, select the BEST restaurant per meal.
 
 ## Rules
 - Each meal entry includes `date` and `day_of_week` — use these to CHECK opening_hours
 - If a restaurant's opening_hours show it is CLOSED on that day_of_week, do NOT select it
-- **IMPORTANT**: If a meal has NO search_results (empty input array), you MUST still output a meal entry for it to estimate its cost. For such meals, set `name` to "Tự túc ăn uống" (or equivalent in requested language), leave `place_id` empty, return empty `alternatives`, and provide a generic `note` about eating independently.
+- **IMPORTANT**: If a meal has NO search_results (empty input array), you MUST still output a meal entry for it to estimate its cost. For such meals, set `name` to "Eat independently" (or equivalent in requested language), leave `place_id` empty, and provide a generic `note` about eating independently.
 - Whether results exist or not, always output a reasonable `estimated_cost_total` for the meal.
 - Choose restaurants that match the travelers' preferences and budget
 - Do NOT select the same restaurant for different meals (choose variety)
 - Estimate total meal cost for the ENTIRE group (all adults + children)
 - Provide a brief note explaining your choice and describing the restaurant/food in the requested language.
-- Pick 2 alternatives from the remaining results (also must be open on that day)
+- Do NOT include an `alternatives` field. The system will auto-fill alternatives from remaining search results.
 - Respond in the language specified in the `language` field (e.g., "vi" → Vietnamese, "en" → English). The `note` field MUST be in this language.
 
 ## Response Format
@@ -101,17 +102,15 @@ Return ONLY a JSON array. No text before or after.
 
 [
   {
-    "day": 0,
+    "day": 1,
     "meal_type": "lunch",
     "name": "Phở Thìn Bờ Hồ",
     "place_id": "ChIJ...",
     "estimated_cost_total": 180000,
-    "note": "Famous Pho Restaurant, near Văn Miếu, rating 4.5",
-    "alternatives": ["Phở Bát Đàn", "Phở 10 Lý Quốc Sư"]
+    "note": "Famous Pho Restaurant, rating 4.5"
   }
 ]
 """
-
 
 # ============================================================================
 # MEAL SLOT PARSER
@@ -150,7 +149,7 @@ def _parse_meal_slots(itinerary_data: dict, resolved_places: dict) -> list[dict]
 
     meal_slots = []
     for day_data in itinerary_data.get("days", []):
-        day_idx = day_data.get("day", 0)
+        day_idx = day_data.get("day", 1)
         stops = day_data.get("stops", [])
 
         for i, stop in enumerate(stops):
@@ -222,31 +221,49 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
     Phase 3: LLM selects best restaurant per meal
     """
     logger.info("=" * 60)
-    logger.info("🍽️ [RESTAURANT_AGENT] Node entered (Phase 2)")
+    logger.info("🍽️ [RESTAURANT_AGENT] Node entered")
 
-    plan = state.get("orchestrator_plan", {})
-    plan_context = plan.get("plan_context", {})
-    restaurant_ctx = plan.get("restaurant", {})
+    plan = state.get("macro_plan", {})
+    current_plan = state.get("current_plan", {})
     agent_outputs = state.get("agent_outputs", {})
-    itinerary_data = agent_outputs.get("itinerary_agent", {})
+    plan_context = current_plan.get("plan_context", {})
 
-    if not restaurant_ctx:
-        logger.info("   No restaurant context → skip")
+    # Unified task request — from Orchestrator (pipeline) or Intent (standalone)
+    agent_requests = plan.get("agent_requests", {})
+    agent_request = agent_requests.get("restaurant", "")
+
+    if not agent_request:
+        logger.info("   No agent_request for restaurant → skip")
         return {
             "agent_outputs": {"restaurant_agent": {"meals": [], "skipped": True}},
             "messages": [AIMessage(content="[Restaurant Agent] No restaurant search needed")],
         }
 
+    is_pipeline = bool(plan.get("task_list"))
+    logger.info(f"   Mode: {'PIPELINE' if is_pipeline else 'STANDALONE'}")
+
+    # Get itinerary data — from pipeline agent_outputs or current_plan (standalone)
+    itinerary_data = agent_outputs.get("itinerary_agent", {})
     if not itinerary_data or itinerary_data.get("error"):
-        logger.info("   No valid itinerary data → skip")
-        return {
-            "agent_outputs": {"restaurant_agent": {"meals": [], "skipped": True, "reason": "no_itinerary"}},
-            "messages": [AIMessage(content="[Restaurant Agent] No itinerary available, skipping")],
-        }
+        itinerary_data = current_plan.get("itinerary", {})
 
-    restaurant_result = {}
-
-    try:
+    if not itinerary_data or itinerary_data.get("error"):
+        if is_pipeline:
+            logger.info("   No valid itinerary data → skip (pipeline)")
+            return {
+                "agent_outputs": {"restaurant_agent": {"meals": [], "skipped": True, "reason": "no_itinerary"}},
+                "messages": [AIMessage(content="[Restaurant Agent] No itinerary available, skipping")],
+            }
+        else:
+            logger.info("   No itinerary data → Standalone Area Search mode")
+            meal_slots = [{
+                "day": 1,
+                "meal_type": "standalone",
+                "near_attraction": "",
+                "lat": 0.0,
+                "lng": 0.0,
+            }]
+    else:
         # ── Parse meal slots from itinerary ──────────────────────────
         resolved_places = itinerary_data.get("resolved_places", {})
         meal_slots = _parse_meal_slots(itinerary_data, resolved_places)
@@ -259,6 +276,9 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
                 "messages": [AIMessage(content="[Restaurant Agent] No meal slots in itinerary")],
             }
 
+    restaurant_result = {}
+
+    try:
         # ══════════════════════════════════════════════════════════════
         # PHASE 1: LLM Meal Planning
         # ══════════════════════════════════════════════════════════════
@@ -275,10 +295,8 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
             "destination": plan_context.get("destination", ""),
             "num_days": plan_context.get("num_days", 1),
             "language": language,
-            "user_cuisine_preferences": restaurant_ctx.get("user_cuisine_preferences", []),
-            "user_dietary_restrictions": restaurant_ctx.get("user_dietary_restrictions", []),
             "budget_level": plan_context.get("budget_level", "moderate"),
-            "notes": restaurant_ctx.get("notes", ""),
+            "task": agent_request,
             "meal_slots": meal_slots_summary,
         }
 
@@ -306,38 +324,69 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
         search_tasks = []
         search_meal_info = []
 
-        # Comment to test
+        # Check if we're in standalone mode (no itinerary coordinates)
+        is_standalone_search = any(s.get("meal_type") == "standalone" for s in meal_slots)
+
         for planned_meal in meal_plan:
-            day = planned_meal.get("day", 0)
+            day = planned_meal.get("day", 1)
             meal_type = planned_meal.get("meal_type", "")
             query = planned_meal.get("query", "restaurant")
 
-            # Find matching meal_slot with coordinates
-            matching_slot = None
-            for slot in meal_slots:
-                if slot["day"] == day and slot["meal_type"] == meal_type:
-                    matching_slot = slot
-                    break
-
-            if not matching_slot or (matching_slot["lat"] == 0 and matching_slot["lng"] == 0):
-                logger.warning(f"   No coords for Day {day} {meal_type}, skipping search")
-                continue
-            
-            search_tasks.append(
-                search_restaurants_for_meal.ainvoke({
+            if is_standalone_search:
+                # Standalone Area Search — no coordinates available, use text search
+                search_query = f"{query} in {plan_context.get('destination', '')}"
+                search_tasks.append(
+                    places_text_search_full.ainvoke({
+                        "query": search_query,
+                        "USE_ENTERPRISE_FIELDS": USE_ENTERPRISE_FIELDS,
+                        "page_size": 5,
+                    })
+                )
+                search_meal_info.append({
+                    "day": day,
+                    "meal_type": meal_type,
                     "query": query,
-                    "lat": matching_slot["lat"],
-                    "lng": matching_slot["lng"],
-                    "USE_ENTERPRISE_FIELDS": USE_ENTERPRISE_FIELDS,
-                    "page_size": 3,
+                    "near_attraction": "",
                 })
-            )
-            search_meal_info.append({
-                "day": day,
-                "meal_type": meal_type,
-                "query": query,
-                "near_attraction": matching_slot.get("near_attraction", ""),
-            })
+            else:
+                # Pipeline/Normal — match meal_plan to itinerary slots with lat/lng
+                matching_slot = None
+                for slot in meal_slots:
+                    if slot["day"] == day and slot["meal_type"] == meal_type:
+                        matching_slot = slot
+                        break
+
+                if not matching_slot:
+                    logger.warning(f"   No slot for Day {day} {meal_type}, skipping search")
+                    continue
+
+                if matching_slot["lat"] == 0 and matching_slot["lng"] == 0:
+                    # Slot exists but no coords — fallback to area search
+                    search_query = f"{query} in {plan_context.get('destination', '')}"
+                    search_tasks.append(
+                        places_text_search_full.ainvoke({
+                            "query": search_query,
+                            "USE_ENTERPRISE_FIELDS": USE_ENTERPRISE_FIELDS,
+                            "page_size": 5,
+                        })
+                    )
+                else:
+                    # Normal Nearby Search with coordinates
+                    search_tasks.append(
+                        search_restaurants_for_meal.ainvoke({
+                            "query": query,
+                            "lat": matching_slot["lat"],
+                            "lng": matching_slot["lng"],
+                            "USE_ENTERPRISE_FIELDS": USE_ENTERPRISE_FIELDS,
+                            "page_size": 5,
+                        })
+                    )
+                search_meal_info.append({
+                    "day": day,
+                    "meal_type": meal_type,
+                    "query": query,
+                    "near_attraction": matching_slot.get("near_attraction", ""),
+                })
 
         # Run all searches concurrently
         search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
@@ -401,7 +450,7 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
                 "search_results": trimmed_results,
             }
             if trip_start:
-                meal_date = trip_start + timedelta(days=m["day"])
+                meal_date = trip_start + timedelta(days=m["day"] - 1)
                 meal_entry["date"] = meal_date.isoformat()
                 meal_entry["day_of_week"] = meal_date.strftime("%A")
 
@@ -419,9 +468,7 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
                 "currency": plan_context.get("currency", "VND"),
                 "adults": plan_context.get("adults", 2),
                 "children": plan_context.get("children", 0),
-                "user_cuisine_preferences": restaurant_ctx.get("user_cuisine_preferences", []),
-                "user_dietary_restrictions": restaurant_ctx.get("user_dietary_restrictions", []),
-                "notes": restaurant_ctx.get("notes", ""),
+                "task": agent_request,
                 "meals": meals_with_results,
             }
 
@@ -438,19 +485,77 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
 
             # Re-inject coordinates from original search results for map rendering
             placeid_to_location = {}
+            placeid_to_result = {}  # full search result lookup for auto-filling alternatives
             for m in meal_search_results:
                 for r in m.get("search_results", []):
                     pid = r.get("place_id")
                     if pid:
                         placeid_to_location[pid] = {"lat": r.get("lat", 0), "lng": r.get("lng", 0)}
+                        placeid_to_result[pid] = r
             
+            # Auto-fill alternatives from remaining search results + inject location
             for meal in selected_meals:
                 pid = meal.get("place_id")
                 if pid and pid in placeid_to_location:
                     loc = placeid_to_location[pid]
                     meal["_location"] = {"coordinates": [loc["lng"], loc["lat"]]}
+                
+                # Auto-fill alternatives from remaining search results for this meal
+                if not meal.get("alternatives"):
+                    meal_day = meal.get("day")
+                    meal_type = meal.get("meal_type")
+                    meal_sr = next(
+                        (m for m in meal_search_results
+                         if m["day"] == meal_day and m["meal_type"] == meal_type),
+                        None
+                    )
+                    if meal_sr:
+                        alts = []
+                        for r in meal_sr.get("search_results", []):
+                            r_pid = r.get("place_id")
+                            if r_pid and r_pid != pid:
+                                alts.append({
+                                    "name": r.get("name", ""),
+                                    "place_id": r_pid,
+                                    "rating": r.get("rating"),
+                                    "user_ratings_total": r.get("user_ratings_total"),
+                                    "price_level": r.get("price_level"),
+                                })
+                            if len(alts) >= 4:
+                                break
+                        meal["alternatives"] = alts
 
-            restaurant_result = {"meals": selected_meals}
+            # --- Phase 3.5: Fetch Rich Data (Images, etc) from DB ---
+            logger.info("🍽️ [RESTAURANT_AGENT] Phase 3.5: Fetching rich DB data...")
+            from src.tools.dotnet_tools import get_place_from_db
+
+            async def _enrich_w_db(item: dict):
+                pid = item.get("place_id")
+                if not pid:
+                    return
+                try:
+                    result = await get_place_from_db.ainvoke({"place_id": pid})
+                    if isinstance(result, dict) and result.get("success"):
+                        item["db_data"] = result.get("data", {})
+                except Exception as e:
+                    logger.error(f"Failed to fetch db_data for restaurant {item.get('name')} (place_id: {pid}): {e}")
+
+            enrich_tasks = []
+            for meal in selected_meals:
+                enrich_tasks.append(_enrich_w_db(meal))  # Always enrich recommended
+                if is_standalone_search:
+                    # Standalone: enrich alternatives too (for rich UI)
+                    for alt in meal.get("alternatives", []):
+                        if isinstance(alt, dict):
+                            enrich_tasks.append(_enrich_w_db(alt))
+
+            if enrich_tasks:
+                await asyncio.gather(*enrich_tasks, return_exceptions=True)
+
+            if not selected_meals:
+                restaurant_result = {"meals": [], "note": "Failed to extract selection"}
+            else:
+                restaurant_result = {"meals": selected_meals}
 
         logger.info(f"   Phase 3: Selected {len(restaurant_result.get('meals', []))} restaurants")
 
@@ -461,6 +566,9 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
     num_meals = len(restaurant_result.get("meals", []))
     logger.info(f"🍽️ [RESTAURANT_AGENT] Completed: {num_meals} meals matched")
     logger.info("=" * 60)
+
+    if "tools" in restaurant_result:
+        restaurant_result.pop("tools", None)
 
     return {
         "agent_outputs": {"restaurant_agent": restaurant_result},

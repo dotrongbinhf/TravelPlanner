@@ -13,7 +13,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from langchain_core.messages import AIMessage, HumanMessage
 
-from src.agents.graph import compiled_graph
+from src.agents import graph as agent_graph
 from src.models.events import AgentEvent, EventType
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,7 @@ router = APIRouter()
 
 # Track which LangGraph node names map to our frontend agent names
 NODE_TO_AGENT = {
+    "intent": "intent",
     "orchestrator": "orchestrator",
     "hotel": "hotel_agent",
     "flight": "flight_agent",
@@ -29,6 +30,7 @@ NODE_TO_AGENT = {
     "restaurant": "restaurant_agent",
     "preparation": "preparation_agent",
     "itinerary": "itinerary_agent",
+    "weather": "weather",
     "synthesize": "synthesize",
 }
 
@@ -41,64 +43,6 @@ async def send_event(websocket: WebSocket, event: AgentEvent):
         logger.error(f"Failed to send WebSocket event: {e}")
 
 
-
-async def _emit_resolved_places(websocket: WebSocket, agent_name: str, agent_data: dict):
-    """Extract resolved places from agent output and emit PLACE_RESOLVED events.
-
-    Supports:
-    - attraction_agent: segments[].attractions[] with placeId + db_data.location
-    - hotel_agent: hotels[] with placeId + location
-    - restaurant_agent: restaurants[] with placeId + location
-    """
-    places = []
-
-    if agent_name == "attraction_agent":
-        for seg in agent_data.get("segments", []):
-            for attr in seg.get("attractions", []):
-                pid = attr.get("placeId")
-                name = attr.get("name", "")
-                if not pid or not name:
-                    continue
-                # _location is set by _apply_to_segments with GeoJSON format
-                location = attr.get("_location") or {}
-                coords = location.get("coordinates", [])
-                if len(coords) >= 2:
-                    places.append({"placeId": pid, "name": name, "lat": coords[1], "lng": coords[0], "agentName": agent_name})
-
-    elif agent_name == "hotel_agent":
-        for seg in agent_data.get("segments", []):
-            pid = seg.get("recommend_hotel_placeId")
-            name = seg.get("recommend_hotel_name", "")
-            if not pid or not name:
-                continue
-            location = seg.get("_location") or {}
-            coords = location.get("coordinates", [])
-            if len(coords) >= 2:
-                places.append({"placeId": pid, "name": name, "lat": coords[1], "lng": coords[0], "agentName": agent_name})
-
-    elif agent_name == "restaurant_agent":
-        for meal in agent_data.get("meals", []):
-            pid = meal.get("place_id")
-            name = meal.get("name", "")
-            if not pid or not name:
-                continue
-            location = meal.get("_location") or {}
-            coords = location.get("coordinates", [])
-            if len(coords) >= 2:
-                places.append({"placeId": pid, "name": name, "lat": coords[1], "lng": coords[0], "agentName": agent_name})
-
-    for place in places:
-        try:
-            await send_event(websocket, AgentEvent(
-                event_type=EventType.PLACE_RESOLVED,
-                agent_name=agent_name,
-                place_data=place,
-            ))
-        except Exception as e:
-            logger.error(f"Failed to emit place_resolved event: {e}")
-
-    if places:
-        logger.info(f"📍 Emitted {len(places)} place_resolved events for {agent_name}")
 
 
 @router.websocket("/ws/agent/{conversation_id}")
@@ -139,18 +83,18 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                 ))
                 continue
 
-            # LangGraph config with MemorySaver thread_id
+            # LangGraph config with PostgresSaver thread_id
             config = {
                 "configurable": {
                     "thread_id": conversation_id,
                 }
             }
 
-            # Check if MemorySaver already has state for this thread
-            # If not (e.g. after server restart), inject history from DB
+            # Check if PostgresSaver has state for this thread
+            # With PostgresSaver, state persists across server restarts
             history_messages = []
             try:
-                existing_state = compiled_graph.get_state(config)
+                existing_state = await agent_graph.compiled_graph.aget_state(config)
                 has_existing = existing_state and existing_state.values and existing_state.values.get("messages")
             except Exception:
                 has_existing = False
@@ -167,7 +111,7 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                     else:
                         history_messages.append(AIMessage(content=content))
             elif has_existing:
-                logger.info(f"✅ MemorySaver has existing state for thread {conversation_id}")
+                logger.info(f"✅ Checkpoint has existing state for thread {conversation_id}")
 
 
             # Deduplicate: if history already ends with same user message, don't add again
@@ -178,19 +122,34 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                 input_messages = history_messages + [HumanMessage(content=user_message)]
 
             # Prepare graph input
-            graph_input = {
-                "conversation_id": conversation_id,
-                "plan_id": plan_id,
-                "messages": input_messages,
-                "pending_tasks": [],
-                "completed_tasks": [],
-                "user_context": {},
-                "agent_outputs": {},
-                "final_response": "",
-                "structured_output": {},
-                "db_commands": [],
-                "metadata": {},
-            }
+            # IMPORTANT: Only include fields that need to be SET or RESET each turn.
+            # Persistent fields (current_plan, user_context, macro_plan, metadata)
+            # are preserved from the PostgresSaver checkpoint automatically.
+            if has_existing:
+                # Checkpoint exists → minimal input, preserve persistent state
+                graph_input = {
+                    "messages": input_messages,
+                    # Reset per-turn output fields (clear_all flag triggers reducer to wipe)
+                    "agent_outputs": {"clear_all": True},
+                    "final_response": "",
+                    "structured_output": {},
+                    "constraint_overrides": {},
+                }
+            else:
+                # First message → provide all fields with defaults
+                graph_input = {
+                    "conversation_id": conversation_id,
+                    "plan_id": plan_id,
+                    "messages": input_messages,
+                    "user_context": {},
+                    "agent_outputs": {},
+                    "current_plan": {},
+                    "constraint_overrides": {},
+                    "macro_plan": {},
+                    "final_response": "",
+                    "structured_output": {},
+                    "metadata": {},
+                }
 
             logger.info(f"🚀 Starting LangGraph workflow for conversation {conversation_id}")
 
@@ -200,10 +159,11 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
             final_response = ""
             streamed_chunks: list[str] = []
             structured_output: dict = {}
-            db_commands: list = []
+            current_plan_snapshot: dict = {}
+            routed_intent: str = ""
 
             try:
-                async for event in compiled_graph.astream_events(
+                async for event in agent_graph.compiled_graph.astream_events(
                     graph_input, config=config, version="v2"
                 ):
                     event_kind = event.get("event", "")
@@ -255,10 +215,15 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                             if struct_out:
                                 structured_output = struct_out
 
-                            # Capture db commands
-                            db_cmds = output.get("db_commands", [])
-                            if db_cmds:
-                                db_commands = db_cmds
+                            # Capture current_plan for suggestions
+                            cp = output.get("current_plan")
+                            if cp:
+                                current_plan_snapshot = cp
+
+                            # Capture routed_intent
+                            ri = output.get("routed_intent")
+                            if ri:
+                                routed_intent = ri
 
                             # Get output summary
                             agent_outputs = output.get("agent_outputs", {})
@@ -269,8 +234,12 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                                         agent_data.get("status",
                                         agent_data.get("search_summary", "")))
 
-                                    # --- Emit per-place PLACE_RESOLVED events ---
-                                    await _emit_resolved_places(websocket, agent_name, agent_data)
+                                    # --- Emit raw Agent Data for Generative UI injection ---
+                                    await send_event(websocket, AgentEvent(
+                                        event_type=EventType.STRUCTURED_DATA,
+                                        agent_name=agent_name,
+                                        structured_data=agent_data,
+                                    ))
 
                         logger.info(f"⏹️  Agent ended: {agent_name}")
                         await send_event(websocket, AgentEvent(
@@ -322,18 +291,21 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                         structured_data=structured_output,
                     ))
 
-                # Send DB commands if available
-                if db_commands:
-                    await send_event(websocket, AgentEvent(
-                        event_type=EventType.DB_COMMANDS,
-                        db_commands=db_commands,
-                    ))
-
                 # Workflow complete
                 logger.info(f"✅ Workflow completed for conversation {conversation_id}")
+
+                # Build suggestions from current_plan
+                suggestions = []
+                if current_plan_snapshot:
+                    suggestions = current_plan_snapshot.get("last_suggestions", [])
+
                 await send_event(websocket, AgentEvent(
                     event_type=EventType.WORKFLOW_COMPLETE,
                     final_response=final_response,
+                    structured_data={
+                        "intent": routed_intent,
+                        "suggestions": suggestions,
+                    } if (routed_intent or suggestions) else None,
                 ))
 
             except Exception as e:

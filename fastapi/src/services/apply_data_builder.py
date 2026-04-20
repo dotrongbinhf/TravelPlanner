@@ -14,9 +14,60 @@ Handles:
 """
 
 import logging
+import re
+import unicodedata
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_name(name: str) -> str:
+    """Normalize a place name for fuzzy matching.
+    
+    Strips parenthetical suffixes, extra whitespace, and normalizes Unicode
+    so that 'Temple of Literature (Văn Miếu)' matches 'Temple of Literature'.
+    """
+    if not name:
+        return ""
+    # Remove parenthetical suffix: "Name (extra)" → "Name"
+    s = re.sub(r'\s*\([^)]*\)\s*$', '', name)
+    # Collapse whitespace
+    s = re.sub(r'\s+', ' ', s).strip()
+    # NFC normalize unicode so diacritics compare consistently
+    s = unicodedata.normalize('NFC', s)
+    return s.lower()
+
+
+def _lookup_place_id(name: str, name_to_place_id: dict[str, str]) -> str:
+    """Look up placeId with fallback strategies.
+    
+    1. Exact lowercase match
+    2. Normalized match (strip parenthetical, normalize unicode)
+    3. Substring containment (stop name contains a known name, or vice versa)
+    """
+    if not name:
+        return ""
+    key = name.lower()
+    
+    # 1. Exact match
+    if key in name_to_place_id:
+        return name_to_place_id[key]
+    
+    # 2. Normalized match
+    norm_key = _normalize_name(name)
+    if norm_key in name_to_place_id:
+        return name_to_place_id[norm_key]
+    
+    # 3. Substring containment: check if stop name contains any known name or vice versa
+    for known_name, pid in name_to_place_id.items():
+        if len(known_name) >= 4 and (known_name in key or key in known_name):
+            return pid
+        # Also try normalized versions
+        norm_known = _normalize_name(known_name)
+        if len(norm_known) >= 4 and (norm_known in norm_key or norm_key in norm_known):
+            return pid
+    
+    return ""
 
 # ── ExpenseCategory mapping ──────────────────────────────────────────────
 # Maps cost_aggregator category keys → .NET ExpenseCategory enum values
@@ -38,15 +89,6 @@ PREP_BUDGET_TYPE_MAP = {
 
 # Roles to SKIP entirely (origin-side airport events)
 SKIP_ROLES = {"outbound_departure", "return_arrival"}
-
-# Group names for expense grouping in the UI
-_CATEGORY_GROUP_NAMES = {
-    "flights": "Flights",
-    "accommodation": "Accommodation",
-    "attractions": "Entrance Fees",
-    "restaurants": "Food & Drinks",
-    "other": "Other Expenses",
-}
 
 
 def _parse_time_minutes(time_str: str) -> int:
@@ -174,6 +216,7 @@ def _build_itinerary_days(
     flight_data = agent_outputs.get("flight_agent", {})
 
     # Build name → placeId lookup from resolved places
+    # Uses both exact lowercase and normalized keys for robust matching
     name_to_place_id: dict[str, str] = {}
     for group_key in ("airports", "hotels", "attractions"):
         for item in resolved_places.get(group_key, []):
@@ -185,8 +228,15 @@ def _build_itinerary_days(
                 if place_id:
                     if original_name:
                         name_to_place_id[original_name.lower()] = place_id
+                        norm = _normalize_name(original_name)
+                        if norm:
+                            name_to_place_id[norm] = place_id
                     if resolved_title:
                         name_to_place_id[resolved_title.lower()] = place_id
+                        norm = _normalize_name(resolved_title)
+                        if norm:
+                            name_to_place_id[norm] = place_id
+    logger.info(f"🔨 [APPLY_DATA] name_to_place_id has {len(name_to_place_id)} entries")
 
     # Build restaurant lookup by (day, meal_type) → {name, place_id, note}
     restaurant_by_slot: dict[tuple[int, str], dict] = {}
@@ -197,7 +247,7 @@ def _build_itinerary_days(
             r_name = meal.get("name", "")
             r_place_id = meal.get("place_id", "")
             r_note = meal.get("note", "")
-            if r_day >= 0 and r_type and r_name:
+            if r_day >= 1 and r_type and r_name:
                 restaurant_by_slot[(r_day, r_type)] = {
                     "name": r_name,
                     "place_id": r_place_id,
@@ -216,7 +266,7 @@ def _build_itinerary_days(
     # Also collect start_day departure times per day for overnight duration calc
     start_day_departures: dict[int, str] = {}  # day_idx → departure time "HH:MM"
     for day_data in all_days:
-        day_idx = day_data.get("day", 0)
+        day_idx = day_data.get("day", 1)
         for stop in day_data.get("stops", []):
             if _has_role(stop, "start_day"):
                 start_day_departures[day_idx] = stop.get("departure", "")
@@ -225,7 +275,7 @@ def _build_itinerary_days(
 
     days = []
     for day_data in all_days:
-        day_idx = day_data.get("day", 0)
+        day_idx = day_data.get("day", 1)
         items = []
 
         for stop in day_data.get("stops", []):
@@ -249,22 +299,31 @@ def _build_itinerary_days(
 
             # ── Outbound arrival (destination airport) ──
             if "outbound_arrival" in roles:
-                # Option A: full flight block
-                # startTime = flight departure at origin, duration = flight time
+                # When flight data exists: show full flight block
+                # When no flight data (draft): use itinerary arrival/departure times
                 flight_dep = outbound_flight.get("departure_time", "") if outbound_flight else ""
-                flight_arr = outbound_flight.get("arrival_time", "") if outbound_flight else arrival
+                flight_arr = outbound_flight.get("arrival_time", "") if outbound_flight else ""
 
-                start_min = _parse_time_minutes(flight_dep) if flight_dep else _parse_time_minutes(arrival)
-                end_min = _parse_time_minutes(flight_arr) if flight_arr else _parse_time_minutes(arrival)
-                duration_minutes = max(0, end_min - start_min) if end_min > start_min else 0
+                if flight_dep and flight_arr:
+                    # Full flight data: startTime = origin departure, duration = flight time
+                    effective_start = flight_dep
+                    start_min = _parse_time_minutes(flight_dep)
+                    end_min = _parse_time_minutes(flight_arr)
+                    duration_minutes = max(0, end_min - start_min) if end_min > start_min else 120
+                else:
+                    # Draft mode: use itinerary's arrival/departure directly
+                    effective_start = arrival
+                    start_min = _parse_time_minutes(arrival)
+                    end_min = _parse_time_minutes(departure)
+                    duration_minutes = max(0, end_min - start_min) if end_min > start_min else 60
 
-                place_id = name_to_place_id.get(name.lower(), "")
+                place_id = _lookup_place_id(name, name_to_place_id)
                 items.append({
                     "placeId": place_id or None,
                     "placeName": name,
                     "role": role,
                     "roles": sorted(roles),
-                    "startTime": flight_dep or arrival,
+                    "startTime": effective_start,
                     "duration": duration_minutes if duration_minutes > 0 else 60,
                     "note": _generate_note(stop),
                 })
@@ -272,20 +331,25 @@ def _build_itinerary_days(
 
             # ── Return departure (destination airport) ──
             if "return_departure" in roles:
-                # startTime = arrival at airport, duration = until flight departure
-                flight_dep = return_flight.get("departure_time", "") if return_flight else departure
+                # When flight data exists: include airport wait + flight
+                # When no flight data (draft): use itinerary arrival/departure
+                flight_dep = return_flight.get("departure_time", "") if return_flight else ""
 
+                effective_start = arrival
                 start_min = _parse_time_minutes(arrival)
-                end_min = _parse_time_minutes(flight_dep) if flight_dep else _parse_time_minutes(departure)
-                duration_minutes = max(0, end_min - start_min) if end_min > start_min else 0
+                if flight_dep:
+                    end_min = _parse_time_minutes(flight_dep)
+                else:
+                    end_min = _parse_time_minutes(departure)
+                duration_minutes = max(0, end_min - start_min) if end_min > start_min else 60
 
-                place_id = name_to_place_id.get(name.lower(), "")
+                place_id = _lookup_place_id(name, name_to_place_id)
                 items.append({
                     "placeId": place_id or None,
                     "placeName": name,
                     "role": role,
                     "roles": sorted(roles),
-                    "startTime": arrival,
+                    "startTime": effective_start,
                     "duration": duration_minutes if duration_minutes > 0 else 60,
                     "note": _generate_note(stop),
                 })
@@ -309,7 +373,7 @@ def _build_itinerary_days(
                     # Last night or no next day info — default 10h
                     duration_minutes = 10 * 60
 
-                place_id = name_to_place_id.get(name.lower(), "")
+                place_id = _lookup_place_id(name, name_to_place_id)
                 items.append({
                     "placeId": place_id or None,
                     "placeName": name,
@@ -346,11 +410,14 @@ def _build_itinerary_days(
                     if matched_restaurant.get("note"):
                         final_note = matched_restaurant.get("note")
             elif "attraction" in roles:
-                place_id = name_to_place_id.get(name.lower(), "")
+                place_id = _lookup_place_id(name, name_to_place_id)
             else:
                 # Hotel roles (check_in, check_out, luggage_drop, luggage_pickup, rest, start_day)
                 # or generic activities
-                place_id = name_to_place_id.get(name.lower(), "")
+                place_id = _lookup_place_id(name, name_to_place_id)
+
+            if not place_id and roles - SKIP_ROLES - {"generic", "start_day"}:
+                logger.warning(f"🔨 [APPLY_DATA] ⚠️ No placeId for stop '{name}' (roles={roles}, day={day_idx})")
 
             items.append({
                 "placeId": place_id or None,
@@ -363,8 +430,8 @@ def _build_itinerary_days(
             })
 
         days.append({
-            "order": day_idx,
-            "title": day_data.get("title") or f"Day {day_idx + 1}",
+            "order": day_idx - 1,  # .NET API expects 0-based order
+            "title": day_data.get("title") or f"Day {day_idx}",
             "items": items,
         })
 
@@ -413,10 +480,6 @@ def _build_expense_items(
                 "name": display_name,
                 "amount": amount,
             }
-            # Only include groupName if the cost_aggregator set it (for list-type items)
-            item_group = cost_item.get("groupName")
-            if item_group:
-                expense_item["groupName"] = item_group
             items.append(expense_item)
 
     return items
@@ -502,3 +565,85 @@ def build_apply_data(
     )
 
     return apply_data
+
+
+def build_sectioned_apply_data(
+    agent_outputs: dict[str, Any],
+    plan_context: dict[str, Any],
+    aggregated_costs: dict[str, Any] | None = None,
+    changed_sections: set[str] | None = None,
+) -> dict[str, Any]:
+    """Build sectioned apply_data with per-section is_apply flags.
+
+    This format supports partial updates — when modifying only the itinerary,
+    only that section has is_apply=true. The full snapshot is still included
+    for version control and rollbacks.
+
+    Args:
+        agent_outputs: Combined agent outputs from the pipeline
+        plan_context: Plan metadata (dates, destination, currency, etc.)
+        aggregated_costs: Cost aggregation result (optional)
+        changed_sections: Set of section names that were changed this turn.
+                          If None, all sections are marked as apply.
+                          Valid names: "itinerary", "budget", "packing", "notes"
+
+    Returns:
+        {
+            "plan_context": { "startTime": "...", "endTime": "...", "currencyCode": "VND" },
+            "sections": {
+                "itinerary": { "is_apply": true, "data": [...] },
+                "budget":    { "is_apply": false, "data": [...] },
+                "packing":   { "is_apply": false, "data": [...] },
+                "notes":     { "is_apply": false, "data": [...] }
+            }
+        }
+    """
+    logger.info("🔨 [APPLY_DATA_BUILDER] Building sectioned apply_data...")
+
+    # If no changed_sections specified, all sections are applied
+    if changed_sections is None:
+        changed_sections = {"itinerary", "budget", "packing", "notes"}
+
+    itinerary_days = _build_itinerary_days(agent_outputs, plan_context)
+    expense_items = _build_expense_items(agent_outputs, plan_context, aggregated_costs)
+    packing_lists = _build_packing_lists(agent_outputs)
+    notes = _build_notes(agent_outputs)
+
+    sectioned = {
+        "plan_context": {
+            "startTime": plan_context.get("start_date"),
+            "endTime": plan_context.get("end_date"),
+            "currencyCode": plan_context.get("currency", "VND"),
+        },
+        "sections": {
+            "itinerary": {
+                "is_apply": "itinerary" in changed_sections,
+                "data": itinerary_days,
+            },
+            "budget": {
+                "is_apply": "budget" in changed_sections,
+                "data": expense_items,
+            },
+            "packing": {
+                "is_apply": "packing" in changed_sections,
+                "data": packing_lists,
+            },
+            "notes": {
+                "is_apply": "notes" in changed_sections,
+                "data": notes,
+            },
+        },
+    }
+
+    applied = [s for s in changed_sections if s in sectioned["sections"]]
+    logger.info(
+        f"🔨 [APPLY_DATA_BUILDER] Sectioned: "
+        f"applied={applied}, "
+        f"{len(itinerary_days)} days, "
+        f"{len(expense_items)} expenses, "
+        f"{len(packing_lists)} packing, "
+        f"{len(notes)} notes"
+    )
+
+    return sectioned
+

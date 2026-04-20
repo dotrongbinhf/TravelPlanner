@@ -5,7 +5,7 @@ Provides the LangGraph StateGraph, agent nodes, and shared state definition.
 """
 
 from src.agents.state import GraphState
-from src.agents.graph import compiled_graph
+from src.agents.graph import init_graph, compiled_graph
 from src.agents.nodes import (
     orchestrator_nonVRP_node,
     hotel_agent_node,

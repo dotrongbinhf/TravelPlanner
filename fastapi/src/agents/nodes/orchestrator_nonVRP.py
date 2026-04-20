@@ -4,7 +4,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from src.agents.state import GraphState
-from src.agents.nodes.utils import _extract_json, _get_latest_user_message, _get_conversation_context, _run_agent_with_tools
+from src.agents.nodes.utils import _extract_json, _get_latest_user_message, _run_agent_with_tools
 from src.tools.search_tools import tavily_search
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 llm_orchestrator = (
     ChatOpenAI(
-        model="google/gemini-2.5-flash",
+        model=settings.MODEL_NAME,
         api_key=settings.VERCEL_AI_GATEWAY_API_KEY,
         base_url="https://ai-gateway.vercel.sh/v1",
         temperature=0.3,
@@ -26,20 +26,20 @@ llm_orchestrator = (
     if settings.USE_VERCEL_AI_GATEWAY
     # if USE_VERCEL_AI_GATEWAY
     else ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite-preview",
-        google_api_key=settings.GOOGLE_GEMINI_API_KEY_ORCHESTRATOR,
+        model=settings.MODEL_NAME,
+        google_api_key=settings.GOOGLE_GEMINI_API_KEY_ORCHESTRATOR or settings.GOOGLE_GEMINI_API_KEY,
         temperature=0.3,
         streaming=False,
     )
 )
 
-ORCHESTRATOR_SYSTEM = """You are the Orchestrator Agent for a multi-agent travel planning system.
+ORCHESTRATOR_SYSTEM = """You are the Macro Planning Agent for a multi-agent travel planning system.
 
-Your PRIMARY job is to:
-1. Understand the user's travel request
-2. Ask clarification if critical info is missing
-3. Create a DETAILED mobility plan that covers the entire trip
-4. Create a structured plan with SPECIFIC CONTEXT for each specialist agent
+Your ONLY job is to:
+1. Create a DETAILED mobility plan that covers the entire trip
+2. Create a structured plan with SPECIFIC CONTEXT for each specialist agent
+
+Note: Intent detection and clarification are handled BEFORE you. You will ONLY be called when the user wants to create or modify a plan. The user's request has already been validated to have sufficient information.
 
 ## Web Search
 You have access to the `tavily_search` tool. BEFORE building the `mobility_plan` for unfamiliar destinations, complex multi-region trips, or specific multi-day routes (like "x days Ha Giang loop"), use the `tavily_search` tool to gather high-level itinerary and routing ideas. Use this research ONLY to inform the `mobility_plan.segments` structure (which areas on which days) and logistics, not for fine-grained daily scheduling.
@@ -50,99 +50,95 @@ CRITICAL: Your response must be one and ONLY one valid JSON object. No text befo
 
 ```json
 {
-  "intent": "plan_creation | plan_modification | greeting | clarification_needed | general",
-  "direct_response": "For greetings, clarification, general queries. Otherwise null.",
-
-  "plan_context": {
-    "departure": "Ho Chi Minh City",
-    "destination": "Hanoi",
-    "start_date": "2026-03-17",
-    "end_date": "2026-03-20",
-    "num_days": 4,
-    "adults": 2,
-    "children": 0,
-    "infants": 0,
-    "children_ages": "5,8 or null",
-    "interest": "history, culture",
-    "pace": "relaxed | moderate | packed",
-    "budget_level": "budget | moderate | luxury",
-    "currency": "VND",
-    "language": "vi",
-    "local_transportation": "car | walking | motobike | taxi",
-
-    "mobility_plan": {
-      "overview": "[DETAILED high-level plan — see rules below]",
-      "departure_logistics": {
-        "mode": "coach",
-        "hub_name": "Bến xe Hà Giang",
-        "start_time": "22:00 -1",
-        "arrival_time": "05:00",
-        "estimated_cost": 500000,
-        "estimated_cost_note": "250,000 VND/person × 2 người",
-        "note": "Coach đêm từ Hà Nội 22:00, đến HG 05:00. Nghỉ ngơi đến 07:00."
-      },
-      "return_logistics": {
-        "mode": "coach",
-        "hub_name": "Bến xe Hà Giang",
-        "start_time": "14:00",
-        "arrival_time": "21:00",
-        "estimated_cost": 500000,
-        "estimated_cost_note": "250,000 VND/person × 2 người",
-        "note": "Coach về Hà Nội, khởi hành 14:00, tới lúc 21:00."
-      },
-      "segments": [
-        {
-          "segment_id": 0,
-          "segment_name": "Hà Giang → Quản Bạ → Yên Minh",
-          "attraction_days": [0],
-          "hotel_nights": [0],
-          "hotel_search_area": "Yên Minh town center",
-          "attraction_search_area": "Dọc tuyến Hà Giang city → Quản Bạ → Yên Minh"
-        }
-      ]
-    }
+  "mobility_plan": {
+    "overview": "[DETAILED high-level plan — see rules below]",
+    "departure_logistics": {
+      "mode": "coach",
+      "hub_name": "Ha Giang Bus Station",
+      "start_time": "22:00 -1",
+      "arrival_time": "05:00",
+      "estimated_cost": 500000,
+      "estimated_cost_note": "250,000 VND/person × 2 people",
+      "note": "Overnight coach from Hanoi 22:00, arrives HG 05:00. Rest until 07:00."
+    },
+    "return_logistics": {
+      "mode": "coach",
+      "hub_name": "Ha Giang Bus Station",
+      "start_time": "14:00",
+      "arrival_time": "21:00",
+      "estimated_cost": 500000,
+      "estimated_cost_note": "250,000 VND/person × 2 people",
+      "note": "Coach back to Hanoi, departs 14:00, arrives 21:00."
+    },
+    "segments": [
+      {
+        "segment_id": 0,
+        "segment_name": "Ha Giang → Quan Ba → Yen Minh",
+        "attraction_days": [0],
+        "hotel_nights": [0],
+        "hotel_search_area": "Yen Minh town center",
+        "attraction_search_area": "Along the route Ha Giang city → Quan Ba → Yen Minh"
+      }
+    ]
   },
 
-  "tasks": {
-    "attraction": {
-      "user_attractions_preferences": {
-        "interest": ["history", "cultural"],
-        "must_visit": ["Ho Chi Minh Mausoleum"],
-        "to_avoid": [],
-        "notes": "Others user's request about attractions"
-      }
-    },
+  "context_fill": {
+    "pace": "moderate",
+    "budget_level": "moderate",
+    "currency": "VND",
+    "language": "vi",
+    "local_transportation": "car"
+  },
 
-    "flight": {
-      "infants_in_seat": 0,
-      "infants_on_lap": 0,
-      "user_flight_preferences": {
-        "type": "round_trip | one_way",
-        "directions": "both | outbound_only | return_only",
-        "travel_class": "economy | premium_economy | business | first",
-        "max_price": 2000000, # null if user don't specify
-        "outbound_times": "arrive 8:00 AM - 10:00 AM at destination",
-        "return_times": "depart 3:00 PM - 7:00 PM from destination",
-        "note": "Others user's request about flight"
-      }
-    },
+  "task_list": ["attraction", "hotel", "flight"],
 
-    "hotel": {
-      "user_hotel_preferences": {
-        "min_price": 800000, # reasonable if user don't specify
-        "max_price": 1500000, # reasonable if user don't specify
-        "notes": "Others user's request about hotel"
-      }
-    },
-
-    "restaurant": {
-      "user_cuisine_preferences": ["Vietnamese restaurant", "local street food"],
-      "user_dietary_restrictions": [],
-      "notes": "Focus on authentic local cuisine."
-    }
+  "agent_requests": {
+    "attraction": "Search tourist attractions. User interests: history, cultural. Must visit: Ho Chi Minh Mausoleum.",
+    "flight": "Search flights. Type: one_way, directions: both. Prefer arrive 8:00 AM - 10:00 AM at destination. Prefer depart 3:00 PM - 7:00 PM from destination. 0 infants in seat, 0 on lap. Economy class.",
+    "hotel": "Search hotels. children_ages: 8. User prefers near the Old Quarter area."
   }
 }
 ```
+
+## agent_requests — CRITICAL
+The `agent_requests` dict describes the TASK for each specialist agent.
+Each agent also receives `plan_context` and `mobility_plan` separately — do NOT repeat info already in those (departure, destination, dates, num_days, adults, children, budget_level, currency, pace, etc.).
+
+Only include information SPECIFIC to the task that is NOT already available in plan_context.
+If the user did NOT mention a specific preference, do NOT invent one — the agent will use reasonable defaults.
+
+### For attraction:
+- Start with "Search tourist attractions."
+- User's interests, must_visit places, places to avoid (ONLY if user mentioned them, no auto-generated their places to visit/avoid)
+- Any special user notes about attractions
+
+### For flight:
+- Start with "Search flights."
+- Type: one_way or round_trip. Directions: both, outbound_only, return_only. Default to type "one_way", directions "both" for plan_creation.
+- Preferred time windows (outbound_times, return_times) — from user, or generate REASONABLE defaults based on trip context. Format: "Prefer arrive X - Y at destination" / "Prefer depart X - Y from destination".
+- infants_in_seat and infants_on_lap (REQUIRED when infants > 0, sum = infants). Include even when 0.
+- Travel class (default economy)
+- Any user notes about flight (e.g., "direct flights only", "prefer VietJet")
+
+### For hotel:
+- Start with "Search hotels."
+- children_ages: comma-separated ages for ALL children + infants (REQUIRED when children + infants > 0)
+- Price range per night ONLY if user specified (e.g., "800,000-1,500,000 VND/night")
+- Any user preferences/notes about hotel (e.g., "near the beach", "prefer 4-star")
+
+### For restaurant:
+- Start with "Search restaurants."
+- Cuisine preferences and dietary restrictions (ONLY if user mentioned them)
+- Any special notes about food
+
+## task_list Rules
+- MUST include "attraction"
+- ONLY include "flight", "hotel", and "restaurant" IF the intent is `full_plan` (or if explicitly requested in `modify_plan`) AND they are applicable:
+  - Include "flight" ONLY if intent is full_plan AND departure_logistics.mode is "flight" AND user needs flight.
+  - Include "hotel" ONLY if intent is full_plan AND user needs hotel.
+  - Include "restaurant" ONLY if intent is full_plan AND user needs restaurant.
+- If intent is `draft_plan`: `task_list` MUST ONLY contain `["attraction"]`.
+- Omit agents that are not needed
 
 ## Mobility Plan — CRITICAL
 
@@ -156,22 +152,47 @@ MUST be a DETAILED high-level plan covering the ENTIRE trip, written as a compre
 
 ### departure_logistics & return_logistics
 
-**When mode is "flight":**
+**When mode is "flight" (FULL plan — Flight Agent will handle):**
 ```json
 "departure_logistics": { "mode": "flight" },
 "return_logistics": { "mode": "flight" }
 ```
 Flight Agent provides ALL flight data. No other fields needed.
 
+**When mode is "flight" (DRAFT plan — YOU estimate):**
+When intent is "draft_plan", you MUST estimate flight timing yourself:
+```json
+"departure_logistics": {
+  "mode": "flight",
+  "estimated": true,
+  "hub_name": "Da Nang Airport (DAD)",
+  "start_time": "07:00",
+  "arrival_time": "08:20",
+  "note": "Estimated flight HCM → Da Nang, ~1h20"
+},
+"return_logistics": {
+  "mode": "flight",
+  "estimated": true,
+  "hub_name": "Da Nang Airport (DAD)",
+  "start_time": "19:00",
+  "arrival_time": "20:20",
+  "note": "Estimated flight Da Nang → HCM, ~1h20"
+}
+```
+- `hub_name`: The airport name at the DESTINATION (use your knowledge of Vietnamese/international airports)
+- `start_time`: Estimated departure time from origin
+- `arrival_time`: Estimated arrival time at destination
+- `estimated: true`: Flag so downstream agents know this is an estimate, NOT real flight data
+
 **When mode is "coach", "train":**
 ```json
 "departure_logistics": {
   "mode": "coach",
-  "hub_name": "Bến xe Hà Giang",
+  "hub_name": "Ha Giang Bus Station",
   "start_time": "22:00 -1",
   "arrival_time": "05:00",
   "estimated_cost": 500000,
-  "estimated_cost_note":  "250,000 VND/person × 2 người",
+  "estimated_cost_note":  "250,000 VND/person × 2 people",
   "note": "Context about arrival"
 }
 ```
@@ -190,7 +211,7 @@ estimated_cost MUST be a numeric total (integer) for ALL travelers, with estimat
   "arrival_time": "08:00",
   "estimated_cost": 150000,
   "estimated_cost_note": "tolls + fuel ~150,000 VND",
-  "note": "Self-drive from Bắc Ninh"
+  "note": "Self-drive from Bac Ninh"
 }
 ```
 hub_name is null for self-drive (no fixed hub). Itinerary starts at first attraction or hotel.
@@ -224,47 +245,20 @@ Do NOT proactively suggest day trips to other regions unless the user asks.
 ## Rules
 
 - CRITICAL: Response MUST be one valid JSON object. No text before or after.
-- If user sends a greeting or simple question: set intent="greeting", provide "direct_response", set "tasks" to null.
-- If user asks a GENERAL question: set intent="general", provide answer in "direct_response", set "tasks" to null.
-- If critical info is missing: set intent="clarification_needed", ask in "direct_response", set "tasks" to null.
-  - **ONLY these fields are truly required** (ask user if missing): `destination`, `start_date`, `end_date`
-  - `adults` defaults to 1 if not specified. `children` and `infants` default to 0.
-  - **ALL other fields should be auto-filled with sensible defaults** — do NOT ask the user:
-    - `pace`: default "moderate"
-    - `budget_level`: default "moderate"
-    - `local_transportation`: choose the most reasonable mode
-    - `departure_logistics.mode`: choose the most reasonable mode
-    - `currency`: infer from user's message language
-    - `language`: infer from user's message language
-  - Only set null for fields the user explicitly left empty or that are irrelevant.
-
-- For plan_creation: tasks.attraction, tasks.hotel, tasks.restaurant MUST be populated.
-  - tasks.flight is null if departure_logistics.mode is NOT "flight".
-  - tasks.hotel is null if user doesn't need hotel (local trip, no overnight).
-- For plan_modification: only populate task sections that need to change.
-
-- Be smart about inferring: "family with 4 people with 2 children" = 2 adults + 2 children.
-- children_ages: comma-separated string of ALL children AND infant ages. REQUIRED when tasks.hotel is needed and (children + infants) > 0.
-- When infants > 0 AND tasks.flight is needed: MUST specify infants_in_seat and infants_on_lap (sum = infants).
+- DO NOT generate plan_context fields (departure, destination, dates, travelers etc.) — those are already set by the Intent Agent.
+  You only generate: `mobility_plan`, `context_fill`, `task_list`, and `agent_requests`.
+- `context_fill` is for fields the user hasn't explicitly mentioned. Fill sensible defaults:
+   - `pace`: default "moderate"
+   - `budget_level`: default "moderate"
+   - `local_transportation`: choose the most reasonable mode
+   - `currency`: infer from user's message language
+   - `language`: infer from user's message language
+- Only set null for fields that are irrelevant.
 
 - Attraction preferences MUST NOT include food/cuisine-related interests.
-
-## Flight Time Preferences — AUTO-GENERATE
-- Provide `outbound_times` and `return_times` in user_flight_preferences.
-- **outbound_times**: "arrive [start] - [end] at destination" — determines when trip starts
-- **return_times**: "depart [start] - [end] from destination" — determines when last day ends
-- If user didn't specify, generate REASONABLE defaults based on trip context.
-- When type is "one_way": provide BOTH outbound_times and return_times.
-
-## Flight Directions Rules
-- type: "one_way" (default) or "round_trip"
-- directions: "both" (default), "outbound_only", or "return_only"
-- For plan_creation: you MUST default to `type`: "one_way" and `directions`: "both" to search for two separate one-way tickets (often cheaper/more flexible).
-- When directions is "outbound_only": return_times = null
-- When directions is "return_only": outbound_times = null
 """
 
-async def _resolve_non_flight_hubs(plan: dict) -> dict:
+async def _resolve_non_flight_hubs(plan: dict, state_plan_context: dict = None) -> dict:
     """Resolve non-flight transport hubs using LLM-verified pattern.
 
     When mode is coach/train, hub_name is an LLM-generated name (e.g., "Bến xe Hà Giang").
@@ -272,7 +266,7 @@ async def _resolve_non_flight_hubs(plan: dict) -> dict:
 
     Modifies plan in-place, adding hub_placeId to logistics.
     """
-    mobility_plan = plan.get("plan_context", {}).get("mobility_plan") or {}
+    mobility_plan = plan.get("mobility_plan") or {}
     dep_log = mobility_plan.get("departure_logistics") or {}
     ret_log = mobility_plan.get("return_logistics") or {}
     mode = dep_log.get("mode", "")
@@ -281,7 +275,7 @@ async def _resolve_non_flight_hubs(plan: dict) -> dict:
     if mode in ("flight", "") or not mode:
         return plan
 
-    destination = plan.get("plan_context", {}).get("destination", "")
+    destination = state_plan_context.get("destination", "") if state_plan_context else ""
     hubs_to_resolve = []
 
     dep_hub = dep_log.get("hub_name")
@@ -336,23 +330,83 @@ async def _resolve_non_flight_hubs(plan: dict) -> dict:
 
 
 async def orchestrator_nonVRP_node(state: GraphState) -> dict[str, Any]:
-    """Orchestrator (nonVRP) — Parses user request into structured per-agent JSON.
+    """Orchestrator (Macro Planning) — Parses user request into structured per-agent JSON.
     Phase 1: LLM generates plan with mobility_plan.
-    Phase 2: Resolve non-flight transport hubs (LLM-verified)."""
+    Phase 2: Resolve non-flight transport hubs (LLM-verified).
+
+    Reads intent from Intent Agent to determine draft vs full mode."""
     logger.info("=" * 60)
     logger.info("🧠 [ORCHESTRATOR_nonVRP] Node entered")
 
     user_message = _get_latest_user_message(state)
     user_context = state.get("user_context", {})
+    routed_intent = state.get("routed_intent", "draft_plan")
 
     logger.info(f"   User message: {user_message[:100]}")
+    logger.info(f"   Routed intent from Intent Agent: {routed_intent}")
 
     try:
-        llm_messages = [SystemMessage(content=ORCHESTRATOR_SYSTEM)]
-        conv_context = _get_conversation_context(state)
-        llm_messages.extend(conv_context)
-        if not any(isinstance(m, HumanMessage) for m in llm_messages):
-            llm_messages.append(HumanMessage(content=user_message))
+        # Build LLM messages with draft/full/modify hint
+        system_content = ORCHESTRATOR_SYSTEM
+        if routed_intent == "draft_plan":
+            system_content += """
+
+## DRAFT MODE ACTIVE
+You are creating a DRAFT plan. For departure_logistics/return_logistics:
+- If mode is "flight": you MUST provide estimated timing (hub_name, start_time, arrival_time, estimated: true).
+  Flight Agent will NOT run — your estimates will be used directly.
+- For hotel: provide hotel_search_area in segments as usual (Hotel Agent will NOT run).
+- For tasks: you MUST still provide attraction and restaurant context.
+  Flight and hotel task sections can be null (agents won't run).
+"""
+        elif routed_intent == "modify_plan":
+            system_content += """
+
+## MODIFY MODE ACTIVE
+You are MODIFYING an existing plan. The existing plan context is provided below.
+- Incorporate the user's requested changes into the plan.
+- Keep unchanged sections as-is — only modify what the user asked to change.
+- If the user changed dates/travelers, update ALL affected sections accordingly.
+- Re-generate the full plan structure with the modifications applied.
+"""
+
+        # ── Context from Intent Agent (replaces conversation history) ──
+        current_plan = state.get("current_plan", {})
+        existing_plan_ctx = current_plan.get("plan_context", {})
+        last_intent = current_plan.get("last_intent_info", state.get("last_intent", {}))
+        user_request_rewrite = last_intent.get("user_request_rewrite", "")
+        
+        # Build prompt messages
+        llm_messages = [SystemMessage(content=system_content)]
+        if user_request_rewrite:
+            llm_messages.append(HumanMessage(
+                content=f"Current user request: {user_request_rewrite}"
+            ))
+
+        # Inject existing plan context if available
+        if existing_plan_ctx:
+            llm_messages.append(SystemMessage(
+                content=f"Existing trip context (from previous turns):\n{json.dumps(existing_plan_ctx, indent=2, ensure_ascii=False)}"
+            ))
+
+        # Inject constraint overrides (user-provided flight/hotel times)
+        constraint_overrides = state.get("constraint_overrides", {})
+        if constraint_overrides:
+            override_msg = (
+                "## User-Provided Time Constraints (MUST USE)\n"
+                "The user has explicitly specified these times. You MUST use them:\n"
+                f"{json.dumps(constraint_overrides, indent=2, ensure_ascii=False)}\n\n"
+                "Rules:\n"
+                "- If outbound_departure_time/outbound_arrival_time provided → use in departure_logistics (start_time/arrival_time)\n"
+                "- If return_departure_time provided → use in return_logistics (start_time) and base deadline on it\n"
+                "- If hotels overrides provided → use the specified check_in_time/check_out_time for those nights\n"
+                "- For flight task: use these times in outbound_times/return_times preferences\n"
+            )
+            llm_messages.append(SystemMessage(content=override_msg))
+            logger.info(f"   🔧 Injected constraint_overrides into Orchestrator: {constraint_overrides}")
+
+        # Only latest user message (not full history)
+        llm_messages.append(HumanMessage(content=user_message))
 
         # Phase 1: LLM generates plan, potentially using tavily_search
         result, tool_logs = await _run_agent_with_tools(
@@ -365,55 +419,37 @@ async def orchestrator_nonVRP_node(state: GraphState) -> dict[str, Any]:
         
         output = _extract_json(result.content)
 
-        intent = output.get("intent", "greeting")
-        direct_response = output.get("direct_response")
+        # Extract mobility_plan, context_fill, and agent_requests from LLM output
+        mobility_plan = output.get("mobility_plan", {})
+        context_fill = output.get("context_fill", {})
+        agent_requests = output.get("agent_requests", {}) or {}
+        task_list = output.get("task_list", []) or []
 
-        if intent in ("greeting", "clarification_needed", "general") and direct_response:
-            logger.info(f"   💬 Direct response for {intent}: {direct_response[:50]}...")
-            return {
-                "pending_tasks": [],
-                "completed_tasks": [],
-                "user_context": user_context,
-                "orchestrator_plan": {"intent": intent, "tasks": []},
-                "final_response": direct_response,
-                "agent_outputs": {"orchestrator": {"intent": intent, "response": direct_response, "tools": tool_logs}},
-                "messages": [AIMessage(content=direct_response)],
-            }
+        # Fallback: if LLM didn't output task_list, infer from agent_requests keys
+        if not task_list and agent_requests:
+            task_list = list(agent_requests.keys())
 
-        # Extract plan context and per-agent task sections
-        plan_context = output.get("plan_context", {})
-        task_sections = output.get("tasks", {}) or {}
+        # Merge context_fill into current_plan.plan_context (only fill missing fields)
+        current_plan = state.get("current_plan", {})
+        plan_ctx = current_plan.get("plan_context", {})
+        for key, value in context_fill.items():
+            if value is not None and not plan_ctx.get(key):
+                plan_ctx[key] = value
+        current_plan["plan_context"] = plan_ctx
 
-        attraction_ctx = task_sections.get("attraction")
-        flight_ctx = task_sections.get("flight")
-        hotel_ctx = task_sections.get("hotel")
-        restaurant_ctx = task_sections.get("restaurant")
+        logger.info(f"   Routed intent: {routed_intent}, Tasks: {task_list}")
+        logger.info(f"   Agent requests: {list(agent_requests.keys())}")
 
-        # Determine which tasks to run
-        task_list = []
-        if attraction_ctx:
-            task_list.append("attraction")
-        if flight_ctx:
-            task_list.append("flight")
-        if hotel_ctx:
-            task_list.append("hotel")
-        if restaurant_ctx:
-            task_list.append("restaurant")
-
-        logger.info(f"   Intent: {intent}, Tasks: {task_list}")
-
-        orchestrator_plan = {
-            "intent": intent,
-            "tasks": task_list,
-            "plan_context": plan_context,
-            "attraction": attraction_ctx,
-            "flight": flight_ctx,
-            "hotel": hotel_ctx,
-            "restaurant": restaurant_ctx,
+        macro_plan = {
+            "task_list": task_list,
+            "mobility_plan": mobility_plan,
+            "agent_requests": agent_requests,
         }
 
-        # Phase 2: Resolve non-flight transport hubs
-        orchestrator_plan = await _resolve_non_flight_hubs(orchestrator_plan)
+        # Phase 2: Resolve non-flight transport hubs (skip for draft estimated flights)
+        dep_log = (mobility_plan.get("departure_logistics") or {})
+        if not dep_log.get("estimated"):
+            macro_plan = await _resolve_non_flight_hubs(macro_plan, plan_ctx)
 
         logger.info(f"   🚀 Plan created: {task_list}")
 
@@ -421,19 +457,25 @@ async def orchestrator_nonVRP_node(state: GraphState) -> dict[str, Any]:
             "pending_tasks": task_list,
             "completed_tasks": [],
             "user_context": user_context,
-            "orchestrator_plan": orchestrator_plan,
-            "agent_outputs": {"orchestrator": {"intent": intent, "tasks": task_list}},
+            "macro_plan": macro_plan,
+            "current_plan": current_plan,
+            "agent_outputs": {"orchestrator": {"intent": routed_intent, "tasks": task_list}},
             "messages": [AIMessage(content=f"[Orchestrator] Plan created: {', '.join(task_list)} agents will execute...")],
         }
 
     except Exception as e:
         logger.error(f"   ❌ Orchestrator error: {e}", exc_info=True)
+        current_plan = state.get("current_plan", {})
+        plan_context = current_plan.get("plan_context", {})
+        language = plan_context.get("language", "en")
+        fallback = "Đã xảy ra lỗi khi phân tích chuyến đi. Vui lòng thử lại." if language == "vi" else "I'm sorry, I encountered an error. Could you try rephrasing your request?"
         return {
             "pending_tasks": [],
             "completed_tasks": [],
             "user_context": user_context,
-            "orchestrator_plan": {"intent": "error", "tasks": []},
+            "macro_plan": {"task_list": []},
             "agent_outputs": {"orchestrator": {"error": str(e)}},
-            "messages": [AIMessage(content="I'm sorry, I encountered an error. Could you try rephrasing your request?")],
-            "final_response": "I'm sorry, I encountered an error. Could you try rephrasing your request?",
+            "messages": [AIMessage(content=fallback)],
+            "final_response": fallback,
         }
+

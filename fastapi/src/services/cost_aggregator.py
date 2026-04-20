@@ -42,6 +42,7 @@ def _find_attraction_data(
 def aggregate_all_costs(
     agent_outputs: dict[str, Any],
     plan_context: dict[str, Any],
+    mobility_plan: dict[str, Any] = None,
 ) -> dict[str, Any]:
     """Aggregate costs from all agent outputs into a unified breakdown.
     Args:
@@ -99,6 +100,11 @@ def aggregate_all_costs(
         for seg in hotel_data.get("segments", []):
             name = seg.get("recommend_hotel_name", "Hotel")
             total_rate = seg.get("totalRate", 0)
+            # Ensure total_rate is numeric (it might be a string like "$120" or "1,200,000 VND")
+            if isinstance(total_rate, str):
+                import re
+                digits = re.sub(r"[^\d.]", "", total_rate)
+                total_rate = float(digits) if digits else 0
             ci = seg.get("check_in", "")
             co = seg.get("check_out", "")
             seg_name = seg.get("segment_name", "")
@@ -121,7 +127,6 @@ def aggregate_all_costs(
     # ── 3. Attractions (only scheduled ones) ─────────────────────────
     itinerary_data = agent_outputs.get("itinerary_agent", {})
     attraction_data = agent_outputs.get("attraction_agent", {})
-    attraction_items = []
     attraction_subtotal = 0
     if itinerary_data and attraction_data:
         scheduled = _get_scheduled_attractions(itinerary_data)
@@ -132,71 +137,50 @@ def aggregate_all_costs(
                 continue
             # Main attraction fee
             fee = attr_info.get("estimated_entrance_fee", {})
-            main_total = fee.get("total", 0)
-            main_note = fee.get("note", "")
-            attraction_items.append({
-                "name": sched_name,
-                "amount": main_total,
-                "note": main_note,
-            })
-            attraction_subtotal += main_total
+            attraction_subtotal += fee.get("total", 0)
             # Includes fees (only for sub-attractions that were scheduled)
             for inc in attr_info.get("includes", []):
                 inc_name = inc.get("name", "")
                 if inc_name and inc_name in sched_includes:
                     inc_fee = inc.get("estimated_entrance_fee", {})
-                    inc_total = inc_fee.get("total", 0)
-                    inc_note = inc_fee.get("note", "")
-                    attraction_items.append({
-                        "name": inc_name,
-                        "amount": inc_total,
-                        "note": inc_note,
-                    })
-                    attraction_subtotal += inc_total
-    # If there are multiple attraction items, group them under a localized header
-    if len(attraction_items) > 1:
-        attr_group_name = "Phí tham quan" if plan_context.get("language") == "vi" else "Attraction Fees"
-        for item in attraction_items:
-            item["groupName"] = attr_group_name
-    if attraction_items:
+                    attraction_subtotal += inc_fee.get("total", 0)
+    # Consolidate all attractions into a single item
+    if attraction_subtotal > 0:
+        is_vi = plan_context.get("language") == "vi"
+        attr_label = "Vé tham quan" if is_vi else "Entrance Fees"
         result["categories"]["attractions"] = {
-            "items": attraction_items,
+            "items": [{"name": attr_label, "amount": attraction_subtotal}],
             "subtotal": attraction_subtotal,
         }
     # ── 4. Restaurants ────────────────────────────────────────────────
     restaurant_data = agent_outputs.get("restaurant_agent", {})
-    restaurant_items = []
     restaurant_subtotal = 0
     if restaurant_data and not restaurant_data.get("skipped"):
-        is_vi = plan_context.get("language") == "vi"
         for meal in restaurant_data.get("meals", []):
             cost = meal.get("estimated_cost_total", 0)
-            day = meal.get("day", 0)
-            meal_type = meal.get("meal_type", "").capitalize()
-            # If meal_type is breakfast, lunch, dinner -> translate if needed
-            if is_vi:
-                meal_transl = {"breakfast": "Sáng", "lunch": "Trưa", "dinner": "Tối"}
-                mt_lower = meal_type.lower()
-                meal_type = meal_transl.get(mt_lower, meal_type)
-                
-            day_prefix = "Ngày" if is_vi else "Day"
-            
-            restaurant_items.append({
-                "name": f"{day_prefix} {day} - {meal_type}",
-                "amount": cost,
-            })
             restaurant_subtotal += cost
-    # If multiple meals, group them under a localized header
-    if len(restaurant_items) > 1:
-        meal_group_name = "Các bữa ăn" if plan_context.get("language") == "vi" else "Meals"
-        for item in restaurant_items:
-            item["groupName"] = meal_group_name
-    if restaurant_items:
+    # Consolidate all meals into a single item
+    if restaurant_subtotal > 0:
+        is_vi = plan_context.get("language") == "vi"
+        meal_label = "Chi phí ăn uống" if is_vi else "Meal Costs"
         result["categories"]["restaurants"] = {
-            "items": restaurant_items,
+            "items": [{"name": meal_label, "amount": restaurant_subtotal}],
             "subtotal": restaurant_subtotal,
         }
     # ── 5. Other costs (from Preparation Agent) ───────────────────────
+    # In draft mode, Preparation may also estimate Flight/Accommodation/Meals costs
+    PREP_TYPE_TO_CATEGORY = {
+        "Flight": "flights",
+        "Accommodation": "accommodation",
+        "Meals": "restaurants",
+        "Attractions": "attractions",
+        # Standard types stay in "other"
+        "Food & Drinks": "other",
+        "Transport": "other",
+        "Activities": "other",
+        "Shopping": "other",
+        "Other": "other",
+    }
     prep_data = agent_outputs.get("preparation_agent", {})
     other_items = []
     other_subtotal = 0
@@ -207,19 +191,34 @@ def aggregate_all_costs(
             name = item.get("name", "")
             amount = item.get("amount", 0)
             details = item.get("details", "")
-            other_items.append({
-                "name": f"[{item_type}] {name}",
+
+            # Route to correct category
+            target_category = PREP_TYPE_TO_CATEGORY.get(item_type, "other")
+            entry = {
+                "name": f"[{item_type}] {name}" if target_category == "other" else name,
                 "amount": amount,
                 "note": details,
-            })
-            other_subtotal += amount
+                "estimated": True,  # Flag as Preparation estimate
+            }
+
+            if target_category == "other":
+                other_items.append(entry)
+                other_subtotal += amount
+            else:
+                # Add to the correct category (create if doesn't exist)
+                if target_category not in result["categories"]:
+                    result["categories"][target_category] = {"items": [], "subtotal": 0}
+                result["categories"][target_category]["items"].append(entry)
+                result["categories"][target_category]["subtotal"] += amount
+
     if other_items:
         result["categories"]["other"] = {
             "items": other_items,
             "subtotal": other_subtotal,
         }
     # ── 6. Transport costs (from mobility_plan) ──────────────────────
-    mobility_plan = plan_context.get("mobility_plan") or {}
+    if not mobility_plan:
+        mobility_plan = plan_context.get("mobility_plan") or {}
     dep_log = mobility_plan.get("departure_logistics") or {}
     ret_log = mobility_plan.get("return_logistics") or {}
     transport_items = []

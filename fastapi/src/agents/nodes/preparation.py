@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 llm_preparation = (
     ChatOpenAI(
-        model="google/gemini-3.1-flash-lite-preview",
+        model=settings.MODEL_NAME,
         api_key=settings.VERCEL_AI_GATEWAY_API_KEY,
         base_url="https://ai-gateway.vercel.sh/v1",
         temperature=0.3,
@@ -36,8 +36,8 @@ llm_preparation = (
     )
     if settings.USE_VERCEL_AI_GATEWAY
     else ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite-preview",
-        google_api_key=settings.GOOGLE_GEMINI_API_KEY_PREPARATION,
+        model=settings.MODEL_NAME,
+        google_api_key=settings.GOOGLE_GEMINI_API_KEY_PREPARATION or settings.GOOGLE_GEMINI_API_KEY,
         temperature=0.3,
         streaming=False,
     )
@@ -132,9 +132,6 @@ Respond in the language specified in the `language` field of the trip context (e
 - If weather data notes some days are outside forecast range, mention this in weather_summary
 """
 
-
-
-
 def _extract_itinerary_summary(itinerary_data: dict) -> list[dict]:
     """Extract a simplified itinerary summary for the Preparation Agent.
 
@@ -142,17 +139,19 @@ def _extract_itinerary_summary(itinerary_data: dict) -> list[dict]:
     """
     summary = []
     for day_data in itinerary_data.get("days", []):
-        day_idx = day_data.get("day", 0)
+        day_idx = day_data.get("day", 1)
         places = []
         for stop in day_data.get("stops", []):
-            role = stop.get("role", "")
+            raw_role = stop.get("role", [])
+            roles = set(raw_role) if isinstance(raw_role, list) else {raw_role} if isinstance(raw_role, str) else set()
             name = stop.get("name", "")
 
             # Simplify hotel boundary roles
-            if role in ("start_day", "end_day"):
+            if roles & {"start_day", "end_day"}:
                 places.append({"name": name, "role": "hotel"})
             else:
-                places.append({"name": name, "role": role})
+                primary = sorted(roles)[0] if roles else ""
+                places.append({"name": name, "role": primary})
         if places:
             summary.append({"day": day_idx, "stops": places})
     return summary
@@ -174,9 +173,15 @@ async def preparation_agent_node(state: GraphState) -> dict[str, Any]:
     logger.info("=" * 60)
     logger.info("🎒 [PREPARATION_AGENT] Node entered")
 
-    plan = state.get("orchestrator_plan", {})
-    plan_context = plan.get("plan_context", {})
+    plan = state.get("macro_plan", {})
+    current_plan = state.get("current_plan", {})
+    plan_context = current_plan.get("plan_context", {})
     agent_outputs = state.get("agent_outputs", {})
+
+    if plan.get("task_list"):
+        logger.info("🎒 [PREPARATION_AGENT] Mode: PIPELINE")
+    else:
+        logger.info("🎒 [PREPARATION_AGENT] Mode: STANDALONE")
 
     destination = plan_context.get("destination", "")
     if not destination:
@@ -189,27 +194,125 @@ async def preparation_agent_node(state: GraphState) -> dict[str, Any]:
     preparation_result = {}
 
     try:
-        # ── Step 1: Get weather data (pre-fetched by weather node) ────
-        weather_data = agent_outputs.get("weather", {})
-        if weather_data and weather_data.get("daily"):
-            logger.info(f"🎒 [PREPARATION_AGENT] Using pre-fetched weather: {weather_data.get('covered_days', 0)} days")
-        else:
-            # Fallback: fetch ourselves if weather node didn't run
-            logger.info("🎒 [PREPARATION_AGENT] No pre-fetched weather, fetching...")
-            from src.agents.nodes.weather_fetch import _fetch_weather_for_trip
-            weather_data = await _fetch_weather_for_trip(
-                destination=destination,
-                start_date_str=plan_context.get("start_date", ""),
-                end_date_str=plan_context.get("end_date", ""),
+        # ── Check for MODIFY mode ─────────────────────────────────────
+        # If current_plan already has preparation data, this is a modification
+        existing_budget = current_plan.get("budget")
+        existing_packing = current_plan.get("packing")
+        existing_notes = current_plan.get("notes")
+        is_modify = bool(existing_budget or existing_packing or existing_notes)
+
+        # Get the user's latest message for context
+        messages = state.get("messages", [])
+        user_message = ""
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                content = msg.content if hasattr(msg, "content") else str(msg)
+                if not content.startswith("["):
+                    user_message = content
+                    break
+
+        if is_modify and user_message:
+            # ═══ MODIFY MODE — adjust previous output ═══
+            logger.info("🎒 [PREPARATION_AGENT] Mode: MODIFY (correcting previous output)")
+
+            previous_output = {}
+            if existing_budget:
+                previous_output["budget"] = existing_budget
+            if existing_packing:
+                previous_output["packing"] = existing_packing
+            if existing_notes:
+                previous_output["notes"] = existing_notes
+
+            modify_prompt = f"""You are the Preparation Agent. You previously generated the following output for this trip:
+
+## Your Previous Output
+{json.dumps(previous_output, indent=2, ensure_ascii=False)}
+
+## Trip Context
+{json.dumps(plan_context, indent=2, ensure_ascii=False)}
+
+## User's Feedback
+The user has a correction or adjustment to make:
+"{user_message}"
+
+## Instructions
+- Carefully read the user's feedback and understand what they want changed.
+- Modify ONLY the relevant parts of your previous output.
+- Keep everything else unchanged.
+- Return the COMPLETE updated JSON with all sections (budget, packing, notes) — even the unchanged ones.
+- Respond in the same language as the user.
+- Return ONLY valid JSON, no text before or after.
+"""
+            llm_messages = [
+                SystemMessage(content=PREPARATION_AGENT_SYSTEM),
+                HumanMessage(content=modify_prompt),
+            ]
+
+            result, tool_logs = await _run_agent_with_tools(
+                llm=llm_preparation, messages=llm_messages,
+                tools=[tavily_search], max_iterations=2,
+                agent_name="PREPARATION_AGENT_MODIFY",
             )
+            preparation_result = _extract_json(result.content)
+            preparation_result["tools"] = tool_logs
+            preparation_result["mode"] = "modify"
 
-        # ── Step 2: Extract itinerary summary ────────────────────────
-        itinerary_data = agent_outputs.get("itinerary_agent", {})
-        itinerary_summary = _extract_itinerary_summary(itinerary_data)
-        logger.info(f"🎒 [PREPARATION_AGENT] Itinerary: {len(itinerary_summary)} days extracted")
+        else:
+            # ═══ FRESH MODE — generate from scratch ═══
+            logger.info("🎒 [PREPARATION_AGENT] Mode: FRESH (generating new)")
 
-        # ── Step 3: Build context for LLM ────────────────────────────
-        human_content = f"""## Trip Context
+            # ── Step 1: Get weather data (pre-fetched by weather node) ────
+            weather_data = agent_outputs.get("weather", {})
+            if weather_data and weather_data.get("daily"):
+                logger.info(f"🎒 [PREPARATION_AGENT] Using pre-fetched weather: {weather_data.get('covered_days', 0)} days")
+            else:
+                # Fallback: fetch ourselves if weather node didn't run
+                logger.info("🎒 [PREPARATION_AGENT] No pre-fetched weather, fetching...")
+                from src.agents.nodes.weather_fetch import _fetch_weather_for_trip
+                weather_data = await _fetch_weather_for_trip(
+                    destination=destination,
+                    start_date_str=plan_context.get("start_date", ""),
+                    end_date_str=plan_context.get("end_date", ""),
+                )
+
+            # ── Step 2: Extract itinerary summary ────────────────────────
+            itinerary_data = agent_outputs.get("itinerary_agent", {})
+            itinerary_summary = _extract_itinerary_summary(itinerary_data)
+            logger.info(f"🎒 [PREPARATION_AGENT] Itinerary: {len(itinerary_summary)} days extracted")
+
+            # ── Step 3: Build dynamic system prompt ─────────────────────
+            # Detect which agents ran — check data exists AND not explicitly skipped
+            flight_data = agent_outputs.get("flight_agent", {})
+            hotel_data = agent_outputs.get("hotel_agent", {})
+            restaurant_data = agent_outputs.get("restaurant_agent", {})
+            attraction_data = agent_outputs.get("attraction_agent", {})
+
+            flight_ran = bool(flight_data) and not flight_data.get("skipped", False)
+            hotel_ran = bool(hotel_data) and not hotel_data.get("skipped", False)
+            restaurant_ran = bool(restaurant_data) and not restaurant_data.get("skipped", False)
+            attraction_ran = bool(attraction_data) and not attraction_data.get("skipped", False)
+
+            extra_cost_types = []
+            if not flight_ran:
+                extra_cost_types.append('"Flight" — estimate departure/return flight cost for all travelers')
+            if not hotel_ran:
+                extra_cost_types.append('"Accommodation" — estimate hotel/accommodation cost per night')
+            if not restaurant_ran:
+                extra_cost_types.append('"Meals" — estimate main meal costs (lunch, dinner) for all travelers')
+            if not attraction_ran:
+                extra_cost_types.append('"Attractions" — estimate entrance fees for attractions')
+
+            if extra_cost_types:
+                dynamic_addition = "\n\n## ADDITIONAL Budget Categories (agents skipped)\nIn ADDITION to the standard categories, you MUST also estimate:\n"
+                dynamic_addition += "\n".join(f"- {t}" for t in extra_cost_types)
+                dynamic_addition += "\nThese are rough estimates — label them clearly."
+                system_content = PREPARATION_AGENT_SYSTEM + dynamic_addition
+                logger.info(f"🎒 [PREPARATION_AGENT] Dynamic budget: +{len(extra_cost_types)} cost types")
+            else:
+                system_content = PREPARATION_AGENT_SYSTEM
+
+            # ── Step 4: Build context for LLM ────────────────────────────
+            human_content = f"""## Trip Context
 {json.dumps(plan_context, indent=2, ensure_ascii=False)}
 
 ## Daily Weather Forecast
@@ -225,20 +328,19 @@ Based on ALL the context above:
 
 You may use tavily_search if you need specific local tips or customs info."""
 
-        llm_messages = [
-            SystemMessage(content=PREPARATION_AGENT_SYSTEM),
-            HumanMessage(content=human_content),
-        ]
+            llm_messages = [
+                SystemMessage(content=system_content),
+                HumanMessage(content=human_content),
+            ]
 
-        # LLM may call Tavily if needed, otherwise returns JSON directly
-        result, tool_logs = await _run_agent_with_tools(
-            llm=llm_preparation, messages=llm_messages,
-            tools=[tavily_search], max_iterations=3,
-            agent_name="PREPARATION_AGENT",
-        )
-        preparation_result = _extract_json(result.content)
-        preparation_result["tools"] = tool_logs
-        preparation_result["weather_raw"] = weather_data
+            result, tool_logs = await _run_agent_with_tools(
+                llm=llm_preparation, messages=llm_messages,
+                tools=[tavily_search], max_iterations=3,
+                agent_name="PREPARATION_AGENT",
+            )
+            preparation_result = _extract_json(result.content)
+            preparation_result["tools"] = tool_logs
+            preparation_result["weather_raw"] = weather_data
 
     except Exception as e:
         logger.error(f"   ❌ Preparation Agent error: {e}", exc_info=True)
@@ -246,6 +348,9 @@ You may use tavily_search if you need specific local tips or customs info."""
 
     logger.info("🎒 [PREPARATION_AGENT] Node completed")
     logger.info("=" * 60)
+
+    if "tools" in preparation_result:
+        preparation_result.pop("tools", None)
 
     return {
         "agent_outputs": {"preparation_agent": preparation_result},

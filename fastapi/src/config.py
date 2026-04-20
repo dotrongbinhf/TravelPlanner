@@ -24,8 +24,10 @@ class Settings(BaseSettings):
     VERCEL_AI_GATEWAY_API_KEY: str = ""
     USE_ENTERPRISE_FIELDS: bool = False
     USE_ROUTE_MATRIX: bool = False
+    MODEL_NAME: str = ""
 
     GOOGLE_GEMINI_API_KEY_ORCHESTRATOR: str = ""
+    GOOGLE_GEMINI_API_KEY_INTENT: str = ""
     GOOGLE_GEMINI_API_KEY_FLIGHT: str = ""
     GOOGLE_GEMINI_API_KEY_HOTEL: str = ""
     GOOGLE_GEMINI_API_KEY_ATTRACTION: str = ""
@@ -33,9 +35,15 @@ class Settings(BaseSettings):
     GOOGLE_GEMINI_API_KEY_RESTAURANT: str = ""
     GOOGLE_GEMINI_API_KEY_PREPARATION: str = ""
     GOOGLE_GEMINI_API_KEY_SYNTHESIZE: str = ""
+    GOOGLE_GEMINI_API_KEY_PAID: str = ""
+    
     
     # External services
     DOTNET_API_URL: str = "https://localhost:5001"
+    
+    # LangGraph checkpoint persistence (PostgreSQL)
+    # postgresql://username:password@host:port/database
+    POSTGRES_URL: str = "postgresql://postgres:DtB200104@localhost:5432/langgraph_checkpoints"
     
     # Application settings
     APP_NAME: str = "FastAPI Multi-Agent System"

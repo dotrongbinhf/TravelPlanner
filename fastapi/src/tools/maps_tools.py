@@ -98,6 +98,53 @@ async def places_text_search_id_only(
         return [{"error": str(e)}]
 
 
+@tool
+async def places_text_search_full(
+    query: str,
+    location_bias: Optional[str] = None,
+    USE_ENTERPRISE_FIELDS: bool = False,
+    page_size: int = 5,
+) -> list[dict[str, Any]]:
+    """Search for places by text query and return full details.
+    Used for Standalone Area Search when no coordinates are available.
+    """
+    logger.info(f"[places_text_search_full] query='{query}'")
+    try:
+        body: dict[str, Any] = {"textQuery": query, "pageSize": page_size}
+
+        if location_bias:
+            parts = location_bias.split(",")
+            if len(parts) == 2:
+                body["locationBias"] = {
+                    "circle": {
+                        "center": {"latitude": float(parts[0]), "longitude": float(parts[1])},
+                        "radius": 50000.0,
+                    }
+                }
+
+        field_mask = _FIELD_MASK_ENTERPRISE if USE_ENTERPRISE_FIELDS else _FIELD_MASK_PRO
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{PLACES_API_BASE}/places:searchText",
+                json=body,
+                headers=_places_headers(field_mask),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        places = data.get("places", [])
+        if places:
+            results = _parse_restaurant_results(places)
+            logger.info(f"[places_text_search_full] found {len(results)} results")
+            return results
+            
+        return []
+    except Exception as e:
+        logger.error(f"[places_text_search_full] error: {e}")
+        return []
+
+
 # ============================================================================
 # RESTAURANT SEARCH (LangChain @tool — visible in LangSmith)
 # Uses Text Search (New) with locationRestriction (rectangle) + includedType

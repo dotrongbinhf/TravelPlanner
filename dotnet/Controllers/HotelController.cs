@@ -49,6 +49,7 @@ namespace dotnet.Controllers
                     p.LocationRating,
                     p.ReviewsBreakdown,
                     p.Amenities,
+                    Thumbnail = p.Images != null && p.Images.Count > 0 ? p.Images[0].Thumbnail : null
                 });
 
             return Ok(new { Properties = trimmedProperties });

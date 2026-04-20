@@ -103,7 +103,7 @@ async def _fetch_weather_for_trip(
             continue
 
         # Build simplified per-day weather
-        day_idx = (entry_date - start_date).days
+        day_idx = (entry_date - start_date).days + 1
         temp = entry.get("temp", {})
         weather_list = entry.get("weather", [{}])
         condition = weather_list[0].get("description", "Unknown") if weather_list else "Unknown"
@@ -169,8 +169,9 @@ async def weather_fetch_node(state: GraphState) -> dict[str, Any]:
     logger.info("=" * 60)
     logger.info("🌤️ [WEATHER_FETCH] Node entered")
 
-    plan = state.get("orchestrator_plan", {})
-    plan_context = plan.get("plan_context", {})
+    plan = state.get("macro_plan", {})
+    current_plan = state.get("current_plan", {})
+    plan_context = current_plan.get("plan_context", {})
 
     destination = plan_context.get("destination", "")
     if not destination:
@@ -180,10 +181,42 @@ async def weather_fetch_node(state: GraphState) -> dict[str, Any]:
             "messages": [AIMessage(content="[Weather] No destination, skipping")],
         }
 
+    start_date_str = plan_context.get("start_date", "")
+    end_date_str = plan_context.get("end_date", "")
+
+    # If no start_date, we can't fetch weather forecast
+    if not start_date_str:
+        logger.info("   No start_date → skip weather (no specific dates)")
+        return {
+            "agent_outputs": {"weather": {"daily": [], "skipped": True,
+                "outside_range_note": "No specific dates provided — cannot fetch weather forecast."}},
+            "messages": [AIMessage(content="[Weather] No dates, skipping")],
+        }
+
+    # Fallback: compute end_date from start_date + num_days if missing
+    if not end_date_str:
+        num_days = plan_context.get("num_days")
+        if num_days:
+            from datetime import datetime, timedelta
+            try:
+                sd = datetime.strptime(start_date_str, "%Y-%m-%d")
+                ed = sd + timedelta(days=int(num_days) - 1)
+                end_date_str = ed.strftime("%Y-%m-%d")
+                logger.info(f"   Auto-computed end_date for weather: {end_date_str}")
+            except (ValueError, TypeError):
+                pass
+        if not end_date_str:
+            logger.info("   No end_date and no num_days → skip weather")
+            return {
+                "agent_outputs": {"weather": {"daily": [], "skipped": True,
+                    "outside_range_note": "Missing end_date — cannot determine trip duration."}},
+                "messages": [AIMessage(content="[Weather] No end_date, skipping")],
+            }
+
     weather_data = await _fetch_weather_for_trip(
         destination=destination,
-        start_date_str=plan_context.get("start_date", ""),
-        end_date_str=plan_context.get("end_date", ""),
+        start_date_str=start_date_str,
+        end_date_str=end_date_str,
     )
 
     covered = weather_data.get("covered_days", 0)

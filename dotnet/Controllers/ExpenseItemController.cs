@@ -30,7 +30,6 @@ namespace dotnet.Controllers
                 Category = expenseItem.Category,
                 Name = expenseItem.Name,
                 Amount = expenseItem.Amount,
-                GroupName = expenseItem.GroupName,
             });
         }
 
@@ -47,7 +46,6 @@ namespace dotnet.Controllers
                 Category = request.Category,
                 Name = request.Name,
                 Amount = request.Amount,
-                GroupName = request.GroupName,
             };
 
             dbContext.ExpenseItems.Add(expenseItem);
@@ -60,7 +58,6 @@ namespace dotnet.Controllers
                 Category = expenseItem.Category,
                 Name = expenseItem.Name,
                 Amount = expenseItem.Amount,
-                GroupName = expenseItem.GroupName,
             });
         }
 
@@ -73,7 +70,6 @@ namespace dotnet.Controllers
             expenseItem.Category = request.Category;
             expenseItem.Name = request.Name;
             expenseItem.Amount = request.Amount;
-            expenseItem.GroupName = request.GroupName;
 
             await dbContext.SaveChangesAsync();
 
@@ -84,7 +80,6 @@ namespace dotnet.Controllers
                 Category = expenseItem.Category,
                 Name = expenseItem.Name,
                 Amount = expenseItem.Amount,
-                GroupName = expenseItem.GroupName,
             });
         }
 

@@ -12,7 +12,6 @@ export type ExpenseItem = {
   category: ExpenseCategory;
   name: string;
   amount: number;
-  groupName?: string | null;
 };
 
 export type Budget = {

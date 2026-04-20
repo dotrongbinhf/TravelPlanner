@@ -31,7 +31,7 @@ HOTEL_AGENT_MOCK = {
 
 llm_hotel = (
     ChatOpenAI(
-        model="google/gemini-3.1-flash-lite-preview",
+        model=settings.MODEL_NAME,
         api_key=settings.VERCEL_AI_GATEWAY_API_KEY,
         base_url="https://ai-gateway.vercel.sh/v1",
         temperature=0.3,
@@ -39,8 +39,8 @@ llm_hotel = (
     )
     if settings.USE_VERCEL_AI_GATEWAY
     else ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite-preview",
-        google_api_key=settings.GOOGLE_GEMINI_API_KEY_HOTEL,
+        model=settings.MODEL_NAME,
+        google_api_key=settings.GOOGLE_GEMINI_API_KEY_HOTEL or settings.GOOGLE_GEMINI_API_KEY,
         temperature=0.3,
         streaming=False,
     )
@@ -51,12 +51,13 @@ HOTEL_AGENT_SYSTEM = """You are the Hotel Agent for a travel planning system.
 You find hotels using the search_hotels tool.
 
 ## Input
-You receive two pieces of context from the Orchestrator:
-1. **plan_context**: Shared trip info (destination, dates, passengers, budget, currency, mobility_plan with segments)
-2. **hotel context**: user_hotel_preferences (min_price, max_price, notes)
+You receive:
+1. **plan_context**: Shared trip info (destination, dates, passengers, budget, currency)
+2. **mobility_plan**: Trip logistics — segments with hotel_search_area and hotel_nights
+3. **task**: A concise description of what to search for — price preferences, children_ages, special notes
 
 ## How to determine hotel segments
-Read `plan_context.mobility_plan.segments`. For each segment that has `hotel_nights` (non-empty array):
+Read `mobility_plan.segments`. For each segment that has `hotel_nights` (non-empty array):
 - Use `hotel_search_area` as the search location
 - Use `hotel_nights` (0-indexed night numbers) to calculate check-in and check-out dates from `start_date`
   - check_in = start_date + min(hotel_nights) days
@@ -64,7 +65,7 @@ Read `plan_context.mobility_plan.segments`. For each segment that has `hotel_nig
   - Example: start_date="2026-03-17", hotel_nights=[0,1,2] → check_in="2026-03-17", check_out="2026-03-20"
 
 ## Process
-1. Read plan_context and hotel context carefully
+1. Read plan_context, mobility_plan, and task carefully
 2. Determine hotel segments from mobility_plan.segments (only those with non-empty hotel_nights)
 3. For EACH hotel segment:
    a. Build a search query targeting the segment's hotel_search_area
@@ -136,33 +137,53 @@ def _slim_hotel_result(tool_result: Any) -> Any:
     logger.info(f"   [HOTEL_AGENT] Slimmed {len(properties)} hotels: kept fields={_HOTEL_LLM_FIELDS}")
     return {"properties": slimmed}
 
+def _upgrade_image_url(url: str) -> str:
+    """Upgrades Google thumbnail URLs to high quality size for UI rendering."""
+    if not url:
+        return ""
+    if "=" in url and ("googleusercontent.com" in url or "ggpht.com" in url):
+        return url.split("=")[0] + "=s800"
+    return url
+
 
 async def hotel_agent_node(state: GraphState) -> dict[str, Any]:
-    """Hotel Agent — Searches hotels per segment. Runs in Phase 2."""
+    """Hotel Agent Node — searches and selects hotels based on the mobility plan.
+    Uses Google Hotels API (via .NET backend) per segment.
+    """
     logger.info("=" * 60)
-    logger.info("🏨 [HOTEL_AGENT] Node entered (Phase 2)")
+    logger.info("🏨 [HOTEL_AGENT] Node entered")
 
-    plan = state.get("orchestrator_plan", {})
-    plan_context = plan.get("plan_context", {})
-    hotel_ctx = plan.get("hotel", {})
+    plan = state.get("macro_plan", {})
+    current_plan = state.get("current_plan", {})
+    plan_context = current_plan.get("plan_context", {})
+    mobility_plan = plan.get("mobility_plan", {})
+    routed_intent = state.get("routed_intent", "")
 
-    if not hotel_ctx:
-        logger.info("   No hotel context → skip")
+    # Unified task request — from Orchestrator (pipeline) or Intent (standalone)
+    agent_requests = plan.get("agent_requests", {})
+    agent_request = agent_requests.get("hotel", "")
+
+    if not agent_request:
+        logger.info("   No agent_request for hotel → skip")
         return {
             "agent_outputs": {"hotel_agent": {"hotels_found": False, "skipped": True}},
             "messages": [AIMessage(content="[Hotel Agent] No hotel search needed")],
         }
 
+    is_pipeline = routed_intent in ["full_plan", "draft_plan"]
+    logger.info(f"   Mode: {'PIPELINE' if is_pipeline else 'STANDALONE'} (Intent: {routed_intent})")
+
     hotel_result = {}
 
     try:
-        human_content = f"""Plan context (shared trip info):
+        human_content = f"""Plan context:
 {json.dumps(plan_context, indent=2, ensure_ascii=False)}
 
-Hotel-specific context:
-{json.dumps(hotel_ctx, indent=2, ensure_ascii=False)}
+Mobility plan:
+{json.dumps(mobility_plan, indent=2, ensure_ascii=False) if mobility_plan else "N/A"}
 
-Search for hotels based on this context. Use the plan_context for dates, passengers, and budget info. Use the hotel context for segments, area hints, guests, and preferences."""
+Task:
+{agent_request}"""
 
         llm_messages = [
             SystemMessage(content=HOTEL_AGENT_SYSTEM),
@@ -214,50 +235,93 @@ Search for hotels based on this context. Use the plan_context for dates, passeng
         for seg in segments:
             hotel_name = seg.get("recommend_hotel_name", "")
             seg_data = hotel_data_dict.get(hotel_name, {})
-            # Get link from the search result property
+            # Get link, thumbnail, and details for recommended hotel
             seg["link"] = seg_data.get("link") or seg_data.get("Link") or ""
+            raw_thumb = seg_data.get("thumbnail") or seg_data.get("Thumbnail") or ""
+            seg["thumbnail"] = _upgrade_image_url(raw_thumb)
             
+            # totalRate might be an object or a string depending on API serialization
+            rate_obj = seg_data.get("totalRate") or seg_data.get("TotalRate") or {}
+            if isinstance(rate_obj, str):
+                seg["totalRate"] = rate_obj
+            elif isinstance(rate_obj, dict):
+                seg["totalRate"] = rate_obj.get("lowest") or rate_obj.get("Lowest") or "N/A"
+            else:
+                seg["totalRate"] = "N/A"
+            
+            seg["overallRating"] = seg_data.get("overallRating") or seg_data.get("OverallRating") or "N/A"
+            seg["reviews"] = seg_data.get("reviews") or seg_data.get("Reviews") or 0
+            seg["hotel_class"] = seg_data.get("hotelClass") or seg_data.get("HotelClass") or "N/A"
+            seg["checkInTime"] = seg_data.get("checkInTime") or seg_data.get("CheckInTime") or "N/A"
+            seg["checkOutTime"] = seg_data.get("checkOutTime") or seg_data.get("CheckOutTime") or "N/A"
+
             # Find alternatives
             alternatives = []
+            max_alts = 2 if is_pipeline else 4
             chosen_names = [s.get("recommend_hotel_name") for s in segments]
             for name, data in hotel_data_dict.items():
-                if name != hotel_name and name not in chosen_names and len(alternatives) < 3:
-                    # TotalRate from controller is already p.TotalRate?.Lowest (a string like "$111")
-                    rate = data.get("totalRate") or data.get("TotalRate") or ""
-                    rating = data.get("overallRating") or data.get("OverallRating") or 0
+                if name != hotel_name and name not in chosen_names and len(alternatives) < max_alts:
+                    rate_obj_alt = data.get("totalRate") or data.get("TotalRate") or {}
+                    if isinstance(rate_obj_alt, str):
+                        rate = rate_obj_alt
+                    elif isinstance(rate_obj_alt, dict):
+                        rate = rate_obj_alt.get("lowest") or rate_obj_alt.get("Lowest") or "N/A"
+                    else:
+                        rate = "N/A"
+                    
+                    rating = data.get("overallRating") or data.get("OverallRating") or "N/A"
+                    reviews = data.get("reviews") or data.get("Reviews") or 0
                     alt_link = data.get("link") or data.get("Link") or ""
-                    hotel_class = data.get("hotelClass") or data.get("HotelClass") or ""
-                    if rate and rating:
-                        alternatives.append({
-                            "name": name, 
-                            "totalRate": rate, 
-                            "overallRating": rating, 
-                            "hotel_class": hotel_class,
-                            "link": alt_link,
-                        })
+                    hotel_class = data.get("hotelClass") or data.get("HotelClass") or "N/A"
+                    raw_alt_thumb = data.get("thumbnail") or data.get("Thumbnail") or ""
+                    alt_thumb = _upgrade_image_url(raw_alt_thumb)
+                    check_in = data.get("checkInTime") or data.get("CheckInTime") or "N/A"
+                    check_out = data.get("checkOutTime") or data.get("CheckOutTime") or "N/A"
+                    
+                    alternatives.append({
+                        "name": name, 
+                        "totalRate": rate, 
+                        "overallRating": rating,
+                        "reviews": reviews,
+                        "hotel_class": hotel_class,
+                        "link": alt_link,
+                        "thumbnail": alt_thumb,
+                        "checkInTime": check_in,
+                        "checkOutTime": check_out
+                    })
             seg["alternatives"] = alternatives
 
-        async def _resolve_hotel(seg: dict) -> None:
-            hotel_name = seg.get("recommend_hotel_name", "")
-            if not hotel_name or seg.get("recommend_hotel_placeId"):
+        async def _resolve_hotel_item(item_dict: dict, name_key: str, pid_key: str) -> None:
+            hotel_name = item_dict.get(name_key, "")
+            if not hotel_name or item_dict.get(pid_key):
                 return
             try:
-                # Use precise GPS from search results, not broad city name
                 location_bias = hotel_coords.get(hotel_name)
-                logger.info(f"   🔍 Resolving hotel '{hotel_name}' with bias={location_bias}")
                 resolved = await resolve_single_place(hotel_name, location_bias=location_bias)
                 if resolved and resolved.get("placeId"):
-                    seg["recommend_hotel_placeId"] = resolved["placeId"]
+                    item_dict[pid_key] = resolved["placeId"]
                     if "location" in resolved:
-                        seg["_location"] = resolved["location"]
-                    logger.info(f"   ✅ Hotel '{hotel_name}' → placeId={resolved['placeId']}")
+                        item_dict["_location"] = resolved["location"]
             except Exception as e:
                 logger.error(f"   ⚠️ Hotel resolve failed for '{hotel_name}': {e}")
 
-        await asyncio.gather(*[_resolve_hotel(seg) for seg in segments])
+        resolve_tasks = []
+        for seg in segments:
+            # Resolve the main recommendation
+            resolve_tasks.append(_resolve_hotel_item(seg, "recommend_hotel_name", "recommend_hotel_placeId"))
+            # Resolve all alternatives so they appear on the frontend map
+            for alt in seg.get("alternatives", []):
+                resolve_tasks.append(_resolve_hotel_item(alt, "name", "placeId"))
+
+        if resolve_tasks:
+            await asyncio.gather(*resolve_tasks)
 
     logger.info("🏨 [HOTEL_AGENT] Node completed")
     logger.info("=" * 60)
+
+    # Strip raw tool logs from output to drastically reduce DB bloat
+    if "tools" in hotel_result:
+        hotel_result.pop("tools", None)
 
     return {
         "agent_outputs": {"hotel_agent": hotel_result},

@@ -27,6 +27,10 @@ import {
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { HotelWidget } from "./widgets/HotelWidget";
+import { FlightWidget } from "./widgets/FlightWidget";
+import { AttractionWidget } from "./widgets/AttractionWidget";
+import { RestaurantWidget } from "./widgets/RestaurantWidget";
 
 export interface ChatMessage {
   id: string;
@@ -95,6 +99,23 @@ const markdownComponents = {
       {...props}
     />
   ),
+  table: ({ node, ...props }: any) => (
+    <div className="overflow-x-auto my-4 w-full rounded-xl border border-sky-100 shadow-sm bg-white">
+      <table className="w-full text-sm text-left whitespace-nowrap" {...props} />
+    </div>
+  ),
+  thead: ({ node, ...props }: any) => (
+    <thead className="bg-sky-50 text-sky-900 border-b border-sky-100" {...props} />
+  ),
+  th: ({ node, ...props }: any) => (
+    <th className="px-4 py-3 font-semibold" {...props} />
+  ),
+  td: ({ node, ...props }: any) => (
+    <td className="px-4 py-2 border-t border-sky-50" {...props} />
+  ),
+  tr: ({ node, ...props }: any) => (
+    <tr className="hover:bg-sky-50/50 transition-colors" {...props} />
+  ),
 };
 
 function formatAppliedAt(isoString: string): string {
@@ -121,6 +142,74 @@ export default function ChatMessages({
   structuredData,
   onApplyPlan,
 }: ChatMessagesProps) {
+  // Helper to split message and render widgets — supports MULTIPLE widgets in one message
+  const WIDGET_TAGS = [
+    { tag: '[HOTEL_UI_WIDGET]', render: (sd: any) => <HotelWidget data={sd?.hotel_agent} /> },
+    { tag: '[FLIGHT_UI_WIDGET]', render: (sd: any) => <FlightWidget data={sd?.flight_agent} /> },
+    { tag: '[ATTRACTION_UI_WIDGET]', render: (sd: any) => <AttractionWidget data={sd?.attraction_agent} /> },
+    { tag: '[RESTAURANT_UI_WIDGET]', render: (sd: any) => <RestaurantWidget data={sd?.restaurant_agent} /> },
+  ];
+
+  const renderMessageWithWidgets = (content: string, msgStructuredData?: Record<string, unknown> | null) => {
+    // Check if ANY widget tag exists
+    const hasWidget = WIDGET_TAGS.some(w => content.includes(w.tag));
+    if (!hasWidget) {
+      return (
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+          {content}
+        </ReactMarkdown>
+      );
+    }
+
+    // Split content by ALL widget tags, preserving order
+    type Segment = { type: 'text'; content: string } | { type: 'widget'; tagIndex: number };
+    const segments: Segment[] = [];
+    let remaining = content;
+
+    while (remaining.length > 0) {
+      // Find the earliest widget tag in remaining
+      let earliest = -1;
+      let earliestPos = Infinity;
+      for (let i = 0; i < WIDGET_TAGS.length; i++) {
+        const pos = remaining.indexOf(WIDGET_TAGS[i].tag);
+        if (pos !== -1 && pos < earliestPos) {
+          earliestPos = pos;
+          earliest = i;
+        }
+      }
+
+      if (earliest === -1) {
+        // No more widgets, push remaining text
+        if (remaining.trim()) segments.push({ type: 'text', content: remaining });
+        break;
+      }
+
+      // Push text before the widget
+      const textBefore = remaining.substring(0, earliestPos);
+      if (textBefore.trim()) segments.push({ type: 'text', content: textBefore });
+
+      // Push the widget
+      segments.push({ type: 'widget', tagIndex: earliest });
+
+      // Advance past the tag
+      remaining = remaining.substring(earliestPos + WIDGET_TAGS[earliest].tag.length);
+    }
+
+    return (
+      <div className="flex flex-col">
+        {segments.map((seg, idx) =>
+          seg.type === 'text' ? (
+            <ReactMarkdown key={idx} remarkPlugins={[remarkGfm]} components={markdownComponents}>
+              {seg.content}
+            </ReactMarkdown>
+          ) : (
+            <div key={idx}>{WIDGET_TAGS[seg.tagIndex].render(msgStructuredData)}</div>
+          )
+        )}
+      </div>
+    );
+  };
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastUserMessageRef = useRef<HTMLDivElement>(null);
   const isInitialLoadRef = useRef(true);
@@ -270,7 +359,15 @@ export default function ChatMessages({
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-      {messages.map((msg) => (
+      {messages.map((msg) => {
+        let parsedData: any = null;
+        if (msg.generatedPlanData) {
+          try {
+            parsedData = JSON.parse(msg.generatedPlanData);
+          } catch (e) {}
+        }
+        
+        return (
         <div key={msg.id} ref={msg.id === lastUserMsgId ? lastUserMessageRef : null}>
           <div
             className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
@@ -284,25 +381,21 @@ export default function ChatMessages({
               className={cn(
                 "max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words",
                 msg.role === "user"
-                  ? "bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-br-md"
-                  : "bg-gray-100 text-gray-800 rounded-bl-md",
+                  ? "bg-gradient-to-r from-sky-500 to-blue-500 text-white shadow-sm rounded-br-md"
+                  : "bg-white text-gray-800 border border-sky-100 shadow-sm rounded-bl-md",
               )}
             >
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={markdownComponents}
-              >
-                {msg.content}
-              </ReactMarkdown>
+              {renderMessageWithWidgets(msg.content, parsedData || structuredData)}
             </div>
           </div>
 
           {/* Per-message Apply button — for messages loaded from DB */}
           {msg.role === "assistant" &&
-            msg.generatedPlanData &&
+            parsedData?.apply_data &&
             renderApplyButton(msg.id, msg.applyGeneratedPlanAt)}
         </div>
-      ))}
+        );
+      })}
 
       {/* Streaming indicator & content */}
       {isStreaming && (
@@ -341,17 +434,12 @@ export default function ChatMessages({
 
             {/* Streamed text content */}
             {streamingContent ? (
-              <div className="rounded-2xl rounded-bl-md px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words bg-gray-100 text-gray-800">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={markdownComponents}
-                >
-                  {streamingContent}
-                </ReactMarkdown>
+              <div className="rounded-2xl rounded-bl-md px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words bg-white text-gray-800 border border-sky-100 shadow-sm">
+                {renderMessageWithWidgets(streamingContent, structuredData)}
                 <span className="inline-block w-1.5 h-4 bg-blue-500 ml-0.5 animate-pulse rounded-sm" />
               </div>
             ) : (
-              <div className="rounded-2xl rounded-bl-md px-4 py-2.5 bg-gray-100">
+              <div className="rounded-2xl rounded-bl-md px-4 py-2.5 bg-white border border-sky-100 shadow-sm">
                 <div className="flex items-center gap-1">
                   <span
                     className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"

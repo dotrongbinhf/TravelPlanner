@@ -18,7 +18,7 @@ from langchain_openai import ChatOpenAI
 
 from src.agents.state import GraphState
 from src.services.itinerary_builder_nonVRP import run_itinerary_pipeline_nonVRP
-from src.agents.nodes.utils import _extract_json
+from src.agents.nodes.utils import _extract_json, _get_latest_user_message
 from src.config import settings
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ useRouteMatrix = settings.USE_ROUTE_MATRIX
 
 llm_itinerary = (
     ChatOpenAI(
-        model="google/gemini-2.5-flash",
+        model=settings.MODEL_NAME,
         api_key=settings.VERCEL_AI_GATEWAY_API_KEY,
         base_url="https://ai-gateway.vercel.sh/v1",
         temperature=0.3,
@@ -38,8 +38,8 @@ llm_itinerary = (
     if settings.USE_VERCEL_AI_GATEWAY
     # if USE_VERCEL_AI_GATEWAY
     else ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite-preview",
-        google_api_key=settings.GOOGLE_GEMINI_API_KEY_ITINERARY,
+        model=settings.MODEL_NAME,
+        google_api_key=settings.GOOGLE_GEMINI_API_KEY_ITINERARY or settings.GOOGLE_GEMINI_API_KEY,
         temperature=0.3,
         streaming=False,
     )
@@ -50,7 +50,7 @@ ITINERARY_SCHEDULER_SYSTEM = """You are the Itinerary Scheduling Agent. You rece
 ## Input You Receive
 1. **Attractions list**: Each with name, opening hours per day, and must_visit flag
 2. **Distance matrix**: Travel times (in minutes) between all locations — these are RAW actual travel times
-3. **Schedule constraints**: Day 0 arrival info, last day deadline, hotels per night, pace, mobility_plan_overview
+3. **Schedule constraints**: Day 1 arrival info, last day deadline, hotels per night, pace, mobility_plan_overview
 
 ## How to Schedule
 
@@ -80,7 +80,7 @@ ITINERARY_SCHEDULER_SYSTEM = """You are the Itinerary Scheduling Agent. You rece
 - Respect opening hours: arrival ≥ opening time, departure ≤ closing time
 - If you would arrive at an attraction BEFORE it opens, try to rearrange the order, visit somewhere else first, or start the day later. Small waits (≤15 min) are acceptable but avoid scheduling long idle waits.
 - You decide daily start and end times based on the pace, logistics, and what feels natural
-- On the first day, consider arrival time — travelers may need to drop luggage, rest, etc.
+- On the first day (day 1), consider arrival time — travelers may need to drop luggage, rest, etc.
 - On the last day, respect the hard deadline for departure (flight or transport)
 - Read **mobility_plan_overview** in constraints — it describes the trip's logistics. Use it to decide how the day flows naturally.
 
@@ -106,9 +106,9 @@ Check `accommodation_context` in constraints:
 When a meal (like lunch) ends and the hotel check-in time is approaching (e.g., lunch ends at 13:00 or 13:30, but check-in is at 14:00), **NEVER squeeze an attraction into that small intermediate gap**. Adding an attraction visit right before check-in, especially after a flight or at midday, is exhausting and completely illogical.
 Instead, you MUST do one of the following to bridge the gap naturally:
 1. **Extend the meal's duration**: Simply make the lunch `departure` match the time you need to leave for the hotel. It is perfectly fine to have a 1.5 to 2-hour lunch to relax at the restaurant before heading to the hotel.
-2. **Add a `generic` leisure stop**: Schedule a 15-30 min "Ngồi cà phê nghỉ ngơi" or "Thư giãn" stop.
+2. **Add a `generic` leisure stop**: Schedule a 15-30 min coffee break or relaxation stop.
 3. **Just extend gap between meal and check-in**: lunch ends at 13:30 but go to hotel just 15 minutes -> add 15 minutes gap between meal and check-in so arrival to check-in hotel at 14:00.
-**DO NOT** schedule sightseeing attractions (`attraction`) during this pre-check-in midday gap. 
+**DO NOT** schedule sightseeing attractions (`attraction`) during this pre-check-in midday gap.
 
 **IMPORTANT — Avoid unnecessary hotel round-trips:**
 Do NOT schedule a mid-day detour BACK to the hotel just for check-in if travelers are already far away doing activities. However, if they just arrived from the airport/station, the natural flow is going to the hotel first, having lunch, checking in, and then starting to explore.
@@ -153,12 +153,13 @@ The `luggage_context` in constraints tells you whether luggage management is nee
 - In your output, add an "includes" field to each attraction stop listing which included sub-places you recommend visiting at that stop
 - Not all includes need to be visited — choose based on available time, traveler interest, and pace
 - If an attraction has no includes, set "includes" to an empty list []
+- **IMPORTANT**: When an attraction HAS includes, you MUST add a `note` describing specifically which sub-attractions to visit, and if some are skipped, mention them as optional extras. Example: "Visit the Mausoleum and Ho Chi Minh Stilt House. If time permits, also stop by One Pillar Pagoda nearby."
 
 ### Adding & Dropping
 - You MAY adjust visit durations — the suggested duration is a guide, not mandatory
 - **Dropping stops**: You MAY drop non-must-visit attractions if the schedule is too packed. must_visit attractions MUST appear in the schedule. It's BETTER to drop some places and have a relaxing trip than to rush through everything.
-- **Adding activities**: If a day has gaps of 2+ hours with nothing to do, you MUST either rearrange the schedule to eliminate the gap OR suggest additional activities to fill it. Be CREATIVE but reasonable — activities can include: exploring local neighborhoods, visiting a café or tea house, checking out local markets, strolling through parks, trying street food, browsing souvenir shops, visiting a specific landmark you know about, or relaxing at a scenic viewpoint. Add these as stops with role ["generic"] and a reasonable duration. Use specific, vivid names that describe the actual activity — e.g., "Cà phê Trứng tại phố cổ", "Dạo chợ Đêm Hà Nội", "Ngồi nghỉ ven Hồ Xuân Hương", "Khám phá khu phố cổ". The "generic" role is ONLY for activities YOU suggest that are NOT in the input attractions list.
-- If souvenir shopping seems appropriate (based on mobility_plan_overview context and the attraction being near markets, cultural sites, or tourist areas), add a brief note about what souvenirs to buy there using the `"note"` field on that attraction stop. Example: "Mua quà lưu niệm tranh Đông Hồ và đồ thủ công mỹ nghệ tại đây."
+- **Adding activities (CRITICAL — NO EMPTY GAPS)**: NEVER leave gaps of 1.5+ hours with nothing to do (unless user want it). If a day has a gap, you MUST either rearrange the schedule to eliminate it OR add generic activities to fill it. Be CREATIVE but reasonable — activities can include: exploring local neighborhoods, visiting a café or tea house, checking out local markets, strolling through parks, trying street food, browsing souvenir shops, visiting a specific landmark you know about, or relaxing at a scenic viewpoint. Add these as stops with role ["generic"] and a reasonable duration. Use specific, vivid names that describe the actual activity — e.g., "Egg coffee in the Old Quarter", "Night Market stroll", "Lakeside relaxation". The "generic" role is ONLY for activities YOU suggest that are NOT in the input attractions list.
+- If souvenir shopping seems appropriate (based on mobility_plan_overview context and the attraction being near markets, cultural sites, or tourist areas), add a brief note about what souvenirs to buy there using the `"note"` field on that attraction stop. Example: "Buy Dong Ho folk paintings and handcrafted souvenirs here."
 
 ### Weather-Aware Scheduling
 If a **Daily Weather Forecast** is provided in the input, use it to make smarter scheduling decisions:
@@ -175,13 +176,13 @@ Boundary roles (arrival = departure is allowed):
 - `start_day`: Daily start point (hotel). Just departing — arrival = departure.
 - `end_day`: Daily end point (hotel). Just arriving — departure can be empty "".
 - `outbound_arrival`: Arrival journey at destination. Applies to ALL non-local travel modes:
-  - **Flight**: arrival = landing time, departure = after customs/baggage. Location = arrival airport.
-  - **Coach/Train/Car/Motorbike**: This node represents the actual travel journey. Set `arrival` = the `start_time` provided in constraints for day_0_arrival. Set `departure` = the `arrival_time` provided in constraints for day_0_arrival. If `start_time` is the previous day (e.g. "22:00 -1"), you still set `arrival`="22:00 -1", the `departure` is when they arrive. Location Name MUST explicitly state the journey: "Origin → Destination" (e.g., "Bắc Ninh → Hà Nội").
+  - **Flight**: This stop represents the ENTIRE flight journey. Set `arrival` = flight departure time from origin (boarding), `departure` = flight landing time at destination + ~30 min (luggage/customs only — travel to next stop is handled separately by distance matrix). Location = arrival airport. Example: flight departs 07:00, lands 09:00 → arrival=07:00, departure=09:30.
+  - **Coach/Train/Car/Motorbike**: This node represents the actual travel journey. Set `arrival` = the `start_time` provided in constraints for day_0_arrival. Set `departure` = the `arrival_time` provided in constraints for day_0_arrival. If `start_time` is the previous day (e.g. "22:00 -1"), you still set `arrival`="22:00 -1", the `departure` is when they arrive. Location Name MUST explicitly state the journey: "Origin → Destination" (e.g., "Bac Ninh → Hanoi").
   - **Local trip** (departure == destination): NO outbound_arrival needed — just use `start_day`.
 - `return_departure`: Departure journey from destination back to origin. Applies to ALL non-local travel:
-  - **Flight**: arrival ~ 2h BEFORE flight departure time, departure = actual flight time. Location = departure airport.
+  - **Flight**: This stop represents the ENTIRE return flight journey. Set `arrival` = ~2h BEFORE flight departure time (airport check-in), `departure` = flight arrival time at origin. Location = departure airport. Example: flight departs 18:00, arrives 20:00 → arrival=16:00, departure=20:00.
   - **Coach/Train**: This node represents the return trip. The traveler must arrive at the hub ~30 min before departure for boarding. Set `arrival` = the `deadline_time` from last_day_deadline constraints (30 min before start_time). Set `departure` = the `arrival_time` from last_day_deadline constraints. Location Name = hub name from constraints.
-  - **Car/Motorbike**: This node represents the return trip. No buffer needed — just hop on and go. Set `arrival` = the `start_time` from last_day_deadline constraints. Set `departure` = the `arrival_time` from last_day_deadline constraints. Location Name MUST explicitly state the journey: "Destination → Origin" (e.g., "Hà Nội → Bắc Ninh").
+  - **Car/Motorbike**: This node represents the return trip. No buffer needed — just hop on and go. Set `arrival` = the `start_time` from last_day_deadline constraints. Set `departure` = the `arrival_time` from last_day_deadline constraints. Location Name MUST explicitly state the journey: "Destination → Origin" (e.g., "Hanoi → Bac Ninh").
   - **Local trip**: NO return_departure needed.
 
 Hotel logistics roles:
@@ -192,8 +193,8 @@ Hotel logistics roles:
 - `rest`: Rest at hotel (room must be available). ~60-120 min.
 
 Activity roles:
-- `attraction`: Tourist attraction FROM THE INPUT LIST. Visit ≥ 30 min. Has extra field `"includes": [list]`. May optionally have `"note"` for souvenir shopping hints.
-- `generic`: Activity suggested by YOU (not in input). Visit ≥ 30 min.
+- `attraction`: Tourist attraction FROM THE INPUT LIST. Visit time reasonable with that attraction. Has extra field `"includes": [list]`. May optionally have `"note"` for souvenir shopping hints.
+- `generic`: Activity suggested by YOU (not in input). Visit time reasonable with that generic activity.
 - `lunch`: Lunch break. 60-90 min (flexible based on context).
 - `dinner`: Dinner break. 60-90 min (flexible based on context).
 
@@ -213,38 +214,42 @@ CRITICAL: Output ONLY a raw JSON object. No text before or after. No markdown fe
 Each stop needs: `name`, `role` (LIST of strings), `arrival` (HH:MM), `departure` (HH:MM).
 Attraction stops also need: `includes` (list). Optionally `note` for souvenir hints.
 Do NOT include duration, minutes, or travel time fields — the validator computes these automatically.
-Each day MUST have a `title` field: a short, descriptive title for the day (e.g., "Khám phá phố cổ Hà Nội", "Bay đến & Nhận phòng", "Ngày cuối - Mua sắm & Về"). Write the title in the user's language.
+Each day MUST have a `title` field: a short, descriptive title for the day (e.g., "Explore Hanoi Old Quarter", "Arrival & Check-in", "Last Day - Shopping & Departure"). Write the title in the user's language.
+
+### CRITICAL — Exact Name Rule
+You MUST use the EXACT attraction and hotel names as provided in the input data. Do NOT modify, abbreviate, translate, add parentheses, or append alternative names. Copy the name character-for-character. If you want to add context (e.g., Vietnamese name, sub-attractions), put it in the `note` field instead.
 
 ### `note` field — contextual annotations for special stops
 Add a `"note"` field (string, 1-2 short sentences) to provide extra context. **Write ALL notes in {language} (the user's preferred language).**
 
 **MUST generate notes for these roles:**
-- `outbound_arrival` / `return_departure`: Summarize the transport info from constraints. MUST include: transport mode, vehicle number/airline, departure location + time, and arrival location + time. Example: "Chuyến bay VN123, Vietnam Airlines. Khởi hành 07:00 từ SGN, đến HAN lúc 09:00."
-- `check_in` / `check_out`: Mention the hotel timing info. Example: "Nhận phòng từ 14:00." or "Trả phòng trước 12:00."
-- `luggage_drop` / `luggage_pickup`: Briefly explain the context. Example: "Gửi hành lý tại khách sạn trước khi nhận phòng."
-- `rest` / `end_day`: Briefly describe the relaxation. Example: "Nghỉ ngơi tại khách sạn." hoặc "Về khách sạn nghỉ ngơi qua đêm."
+- `outbound_arrival` / `return_departure`: Summarize the transport info from constraints. MUST include: transport mode, vehicle number/airline, departure location + time, and arrival location + time. Example: "Flight VN123, Vietnam Airlines. Departs 07:00 from SGN, arrives 09:00 at HAN."
+- `check_in` / `check_out`: Mention the hotel timing info. Example: "Check-in from 14:00." or "Check-out before 12:00."
+- `luggage_drop` / `luggage_pickup`: Briefly explain the context. Example: "Drop luggage at hotel reception before check-in time."
+- `rest` / `end_day`: Briefly describe the relaxation. Example: "Rest at hotel." or "Return to hotel for overnight stay."
+- `attraction` with includes: List which sub-attractions to visit, mention any skipped ones as optional. Example: "Visit the Mausoleum and Stilt House. If time permits, stop by One Pillar Pagoda nearby."
 
-**IMPORTANT - Multiple Roles:** If a stop combines multiple roles (e.g., `["check_in", "rest"]` or `["check_out", "luggage_pickup"]`), you MUST combine their meanings into a single note. Example: "Nhận phòng từ 14:00 và nghỉ ngơi tại khách sạn." or "Trả phòng trước 12:00 và gửi lại hành lý tại lễ tân."
+**IMPORTANT - Multiple Roles:** If a stop combines multiple roles (e.g., `["check_in", "rest"]` or `["check_out", "luggage_pickup"]`), you MUST combine their meanings into a single note. Example: "Check-in from 14:00 and rest at hotel." or "Check-out before 12:00 and leave luggage at reception."
 
 {
     "days": [
         {
-            "day": 0,
-            "title": "Đến Hà Nội & Khám phá",
+            "day": 1,
+            "title": "Arrival in Hanoi & Explore",
             "stops": [
                 {
                     "name": "Noi Bai International Airport",
                     "role": ["outbound_arrival"],
-                    "arrival": "09:00",
+                    "arrival": "07:00",
                     "departure": "09:30",
-                    "note": "Flight VN123, Vietnam Airlines. Departs 07:00 SGN → arrives 09:00 HAN."
+                    "note": "Flight VN123, Vietnam Airlines. Departs 07:00 SGN → arrives 09:00 HAN. ~30 min for luggage and customs."
                 },
                 {
                     "name": "Hotel X",
                     "role": ["luggage_drop"],
                     "arrival": "10:15",
                     "departure": "10:45",
-                    "note": "Gửi hành lý tại khách sạn trước khi đi chơi."
+                    "note": "Drop luggage at hotel before exploring."
                 },
                 {
                     "name": "Temple of Literature",
@@ -252,7 +257,7 @@ Add a `"note"` field (string, 1-2 short sentences) to provide extra context. **W
                     "includes": [],
                     "arrival": "11:00",
                     "departure": "12:30",
-                    "note": "Mua quà lưu niệm tranh thủ bút và đồ thủ công mỹ nghệ."
+                    "note": "Buy calligraphy art and handcrafted souvenirs."
                 },
                 {
                     "name": "Lunch",
@@ -265,7 +270,7 @@ Add a `"note"` field (string, 1-2 short sentences) to provide extra context. **W
                     "role": ["check_in", "rest"],
                     "arrival": "14:15",
                     "departure": "15:30",
-                    "note": "Nhận phòng khách sạn từ 14:00 và nghỉ trưa."
+                    "note": "Hotel check-in from 14:00 and afternoon rest."
                 },
                 {
                     "name": "Ho Chi Minh Mausoleum",
@@ -285,7 +290,7 @@ Add a `"note"` field (string, 1-2 short sentences) to provide extra context. **W
                     "role": ["end_day"],
                     "arrival": "19:45",
                     "departure": "",
-                    "note": "Về khách sạn nghỉ ngơi qua đêm."
+                    "note": "Return to hotel for overnight stay."
                 }
             ]
         }
@@ -308,14 +313,13 @@ Add a `"note"` field (string, 1-2 short sentences) to provide extra context. **W
 - The gap between one stop's departure and the next stop's arrival must be enough for the raw travel time (with buffer added)
 - If two consecutive stops are at the SAME location (e.g., hotel → check_in at same hotel), the next arrival can equal the current departure (no travel needed)
 - For meals (lunch/dinner): previous stop → meal = ~15 min (walk to nearby restaurant). Meal → next stop = same travel time as previous stop → next stop (restaurant is near previous stop)
-- Each day starts with `start_day` (or `outbound_arrival` on day 0) and ends with `end_day` (or `return_departure` on last day)
+- Each day starts with `start_day` (or `outbound_arrival` on day 1) and ends with `end_day` (or `return_departure` on last day)
 - NEVER schedule an attraction during "Closed" hours
 - NEVER exceed an attraction's closing time with your departure
 - must_visit = true → attraction MUST be in the schedule
 - Every attraction stop MUST have an "includes" field (list of sub-attraction names visited at that stop, or empty list [])
 - The "more_attractions" list MUST include: (1) attractions from the input that were dropped, (2) sub-attractions from "includes" that were skipped, and (3) your own suggestions of interesting places near the destination that weren't in the input. For each entry, specify "source" ("attraction_agent", "includes", or "itinerary_agent"), optionally "parent" (if source is "includes"), and "reason" (brief explanation why it's worth considering)
 """
-
 
 # ============================================================================
 # VALIDATION
@@ -388,6 +392,46 @@ def _parse_opening_range(hours_str: str) -> tuple[int, int] | None:
     return (earliest, latest) if earliest < latest or earliest < 1440 else None
 
 
+def _auto_correct_schedule(
+    schedule: dict,
+    schedule_constraints: dict | None = None,
+) -> None:
+    """Auto-correct common LLM mistakes IN-PLACE before validation.
+
+    Current corrections:
+    - If a non-first day starts with check_out (without start_day),
+      prepend a start_day stop so the day structure is valid.
+      The LLM frequently starts the last day with check_out because it
+      thinks that's the logical first action, forgetting that every day
+      must begin with start_day.
+    """
+    constraints = schedule_constraints or {}
+
+    for day_data in schedule.get("days", []):
+        day_idx = day_data.get("day", 1)
+        stops = day_data.get("stops", [])
+        if not stops or day_idx == 1:
+            continue
+
+        first_stop = stops[0]
+        first_roles = first_stop.get("role", [])
+        if isinstance(first_roles, str):
+            first_roles = [first_roles]
+
+        # Only fix if first stop has check_out but NOT start_day
+        has_checkout = "check_out" in first_roles
+        has_start_day = "start_day" in first_roles
+
+        if has_checkout and not has_start_day:
+            # Add start_day role to the existing check_out stop
+            first_roles.insert(0, "start_day")
+            first_stop["role"] = first_roles
+            logger.info(
+                f"   🔧 [AUTO-CORRECT] Day {day_idx}: added 'start_day' role "
+                f"to check_out stop '{first_stop.get('name', '')}'"
+            )
+
+
 def _validate_schedule(
     schedule: dict,
     attractions_info: list[dict],
@@ -438,19 +482,7 @@ def _validate_schedule(
         raw_lookup[(a, b)] = raw
         raw_lookup[(b, a)] = raw
 
-    # --- Check 5: Must-visit presence ---
-    must_visit_names = {info["name"] for info in attractions_info if info.get("must_visit")}
-    scheduled_attractions = set()
-    for day_data in schedule.get("days", []):
-        for stop in day_data.get("stops", []):
-            if _has_role(stop, "attraction"):
-                scheduled_attractions.add(stop.get("name", ""))
 
-    for missing in must_visit_names - scheduled_attractions:
-        violations.append({
-            "day": -1, "stop_name": missing,
-            "issue": f"MUST-VISIT attraction '{missing}' is NOT in the schedule",
-        })
 
     # --- Build hotel check-out/check-in lookup ---
     hotel_checkout_map = {}  # day_idx -> (hotel_name, co_time_min)
@@ -469,14 +501,14 @@ def _validate_schedule(
     deadline = constraints.get("last_day_deadline", {})
     deadline_time_min = _time_to_minutes(deadline.get("deadline_time", "")) if deadline.get("deadline_time") else None
     num_days = constraints.get("num_days", 0)
-    last_day_idx = num_days - 1 if num_days > 0 else None
+    last_day_idx = num_days if num_days > 0 else None
 
     # --- Track check_in across days (for rest validation) ---
     checked_in = False  # Becomes True once check_in appears in any day
 
     # --- Per-day checks ---
     for day_data in schedule.get("days", []):
-        day_idx = day_data.get("day", 0)
+        day_idx = day_data.get("day", 1)
         stops = day_data.get("stops", [])
 
         effective_location = ""  # last non-meal stop name for meal distance rule
@@ -501,18 +533,6 @@ def _validate_schedule(
                         "day": day_idx, "stop_name": name,
                         "issue": f"Roles {sorted(roles)} must have departure AFTER arrival, but arrival={arrival_str} departure={departure_str}",
                     })
-
-            # --- Check 10: Reasonable duration ---
-            if roles & {"attraction", "generic"} and 0 < duration < 30:
-                violations.append({
-                    "day": day_idx, "stop_name": name,
-                    "issue": f"Visit duration is only {duration}min (arrival={arrival_str}, departure={departure_str}). Minimum recommended: 30min.",
-                })
-            if roles & {"lunch", "dinner"} and 0 < duration < 45:
-                violations.append({
-                    "day": day_idx, "stop_name": name,
-                    "issue": f"Meal duration is only {duration}min (arrival={arrival_str}, departure={departure_str}). Minimum recommended: 45min.",
-                })
 
             # --- Check 1: Travel feasibility (gap >= raw travel time) ---
             if stop_idx > 0:
@@ -654,34 +674,28 @@ def _validate_schedule(
             for s in stops:
                 all_roles_in_day.update(_get_roles(s))
 
-            # Lunch required if schedule spans past 13:00
-            if first_dep_min < 780 and last_arr_min > 780:
-                if "lunch" not in all_roles_in_day:
-                    violations.append({
-                        "day": day_idx, "stop_name": "Lunch",
-                        "issue": f"Day {day_idx} has activity before 13:00 and after 13:00 but NO lunch scheduled",
-                    })
+            # Lunch check removed to allow flexible skipping or late lunches.
 
-            # Dinner required if schedule spans past 18:00
-            if first_dep_min < 1080 and last_arr_min > 1080:
+            # Dinner required if schedule spans significantly past 19:30 (1170 min)
+            if first_dep_min < 1170 and last_arr_min > 1170:
                 if "dinner" not in all_roles_in_day:
                     violations.append({
                         "day": day_idx, "stop_name": "Dinner",
-                        "issue": f"Day {day_idx} has activity after 18:00 but NO dinner scheduled",
+                        "issue": f"Day {day_idx} has continuous activity after 19:30 but NO dinner scheduled",
                     })
 
         # --- Check 9: Mandatory daily start/end structure ---
         if stops:
             first_roles = _get_roles(stops[0])
             last_roles = _get_roles(stops[-1])
-            is_first_day = (day_idx == 0)
+            is_first_day = (day_idx == 1)
             is_last_day = (last_day_idx is not None and day_idx == last_day_idx)
 
             if is_first_day:
                 if not (first_roles & {"outbound_arrival", "start_day"}):
                     violations.append({
                         "day": day_idx, "stop_name": stops[0].get("name", ""),
-                        "issue": f"Day 0 must START with 'outbound_arrival' or 'start_day', got {sorted(first_roles)}",
+                        "issue": f"Day 1 must START with 'outbound_arrival' or 'start_day', got {sorted(first_roles)}",
                     })
             else:
                 if "start_day" not in first_roles:
@@ -707,6 +721,809 @@ def _validate_schedule(
 
 
 # ============================================================================
+# MODIFY MODE
+# ============================================================================
+
+def _apply_constraint_overrides(schedule_constraints: dict, overrides: dict) -> dict:
+    """Apply user-provided constraint overrides to schedule_constraints.
+
+    Overwrites the old times so that both the LLM prompt and code validation
+    use the user's new values. Returns a modified copy.
+
+    Supported override keys:
+        outbound_departure_time: "HH:MM" → updates day_0_arrival with departure info
+        outbound_arrival_time: "HH:MM" → updates day_0_arrival.arrival_time
+        return_departure_time: "HH:MM" → updates last_day_deadline (recalc -2h)
+        return_arrival_time: "HH:MM" → updates last_day_deadline with arrival info
+        hotels: [{nights: [1,2,3], check_in_time, check_out_time}] → per-segment hotel overrides
+    """
+    import copy
+    constraints = copy.deepcopy(schedule_constraints)
+
+    # Override outbound departure time
+    if "outbound_departure_time" in overrides:
+        new_time = overrides["outbound_departure_time"]
+        if "day_0_arrival" not in constraints:
+            constraints["day_0_arrival"] = {}
+        constraints["day_0_arrival"]["departure_time"] = new_time
+        logger.info(f"   🔧 Override day_0_arrival.departure_time → {new_time}")
+
+    # Override outbound arrival time
+    if "outbound_arrival_time" in overrides:
+        new_time = overrides["outbound_arrival_time"]
+        if "day_0_arrival" not in constraints:
+            constraints["day_0_arrival"] = {}
+        constraints["day_0_arrival"]["arrival_time"] = new_time
+        # Recalculate ready_time (+30min buffer for luggage/customs)
+        try:
+            parts = new_time.split(":")
+            arr_min = int(parts[0]) * 60 + int(parts[1])
+            ready_min = arr_min + 30
+            constraints["day_0_arrival"]["ready_time"] = f"{ready_min // 60:02d}:{ready_min % 60:02d}"
+        except (ValueError, IndexError):
+            pass
+        logger.info(f"   🔧 Override day_0_arrival.arrival_time → {new_time}")
+
+    # Update note for day_0_arrival if any outbound override was applied
+    if "outbound_departure_time" in overrides or "outbound_arrival_time" in overrides:
+        dep = constraints.get("day_0_arrival", {}).get("departure_time", "?")
+        arr = constraints.get("day_0_arrival", {}).get("arrival_time", "?")
+        constraints["day_0_arrival"]["note"] = f"User override: flight {dep} → {arr}"
+
+    # Override return departure time
+    if "return_departure_time" in overrides:
+        new_time = overrides["return_departure_time"]
+        try:
+            parts = new_time.split(":")
+            dep_min = int(parts[0]) * 60 + int(parts[1])
+            # Must arrive at airport 2h before flight
+            deadline_min = max(480, dep_min - 120)
+            deadline_time = f"{deadline_min // 60:02d}:{deadline_min % 60:02d}"
+        except (ValueError, IndexError):
+            deadline_time = new_time
+
+        if "last_day_deadline" not in constraints:
+            constraints["last_day_deadline"] = {}
+        constraints["last_day_deadline"]["deadline_time"] = deadline_time
+        constraints["last_day_deadline"]["flight_departure"] = new_time
+        logger.info(f"   🔧 Override last_day_deadline → departure={new_time}, deadline={deadline_time}")
+
+    # Override return arrival time
+    if "return_arrival_time" in overrides:
+        new_time = overrides["return_arrival_time"]
+        if "last_day_deadline" not in constraints:
+            constraints["last_day_deadline"] = {}
+        constraints["last_day_deadline"]["arrival_time"] = new_time
+        logger.info(f"   🔧 Override last_day_deadline.arrival_time → {new_time}")
+
+    # Update note for last_day_deadline if any return override was applied
+    if "return_departure_time" in overrides or "return_arrival_time" in overrides:
+        dep = constraints.get("last_day_deadline", {}).get("flight_departure", "?")
+        arr = constraints.get("last_day_deadline", {}).get("arrival_time", "?")
+        dl = constraints.get("last_day_deadline", {}).get("deadline_time", "?")
+        constraints["last_day_deadline"]["note"] = (
+            f"User override: return flight at {dep} (arrives {arr}). "
+            f"Must arrive at airport by {dl}."
+        )
+
+    # Override hotel check-in/check-out times (per-segment with nights)
+    hotel_overrides = overrides.get("hotels", [])
+    if hotel_overrides and constraints.get("hotels"):
+        existing_hotels = constraints["hotels"]
+        for override in hotel_overrides:
+            override_nights = set(override.get("nights", []))
+            ci_time = override.get("check_in_time")
+            co_time = override.get("check_out_time")
+
+            for hotel in existing_hotels:
+                # Match by check_in_day (1-based, night number = check_in_day)
+                hotel_night = hotel.get("check_in_day", -1)
+                if hotel_night in override_nights or not override_nights:
+                    if ci_time:
+                        hotel["check_in_time"] = ci_time
+                    if co_time:
+                        hotel["check_out_time"] = co_time
+
+            override_desc = f"nights={list(override_nights)}"
+            if ci_time:
+                override_desc += f", check_in={ci_time}"
+            if co_time:
+                override_desc += f", check_out={co_time}"
+            logger.info(f"   🔧 Override hotel: {override_desc}")
+
+    return constraints
+
+
+ITINERARY_MODIFY_SYSTEM = """You are the Itinerary Scheduling Agent in MODIFY MODE.
+You are modifying an EXISTING schedule that the user has ALREADY APPROVED.
+Your job is to make ONLY the changes the user requested while keeping the rest intact.
+
+## Your Task
+1. Read the user's modification request carefully
+2. Check the Day Mapping to understand which day the user is referring to
+3. Check FEASIBILITY & COMPROMISE: Check if the user's EXACT requested change contradicts constraints (e.g., asking to visit place X in the morning, but X is closed in the morning).
+   - If the user's exact request contradicts constraints, you MUST STILL GENERATE A VALID SCHEDULE. Do your best to find a compromise (e.g., moving it to the afternoon instead of morning).
+   - Set the `fulfilled_user_request` field in your JSON output to `false`.
+   - Write a detailed `modification_notes` string explaining WHY you couldn't fulfill their exact request and what compromise you made instead.
+   - If the request WAS smoothly fulfilled without compromising their specific instructions, set `fulfilled_user_request: true`.
+4. Modify the schedule, keeping unchanged parts intact.
+
+## Suggesting New Attractions
+If user asks to replace an attraction with something specific (e.g., "replace X with Museum of Ethnology"):
+- Use the exact name they specified.
+- You MUST use `resolve_first` mode to resolve this place.
+
+If user asks to replace or add without naming a specific place (e.g., "replace with something else", "add something interesting"):
+- Suggest a specific attraction from YOUR KNOWLEDGE that fits:
+  - Same geographic area as the old attraction
+  - Matches the user's interests from plan_context
+  - Use the EXACT NAME as it appears on Google Maps
+- You MUST use `resolve_first` mode to resolve this suggested place.
+- Do NOT suggest places already in the schedule.
+
+## DUAL OUTPUT MODE (IMPORTANT!)
+When the user's request involves ANY new places (either they named it, or they asked for "something interesting" and you picked a specific name):
+- Output ONLY the place names for resolution — do NOT generate a full schedule yet.
+- Use this format:
+{{
+    "mode": "resolve_first",
+    "places_to_resolve": ["Place Name 1", "Place Name 2"],
+    "action_summary": "User wants to add Place Name 1 to afternoon of day 2 and replace X with Place Name 2 on day 3"
+}}
+
+When the user's request requires NO NEW PLACES (only removing, reordering, or minor time changes):
+- Output the FULL modified schedule directly (normal mode).
+- Use this format:
+{{
+    "mode": "direct_schedule",
+    "days": [...],
+    "dropped": [...],
+    ...
+}}
+
+Examples of "resolve_first" triggers:
+- "Thêm Bảo Tàng Dân Tộc Học vào ngày 2" → resolve_first: ["Bảo Tàng Dân Tộc Học"]
+- "Thay Văn Miếu bằng Lotte Center" → resolve_first: ["Lotte Center"]
+- "Thêm gì đó thú vị vào chiều ngày 2" → resolve_first: ["Suggested Place Name"]
+
+Examples of "direct_schedule" (NO new places needed):
+- "Xóa Văn Miếu khỏi ngày 2" → direct_schedule (removing only)
+- "Dời ăn trưa lên 11:30" → direct_schedule (time change only)
+- "Đổi thứ tự ngày 1 và ngày 2" → direct_schedule (reorder only)
+
+## Constraint Override
+If user explicitly provides new flight/hotel times (e.g., "my flight is at 15:00", "I'll check in at 13:00"):
+- Use the user's times, OVERRIDE the constraints below
+- Add a note to remind the user about implications:
+  - Flight: "Remember to arrive at the airport at least 2 hours early"
+  - Hotel: "Make sure this is within the hotel's allowed check-in/check-out time"
+
+## Modification Rules
+- ONLY change what the user requested or what's DIRECTLY AFFECTED by the change
+- Keep ALL other days/stops/times exactly as they are — the user already approved them
+- If removing an attraction: close the time gap naturally (shift later stops earlier, extend previous activity, or add a short generic activity)
+- If adding an attraction: fit it into the requested slot, adjust neighboring stops' times
+- If swapping attractions: replace the old with the new, adjust times for duration differences
+- Respect all constraints: opening hours, hotel check-in/out, meals, etc.
+- Each attraction stop MUST have an "includes" field (list, or empty [])
+- Write all notes in {language}
+
+## Response Format
+
+For direct_schedule mode, return ALL days (even unchanged ones) in this format:
+{{
+    "mode": "direct_schedule",
+    "days": [
+        {{
+            "day": 1,
+            "title": "...",
+            "stops": [
+                {{"name": "...", "role": ["..."], "arrival": "HH:MM", "departure": "HH:MM", "includes": [], "note": "..."}}
+            ]
+        }}
+    ],
+    "dropped": ["..."],
+    "more_attractions": [],
+    "fulfilled_user_request": true,
+    "modification_notes": "I moved X to the morning exactly as you asked."
+}}
+
+### CRITICAL — Exact Name Rule
+You MUST use the EXACT attraction and hotel names as provided in the input data. Do NOT modify, abbreviate, translate, add parentheses, or append alternative names. Copy the name character-for-character. If you want to add context (e.g., Vietnamese name, sub-attractions), put it in the `note` field instead.
+
+## Critical Rules
+- All times in HH:MM (24-hour clock)
+- `role` is ALWAYS a list: ["attraction"], ["lunch"], ["check_in", "rest"]
+- For `start_day`: arrival = departure (just depart)
+- For `end_day`: departure = "" (just arrive)
+- NEVER schedule during "Closed" hours
+- Meals: lunch 11:00-13:00, dinner 18:00-20:00 — keep existing meals unless directly affected
+- Output ONLY raw JSON. No text before or after.
+"""
+
+_MODIFY_WEEKDAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+async def _build_new_attractions_info(
+    attraction_data: dict,
+    plan_context: dict,
+) -> list[dict]:
+    """Build attractions_info (with per-day opening hours) for newly found attractions."""
+    from datetime import datetime, timedelta
+    from src.tools.dotnet_tools import get_place_from_db
+
+    new_info = []
+    start_date_str = plan_context.get("start_date", "")
+    num_days = plan_context.get("num_days", 1)
+
+    try:
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d") if start_date_str else datetime.now()
+    except ValueError:
+        start_date = datetime.now()
+
+    day_weekday_names = []
+    for d in range(num_days):
+        day_date = start_date + timedelta(days=d)
+        day_weekday_names.append(_MODIFY_WEEKDAY_NAMES[day_date.weekday()])
+
+    for segment in attraction_data.get("segments", []):
+        for attr in segment.get("attractions", []):
+            place_id = attr.get("placeId")
+            if not place_id:
+                continue
+
+            # Fetch place data from DB for opening hours
+            try:
+                db_result = await get_place_from_db.ainvoke({"place_id": place_id})
+                if not (isinstance(db_result, dict) and db_result.get("success")):
+                    continue
+                place_data = db_result.get("data", {})
+            except Exception as e:
+                logger.warning(f"Failed to fetch place data for {attr.get('name')}: {e}")
+                continue
+
+            open_hours = place_data.get("openHours", {})
+            hours_by_day = {}
+            for day_idx in range(num_days):
+                day_name = day_weekday_names[day_idx]
+                day_label = f"day_{day_idx + 1} ({day_name[:3].capitalize()})"
+
+                if not open_hours:
+                    hours_by_day[day_label] = "08:00-22:00 (assumed)"
+                    continue
+
+                hours_list = open_hours.get(day_name, [])
+                if not hours_list:
+                    all_empty = all(len(v) == 0 for v in open_hours.values())
+                    hours_by_day[day_label] = "08:00-22:00 (assumed)" if all_empty else "Closed"
+                    continue
+
+                if len(hours_list) == 1:
+                    single = hours_list[0].strip().lower()
+                    if single == "closed":
+                        hours_by_day[day_label] = "Closed"
+                        continue
+                    if "open 24" in single or "24 hours" in single:
+                        hours_by_day[day_label] = "Open 24 hours"
+                        continue
+
+                hours_by_day[day_label] = ", ".join(hours_list)
+
+            new_info.append({
+                "name": place_data.get("title", attr.get("name", "")),
+                "opening_hours": hours_by_day,
+                "must_visit": attr.get("must_visit", False),
+                "segment_name": segment.get("segment_name", ""),
+                "includes": attr.get("includes", []),
+                "notes": attr.get("notes", ""),
+            })
+
+    return new_info
+
+
+def _build_modify_prompt(
+    existing_schedule: dict,
+    attractions_info: list[dict],
+    distance_pairs: list[dict],
+    schedule_constraints: dict,
+    user_request: str,
+    plan_context: dict = None,
+    weather_data: dict = None,
+) -> str:
+    """Build the human message for the LLM modify scheduler."""
+    sections = []
+
+    # ── Day Mapping ── (fix day indexing confusion)
+    if plan_context:
+        start_date_str = plan_context.get("start_date", "")
+        num_days = plan_context.get("num_days", 0)
+        language = plan_context.get("language", "en")
+
+        if start_date_str and num_days:
+            from datetime import datetime, timedelta
+            try:
+                start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+            except ValueError:
+                start_date = None
+
+            if start_date:
+                vi_weekdays = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm",
+                               "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
+                en_weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday",
+                               "Friday", "Saturday", "Sunday"]
+                weekdays = vi_weekdays if language == "vi" else en_weekdays
+
+                sections.append("## Day Mapping (reference for user date requests)")
+                sections.append("Days use 1-based index: Day 1 = first day, Day 2 = second day, etc.")
+
+                for i in range(num_days):
+                    day_date = start_date + timedelta(days=i)
+                    wday_name = weekdays[day_date.weekday()]
+                    date_str = day_date.strftime("%d/%m/%Y")
+                    sections.append(f"- day {i+1} → {wday_name}, {date_str}")
+
+                if language == "vi":
+                    sections.append(
+                        'LƯU Ý:\n'
+                        '- "ngày 2" hoặc "ngày thứ 2" = `day`: 2 trong JSON.\n'
+                        '- "ngày 16/4" → tra bảng trên để biết day index tương ứng.\n'
+                        '- Thứ trong tuần: "Thứ Hai" = Monday. Dùng bảng trên để tra.'
+                    )
+                else:
+                    sections.append(
+                        'NOTE:\n'
+                        '- "day 2" or "the 2nd day" = `day`: 2 in JSON.\n'
+                        '- Map weekday names or dates to day indices using the table above.'
+                    )
+                sections.append("")
+
+    # Existing schedule
+    existing_days = existing_schedule.get("days", [])
+    sections.append("## Your Existing Schedule (user has approved this)\n")
+    sections.append(json.dumps({"days": existing_days}, indent=2, ensure_ascii=False))
+    sections.append("")
+
+    # Attractions opening hours
+    sections.append("## Attractions Opening Hours\n")
+    for attr in attractions_info:
+        title = f"### {attr['name']}"
+        if attr.get("must_visit"):
+            title += " (⭐ MUST-VISIT: You MUST include this in the schedule)"
+        sections.append(title)
+        if attr.get("includes"):
+            inc_names = [i.get("name", str(i)) if isinstance(i, dict) else str(i) for i in attr["includes"]]
+            sections.append(f"- Includes (sub-attractions within/adjacent): {', '.join(inc_names)}")
+        sections.append("- Opening hours:")
+        for day_key, hours in attr["opening_hours"].items():
+            sections.append(f"  - {day_key}: {hours}")
+        sections.append("")
+
+    # Distance matrix (if available)
+    if distance_pairs:
+        sections.append("## Travel Times (raw minutes)")
+        sections.append("| From | To | Travel Time (min) |")
+        sections.append("|------|----|-------------------|")
+        for pair in distance_pairs:
+            sections.append(f"| {pair['from']} | {pair['to']} | {pair['raw_minutes']} |")
+        sections.append("")
+
+    # Schedule constraints
+    if schedule_constraints:
+        sections.append("## Schedule Constraints")
+        sections.append(json.dumps(schedule_constraints, indent=2, ensure_ascii=False))
+        sections.append("")
+
+    # Weather context (reuse from previous run)
+    if weather_data and weather_data.get("daily"):
+        sections.append("## Weather Forecast (for context)")
+        for day_w in weather_data["daily"]:
+            rain = f", rain chance: {day_w.get('rain_chance_pct', '?')}%" if 'rain_chance_pct' in day_w else ""
+            sections.append(
+                f"- Day {day_w['day']} ({day_w.get('date', '?')}): "
+                f"{day_w.get('condition', '?')}, {day_w.get('temp_min', '?')}\u2013{day_w.get('temp_max', '?')}\u00b0C{rain}"
+            )
+        sections.append("")
+
+    # User's modification request
+    sections.append("## User's Active Modification Goal")
+    sections.append(f"Latest User Message: \"{user_request}\"")
+    sections.append("")
+    sections.append("Modify the schedule to satisfy the User's Active Goal. Output ONLY the JSON.")
+
+    return "\n".join(sections)
+
+
+async def _itinerary_modify_mode(state: GraphState) -> dict[str, Any]:
+    """Handle itinerary modification in MODIFY mode.
+
+    2-pass process:
+    Pass 1: LLM modifies the schedule (may suggest new attractions with _is_new=true,
+            or handle generic requests with guessed times)
+    Post-resolve: resolve placeIds + fetch opening hours + compute distances for _is_new places
+    Pass 2 (if _is_new resolved): re-prompt LLM with newly resolved real data
+            so it can re-schedule accurately with real opening hours + distances.
+
+    Uses cached pipeline data from previous run instead of re-running the full pipeline.
+    Supports feasibility check and guided re-schedule.
+    """
+    logger.info("=" * 60)
+    logger.info("\U0001f4c5 [ITINERARY_AGENT_MODIFY] Entering modify mode")
+
+    current_plan = state.get("current_plan", {})
+    existing_itinerary = current_plan.get("itinerary", {})
+    plan_context = current_plan.get("plan_context", {})
+
+    # Check if there's an existing itinerary to modify
+    if not existing_itinerary.get("days"):
+        logger.error("\U0001f4c5 [ITINERARY_AGENT_MODIFY] No existing itinerary to modify")
+        return {
+            "agent_outputs": {"itinerary_agent": {
+                "error": True,
+                "message": "No existing itinerary to modify",
+                "days": [], "dropped": [], "method": "llm_modify",
+            }},
+            "messages": [AIMessage(content="[Itinerary Agent] No existing itinerary to modify")],
+        }
+
+    # Get user modification request
+    # If triggered by select_and_apply, use the auto-generated message
+    selection_update = state.get("selection_update", {})
+    if selection_update and selection_update.get("auto_user_message"):
+        user_message = selection_update["auto_user_message"]
+        logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Selection-triggered rerange: {user_message[:100]}")
+    else:
+        last_intent = state.get("last_intent", {})
+        if last_intent.get("user_request_rewrite"):
+            user_message = last_intent["user_request_rewrite"]
+            logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Using explicit Intent user_request_rewrite: {user_message[:100]}")
+        else:
+            user_message = _get_latest_user_message(state)
+            logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Using raw user request: {user_message[:100]}")
+
+    # Get cached pipeline data from previous itinerary run
+    cached_pipeline = existing_itinerary.get("_cached_pipeline", {})
+    attractions_info = list(cached_pipeline.get("attractions_info", []))
+    distance_pairs = cached_pipeline.get("distance_pairs", [])
+    schedule_constraints = cached_pipeline.get("schedule_constraints", {})
+
+    # Apply constraint overrides from Intent Agent or select_and_apply node
+    constraint_overrides = state.get("constraint_overrides", {})
+    if constraint_overrides:
+        logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Applying constraint overrides: {constraint_overrides}")
+        schedule_constraints = _apply_constraint_overrides(schedule_constraints, constraint_overrides)
+
+    # Get weather data (reuse from previous run if available)
+    weather_data = state.get("agent_outputs", {}).get("weather", {})
+
+    # Build modify prompt
+    language = plan_context.get("language", "en")
+    system_content = ITINERARY_MODIFY_SYSTEM.replace("{language}", language)
+    human_content = _build_modify_prompt(
+        existing_schedule=existing_itinerary,
+        attractions_info=attractions_info,
+        distance_pairs=distance_pairs,
+        schedule_constraints=schedule_constraints,
+        user_request=user_message,
+        plan_context=plan_context,
+        weather_data=weather_data,
+    )
+
+    messages = [
+        SystemMessage(content=system_content),
+        HumanMessage(content=human_content),
+    ]
+
+    # ── Step 1: LLM call — dual output mode ──
+    max_retries = 2
+    best_result = None
+    itinerary_result = {}
+    violations = []
+    encountered_violations = []
+    resolve_first_places = None  # Track if Pass 1 returned resolve_first mode
+
+    try:
+        logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Pass 1: Initial LLM call")
+        result = await llm_itinerary.ainvoke(messages)
+        parsed = _extract_json(result.content)
+
+        output_mode = parsed.get("mode", "direct_schedule")
+
+        if output_mode == "resolve_first":
+            # ── resolve_first mode: LLM returned place names only ──
+            resolve_first_places = parsed.get("places_to_resolve", [])
+            action_summary = parsed.get("action_summary", "")
+            logger.info(f"📅 [ITINERARY_AGENT_MODIFY] resolve_first mode: {resolve_first_places}")
+            logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Action: {action_summary}")
+            # Will be handled in Step 2 below
+        else:
+            # ── direct_schedule mode: normal full schedule ──
+            logger.info(f"📅 [ITINERARY_AGENT_MODIFY] direct_schedule mode")
+            _auto_correct_schedule(parsed, schedule_constraints)
+            violations = _validate_schedule(
+                parsed, attractions_info, schedule_constraints, distance_pairs
+            )
+
+            if not violations:
+                logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Valid on attempt 1")
+                best_result = parsed
+            else:
+                logger.warning(f"📅 [ITINERARY_AGENT_MODIFY] {len(violations)} violations on attempt 1")
+                for v in violations:
+                    logger.warning(f"      Day {v['day']}: {v['stop_name']} — {v['issue']}")
+                best_result = parsed
+
+                for v in violations:
+                    if any(kw in v["issue"] for kw in ["Closed", "opens at", "closes at"]):
+                        note = f"{v['stop_name']}: {v['issue']}"
+                        if note not in encountered_violations:
+                            encountered_violations.append(note)
+
+                # Retry loop (only for direct_schedule mode)
+                for attempt in range(1, max_retries + 1):
+                    violation_text = "\n".join(
+                        f"- Day {v['day']}: {v['stop_name']} — {v['issue']}" for v in violations
+                    )
+                    messages.append(AIMessage(content=result.content))
+                    retry_msg = f"Your modified schedule has {len(violations)} violations:\n{violation_text}\n\n"
+                    retry_msg += (
+                        "CRITICAL INSTRUCTION: If these violations mean you CANNOT fulfill the user's specific request "
+                        "(e.g., they asked to visit a place at a time when it is closed, or in an order that violates opening hours), "
+                        "YOU MUST FIX THE SCHEDULE TO BE VALID (e.g., move it to a time when it is open).\n"
+                        "BUT you MUST set `\"fulfilled_user_request\": false` at the root of your JSON, and explicitly explain "
+                        "your compromise in `\"modification_notes\"`.\n\n"
+                        "If the violations are just minor scheduling mistakes (like overlapping times) that CAN be fixed while still "
+                        "respecting the user's wishes, fix them and return the COMPLETE corrected JSON schedule with `\"fulfilled_user_request\": true`."
+                    )
+                    messages.append(HumanMessage(content=retry_msg))
+
+                    logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Retry attempt {attempt + 1}/{max_retries + 1}")
+                    result = await llm_itinerary.ainvoke(messages)
+                    parsed = _extract_json(result.content)
+                    _auto_correct_schedule(parsed, schedule_constraints)
+                    violations = _validate_schedule(
+                        parsed, attractions_info, schedule_constraints, distance_pairs
+                    )
+
+                    if not violations:
+                        logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Valid on attempt {attempt + 1}")
+                        best_result = parsed
+                        break
+
+                    logger.warning(f"📅 [ITINERARY_AGENT_MODIFY] {len(violations)} violations on attempt {attempt + 1}")
+                    best_result = parsed
+                    for v in violations:
+                        if any(kw in v["issue"] for kw in ["Closed", "opens at", "closes at"]):
+                            note = f"{v['stop_name']}: {v['issue']}"
+                            if note not in encountered_violations:
+                                encountered_violations.append(note)
+
+            # Post-retry: build itinerary_result
+            if not itinerary_result:
+                itinerary_result = best_result or {"days": [], "dropped": []}
+                itinerary_result["method"] = "llm_modify"
+                itinerary_result["error"] = False
+                itinerary_result["fulfilled_user_request"] = best_result.get("fulfilled_user_request", True)
+
+                ai_notes = best_result.get("modification_notes", "")
+                if encountered_violations and not itinerary_result["fulfilled_user_request"]:
+                    combo_notes = f"{ai_notes}\n\nConstraints encountered during adjustments:\n" + "\n".join(f"- {v}" for v in encountered_violations)
+                    itinerary_result["modification_notes"] = combo_notes.strip()
+                    logger.info(f"📅 [MODIFY] Request compromise notes:\n{itinerary_result['modification_notes']}")
+                else:
+                    itinerary_result["modification_notes"] = ai_notes
+
+                if violations:
+                    itinerary_result["warnings"] = violations
+
+    except Exception as e:
+        logger.error(f"📅 [ITINERARY_AGENT_MODIFY] Error: {e}", exc_info=True)
+        itinerary_result = {
+            "error": True,
+            "message": str(e),
+            "days": existing_itinerary.get("days", []),
+            "dropped": existing_itinerary.get("dropped", []),
+            "method": "llm_modify",
+        }
+
+    # ── Step 2: Resolve + Pass 2 ──
+    if resolve_first_places:
+        # ── resolve_first path: resolve named places → Pass 2 full schedule ──
+        logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Resolving {len(resolve_first_places)} place(s): {resolve_first_places}")
+        from src.services.place_resolution_llm import resolve_place_names_batch
+        from datetime import datetime, timedelta
+        from src.services.itinerary_builder_nonVRP import build_symmetric_distance_pairs
+        from src.tools.itinerary_tools import _build_distance_matrix
+        from src.tools.maps_tools import LOCAL_TRANSPORT_MAP
+
+        destination = plan_context.get("destination", "")
+
+        resolved_items = await resolve_place_names_batch(
+            names=resolve_first_places,
+            destination=destination,
+            location_bias=destination
+        )
+
+        if resolved_items:
+            logger.info(f"📅 [MODIFY_RESOLVE] Resolved {len(resolved_items)}/{len(resolve_first_places)} place(s) using LLM batch")
+
+            # Build attractions_info for resolved places
+            start_date_str = plan_context.get("start_date", "")
+            num_days = plan_context.get("num_days", 1)
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d") if start_date_str else datetime.now()
+            day_weekday_names = [_MODIFY_WEEKDAY_NAMES[(start_date + timedelta(days=d)).weekday()] for d in range(num_days)]
+
+            new_attractions_info = []
+            new_locations = []
+
+            for item in resolved_items:
+                db_data = item.get("db_data", {})
+                attr_name = item.get("title", item["original_name"])
+                open_hours = db_data.get("openHours", {})
+
+                hours_by_day = {}
+                for day_idx in range(num_days):
+                    day_name = day_weekday_names[day_idx]
+                    day_label = f"day_{day_idx + 1} ({day_name[:3].capitalize()})"
+                    if not open_hours:
+                        hours_by_day[day_label] = "08:00-22:00 (assumed)"
+                    else:
+                        hours_list = open_hours.get(day_name, [])
+                        if not hours_list:
+                            all_empty = all(len(v) == 0 for v in open_hours.values())
+                            hours_by_day[day_label] = "08:00-22:00 (assumed)" if all_empty else "Closed"
+                        elif len(hours_list) == 1:
+                            single = hours_list[0].strip().lower()
+                            if single == "closed":
+                                hours_by_day[day_label] = "Closed"
+                            elif "open 24" in single or "24 hours" in single:
+                                hours_by_day[day_label] = "Open 24 hours"
+                            else:
+                                hours_by_day[day_label] = ", ".join(hours_list)
+                        else:
+                            hours_by_day[day_label] = ", ".join(hours_list)
+
+                new_attractions_info.append({
+                    "name": attr_name,
+                    "opening_hours": hours_by_day,
+                    "must_visit": False, "segment_name": "", "includes": [],
+                    "notes": "", "estimated_entrance_fee": {"total": 0, "note": ""},
+                })
+
+                location = db_data.get("location") or {}
+                coords = location.get("coordinates", [])
+                if len(coords) >= 2:
+                    new_locations.append({"name": attr_name, "lat": coords[1], "lng": coords[0], "type": "attraction"})
+
+            # Compute distances
+            new_distance_pairs = []
+            if new_locations:
+                existing_resolved = existing_itinerary.get("resolved_places", {})
+                existing_locations = []
+                for group_name in ["airports", "hotels", "attractions"]:
+                    for item in existing_resolved.get(group_name, []):
+                        res = item.get("resolved")
+                        if not res: continue
+                        title = res.get("title", "")
+                        loc = res.get("location") or {}
+                        coords = loc.get("coordinates", [])
+                        if title and len(coords) >= 2:
+                            existing_locations.append({"name": title, "lat": coords[1], "lng": coords[0], "type": group_name.rstrip("s")})
+
+                all_locs = existing_locations + new_locations
+                if len(all_locs) >= 2:
+                    try:
+                        transport = plan_context.get("local_transportation", "car")
+                        travel_mode = LOCAL_TRANSPORT_MAP.get(transport, "DRIVE")
+                        dm = await _build_distance_matrix(all_locs, travel_mode=travel_mode)
+                        if dm:
+                            all_pairs = build_symmetric_distance_pairs(all_locs, dm)
+                            new_loc_names = {loc["name"] for loc in new_locations}
+                            new_distance_pairs = [p for p in all_pairs if p.get("from") in new_loc_names or p.get("to") in new_loc_names]
+                            logger.info(f"📅 [MODIFY_RESOLVE] Computed {len(new_distance_pairs)} distance pairs")
+                    except Exception as e:
+                        logger.warning(f"📅 [MODIFY_RESOLVE] Distance matrix failed: {e}")
+
+            # Pass 2: Re-prompt with enriched data for FULL schedule
+            enriched_attractions = list(attractions_info) + new_attractions_info
+            enriched_distances = list(distance_pairs) + new_distance_pairs
+
+            pass2_human = _build_modify_prompt(
+                existing_schedule=existing_itinerary,
+                attractions_info=enriched_attractions,
+                distance_pairs=enriched_distances,
+                schedule_constraints=schedule_constraints,
+                user_request=user_message,
+                plan_context=plan_context,
+                weather_data=weather_data,
+            )
+
+            # Force direct_schedule in Pass 2 prompt
+            pass2_system = system_content + "\n\nIMPORTANT: You MUST output a direct_schedule with the full schedule. Do NOT output resolve_first again."
+
+            pass2_messages = [
+                SystemMessage(content=pass2_system),
+                HumanMessage(content=pass2_human),
+            ]
+
+            try:
+                logger.info("📅 [ITINERARY_AGENT_MODIFY] Pass 2: Generating full schedule with resolved data")
+                pass2_raw = await llm_itinerary.ainvoke(pass2_messages)
+                pass2_parsed = _extract_json(pass2_raw.content)
+                _auto_correct_schedule(pass2_parsed, schedule_constraints)
+
+                violations = _validate_schedule(pass2_parsed, enriched_attractions, schedule_constraints, enriched_distances)
+                itinerary_result = pass2_parsed
+                itinerary_result["method"] = "llm_modify"
+                itinerary_result["error"] = False
+                itinerary_result["fulfilled_user_request"] = pass2_parsed.get("fulfilled_user_request", True)
+                itinerary_result["modification_notes"] = pass2_parsed.get("modification_notes", "")
+                if violations:
+                    itinerary_result["warnings"] = violations
+                attractions_info = enriched_attractions
+                distance_pairs = enriched_distances
+                logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Pass 2 complete ({len(violations)} violations)")
+            except Exception as e:
+                logger.error(f"📅 [ITINERARY_AGENT_MODIFY] Pass 2 failed: {e}")
+                itinerary_result = {
+                    "error": True, "message": f"Pass 2 failed: {e}",
+                    "days": existing_itinerary.get("days", []),
+                    "dropped": existing_itinerary.get("dropped", []),
+                    "method": "llm_modify",
+                }
+        else:
+            logger.warning("📅 [MODIFY_RESOLVE] None of the places could be resolved — falling back to direct schedule")
+            # Force direct_schedule mode: replace system prompt and add explicit instruction
+            fallback_system = system_content + "\n\nIMPORTANT: You MUST output a direct_schedule with the full schedule. Do NOT output resolve_first again. The places could not be found — use your best knowledge to add suitable alternatives."
+            fallback_messages = [
+                SystemMessage(content=fallback_system),
+                HumanMessage(content=messages[-1].content if messages else "Please provide the modified schedule using direct_schedule mode."),
+            ]
+            try:
+                fallback_raw = await llm_itinerary.ainvoke(fallback_messages)
+                fallback_parsed = _extract_json(fallback_raw.content)
+                _auto_correct_schedule(fallback_parsed, schedule_constraints)
+                violations = _validate_schedule(fallback_parsed, attractions_info, schedule_constraints, distance_pairs)
+                itinerary_result = fallback_parsed
+                itinerary_result["method"] = "llm_modify"
+                itinerary_result["error"] = False
+                if violations:
+                    itinerary_result["warnings"] = violations
+            except Exception as e:
+                logger.error(f"📅 [ITINERARY_AGENT_MODIFY] Fallback failed: {e}")
+                itinerary_result = {
+                    "error": True, "message": str(e),
+                    "days": existing_itinerary.get("days", []),
+                    "dropped": [], "method": "llm_modify",
+                }
+
+    # Preserve metadata from existing itinerary
+    itinerary_result["plan_context"] = {
+        "start_date": plan_context.get("start_date", ""),
+        "end_date": plan_context.get("end_date", ""),
+        "num_days": plan_context.get("num_days", 0),
+        "destination": plan_context.get("destination", ""),
+    }
+    if "resolved_places" not in itinerary_result:
+        itinerary_result["resolved_places"] = existing_itinerary.get("resolved_places", {})
+    itinerary_result["_cached_pipeline"] = {
+        "attractions_info": attractions_info,
+        "distance_pairs": distance_pairs,
+        "schedule_constraints": schedule_constraints,
+    }
+
+    num_days = len(itinerary_result.get("days", []))
+    is_feasibility = itinerary_result.get("feasibility_issue", False)
+    status = "feasibility issue" if is_feasibility else f"{num_days} days"
+    logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Completed: {status}")
+    logger.info("=" * 60)
+
+    return {
+        "agent_outputs": {"itinerary_agent": itinerary_result},
+        "messages": [AIMessage(content=f"[Itinerary Agent] Modified itinerary ({status})")],
+    }
+
+
+# ============================================================================
 # AGENT NODE
 # ============================================================================
 
@@ -721,18 +1538,25 @@ async def itinerary_nonVRP_agent_node(state: GraphState) -> dict[str, Any]:
         5. Return schedule
     """
     logger.info("=" * 60)
-    logger.info("📅 [ITINERARY_AGENT_nonVRP] Node entered")
+    logger.info("\U0001f4c5 [ITINERARY_AGENT_nonVRP] Node entered")
+
+    # Check for modify mode (including selection-triggered rerange)
+    intent = state.get("routed_intent", "")
+    if intent in ("modify_itinerary", "select_hotel", "select_flight"):
+        return await _itinerary_modify_mode(state)
 
     agent_outputs = state.get("agent_outputs", {})
-    plan = state.get("orchestrator_plan", {})
-    plan_context = plan.get("plan_context", {})
+    plan = state.get("macro_plan", {})
+    current_plan = state.get("current_plan", {})
+    plan_context = current_plan.get("plan_context", {})
+    mobility_plan = plan.get("mobility_plan", {})
 
     itinerary_result = {}
 
     try:
         # Phase 1: Build scheduling input
         logger.info("📅 [ITINERARY_AGENT_nonVRP] Phase 1: Building scheduling input...")
-        pipeline_data = await run_itinerary_pipeline_nonVRP(agent_outputs, plan, useRouteMatrix)
+        pipeline_data = await run_itinerary_pipeline_nonVRP(agent_outputs, plan, plan_context, useRouteMatrix)
 
         if pipeline_data.get("error"):
             itinerary_result = {
@@ -741,10 +1565,18 @@ async def itinerary_nonVRP_agent_node(state: GraphState) -> dict[str, Any]:
                 "days": [], "dropped": [], "method": "llm",
             }
         else:
+            # Apply constraint overrides if user provided flight/hotel times
+            constraint_overrides = state.get("constraint_overrides", {})
+            if constraint_overrides:
+                logger.info(f"📅 [ITINERARY_AGENT_nonVRP] Applying constraint overrides: {constraint_overrides}")
+                pipeline_data["schedule_constraints"] = _apply_constraint_overrides(
+                    pipeline_data["schedule_constraints"], constraint_overrides
+                )
+
             # Phase 2: LLM scheduling
             logger.info("📅 [ITINERARY_AGENT_nonVRP] Phase 2: LLM scheduling...")
             weather_data = agent_outputs.get("weather", {})
-            human_content = _build_scheduling_prompt(pipeline_data, plan_context, weather_data)
+            human_content = _build_scheduling_prompt(pipeline_data, plan_context, mobility_plan, weather_data)
 
             # Inject language into system prompt for note generation
             language = plan_context.get("language", "en")
@@ -755,7 +1587,7 @@ async def itinerary_nonVRP_agent_node(state: GraphState) -> dict[str, Any]:
                 HumanMessage(content=human_content),
             ]
 
-            max_retries = 2
+            max_retries = 3
             best_schedule = None
             violations = []
 
@@ -763,8 +1595,9 @@ async def itinerary_nonVRP_agent_node(state: GraphState) -> dict[str, Any]:
                 logger.info(f"   Attempt {attempt + 1}/{max_retries + 1}: Invoking LLM...")
                 result = await llm_itinerary.ainvoke(messages)
                 schedule = _extract_json(result.content)
-                # schedule = _extract_json(MOCK)
 
+
+                _auto_correct_schedule(schedule, pipeline_data["schedule_constraints"])
                 violations = _validate_schedule(schedule, pipeline_data["attractions_info"], pipeline_data["schedule_constraints"], pipeline_data["distance_pairs"])
 
                 if not violations:
@@ -805,6 +1638,11 @@ async def itinerary_nonVRP_agent_node(state: GraphState) -> dict[str, Any]:
             itinerary_result["resolved_places_count"] = pipeline_data.get("resolved_places_count", 0)
             itinerary_result["total_places_count"] = pipeline_data.get("total_places_count", 0)
             itinerary_result["resolved_places"] = pipeline_data.get("resolved_places", {})
+            itinerary_result["_cached_pipeline"] = {
+                "attractions_info": pipeline_data.get("attractions_info", []),
+                "distance_pairs": pipeline_data.get("distance_pairs", []),
+                "schedule_constraints": pipeline_data.get("schedule_constraints", {}),
+            }
 
     except Exception as e:
         logger.error(f"   ❌ Itinerary Agent (nonVRP) error: {e}", exc_info=True)
@@ -826,13 +1664,13 @@ async def itinerary_nonVRP_agent_node(state: GraphState) -> dict[str, Any]:
 # PROMPT BUILDER
 # ============================================================================
 
-def _build_scheduling_prompt(pipeline_data: dict, plan_context: dict, weather_data: dict | None = None) -> str:
+def _build_scheduling_prompt(pipeline_data: dict, plan_context: dict, mobility_plan: dict = None, weather_data: dict | None = None) -> str:
     """Build the human message for the LLM scheduler."""
 
     attractions_info = pipeline_data["attractions_info"]
     distance_pairs = pipeline_data["distance_pairs"]
     constraints = pipeline_data["schedule_constraints"]
-    mobility_plan = plan_context.get("mobility_plan", {})
+    mobility_plan = mobility_plan or {}
 
     # --- Attractions ---
     sections = ["## Attractions to Schedule\n"]
@@ -866,19 +1704,21 @@ def _build_scheduling_prompt(pipeline_data: dict, plan_context: dict, weather_da
     sections.append(f"- Transport: {constraints.get('local_transportation', 'car')}")
     sections.append(f"- Language: {plan_context.get('language', 'en')} (use this for all notes and generic activity names)")
 
-    # Day 0 arrival
+    # Day 1 arrival
     arrival = constraints.get("day_0_arrival")
     if arrival:
-        sections.append(f"\n### Day 0 Arrival")
+        sections.append(f"\n### Day 1 Arrival")
         sections.append(f"- Location: {arrival.get('location', '?')}")
+        if arrival.get("departure_time"):
+            sections.append(f"- Flight departure from origin: {arrival['departure_time']}")
         if arrival.get("start_time"):
             sections.append(f"- Route Start Time: {arrival['start_time']}")
-        sections.append(f"- Arrival time: {arrival.get('arrival_time', '?')}")
+        sections.append(f"- Landing/Arrival at destination: {arrival.get('arrival_time', '?')}")
         if arrival.get("flight_number"):
             sections.append(f"- Flight: {arrival.get('flight_number', '')} ({arrival.get('airline', '')})")
-            sections.append(f"- Departure: {arrival.get('departure_airport', '')} at {arrival.get('departure_time', '')}")
+            sections.append(f"- From: {arrival.get('departure_airport', '')}")
         if arrival.get("ready_time"):
-            sections.append(f"- Ready to explore: {arrival['ready_time']}")
+            sections.append(f"- Ready to explore (after luggage/customs): {arrival['ready_time']}")
         sections.append(f"- Note: {arrival.get('note', '')}")
 
     # Last day deadline

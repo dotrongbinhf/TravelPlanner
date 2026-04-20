@@ -36,8 +36,8 @@ llm_verify = (
     )
     if settings.USE_VERCEL_AI_GATEWAY
     else ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite-preview",
-        google_api_key=settings.GOOGLE_GEMINI_API_KEY,
+        model="gemini-2.5-flash-lite",
+        google_api_key=settings.GOOGLE_GEMINI_API_KEY_PAID,
         temperature=0.3,
         streaming=False,
     )
@@ -46,7 +46,7 @@ llm_verify = (
 VERIFY_SYSTEM_PROMPT = """You verify attraction names against Google Maps candidates.
 
 For each attraction, pick the candidate that IS that place (names may differ between languages).
-If no candidate matches, suggest a better search query.
+If no candidate matches, suggest ONE alternative search query following the ALT LANGUAGE instruction.
 
 Output ONLY a JSON array, one entry per attraction, in order:
 [
@@ -55,7 +55,9 @@ Output ONLY a JSON array, one entry per attraction, in order:
 ]
 
 - match: 0-based candidate index, or -1 if no match
-- alt: alternative search query (only when match is -1), or null
+- alt: ONE alternative search query (only when match is -1), or null
+- IMPORTANT: if "searched_queries" is shown, those queries already failed to produce correct candidates. You MUST suggest a COMPLETELY DIFFERENT query that is NOT in the searched list.
+- IMPORTANT: follow the "ALT LANGUAGE" instruction in the prompt to decide the language for your alt suggestion.
 """
 
 def _extract_json(text_or_list: Any) -> dict:
@@ -92,18 +94,16 @@ async def _fetch_candidates(
     name: str,
     semaphore: asyncio.Semaphore,
     location_bias: Optional[str] = None,
-    other_name: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Fetch candidates for a single attraction name.
 
     1. textSearch(name) → top 5 placeIds
-    2. If other_name provided, textSearch(other_name) → merge candidates (dedup by placeId)
-    3. get_place_from_db for each placeId → title, address
+    2. get_place_from_db for each placeId → title, address
 
     Returns list of candidate dicts with: placeId, title, address
     """
     async with semaphore:
-        logger.info(f"[resolve] Fetching candidates for: '{name}'" + (f" (also: '{other_name}')" if other_name else ""))
+        logger.info(f"[resolve] Fetching candidates for: '{name}'")
 
         # Step 1: Text Search → placeIds (primary name)
         all_place_ids = []
@@ -130,8 +130,6 @@ async def _fetch_candidates(
                     all_place_ids.append(pid)
 
         await _search_and_collect(name)
-        if other_name:
-            await _search_and_collect(other_name)
 
         if not all_place_ids:
             return []
@@ -164,21 +162,46 @@ async def _fetch_candidates(
 def _build_verify_prompt(
     attractions_with_candidates: list[dict],
     destination: str,
+    failed_queries: dict[int, list[str]] | None = None,
+    alt_language: str | None = "local",
 ) -> str:
-    """Build the human message for LLM verification."""
+    """Build the human message for LLM verification.
+
+    alt_language controls what kind of alternative the LLM should suggest:
+      - "local": suggest alt in the destination's local language
+      - "english": suggest alt in English / international name
+      - None: final round, no more alt suggestions
+    """
     lines = [f"Destination: {destination}\n"]
+
+    # Language instruction for alt suggestions
+    if alt_language == "local":
+        lines.append("ALT LANGUAGE: If no match, suggest an alternative name in the LOCAL language of the destination (e.g. Vietnamese for Vietnam, Japanese for Japan). Do NOT suggest English names.\n")
+    elif alt_language == "english":
+        lines.append("ALT LANGUAGE: If no match, suggest the place's ENGLISH / international name as the alt query. Do NOT repeat local-language names that already failed.\n")
+    else:
+        lines.append("ALT LANGUAGE: This is the FINAL round — set alt to null for ALL entries. No more retries available.\n")
 
     for i, item in enumerate(attractions_with_candidates):
         name = item["name"]
+        search_query = item.get("search_query")
         candidates = item["candidates"]
-        lines.append(f"{i}. \"{name}\"")
+        lines.append(f'{i}. "{name}"')
+
+        # Show what query was actually searched (if different from name)
+        if search_query and search_query != name:
+            lines.append(f'   (searched as: "{search_query}")')
+
+        # Show previously failed queries so LLM suggests different ones
+        if failed_queries and i in failed_queries:
+            lines.append(f"   (searched_queries: {failed_queries[i]})")
 
         if not candidates:
             lines.append("   (no candidates)")
         else:
             for j, c in enumerate(candidates):
                 cat = c.get('category', 'unknown')
-                lines.append(f"   {j}: \"{c['title']}\" — {c['address']} (Category: {cat})")
+                lines.append(f'   {j}: "{c["title"]}" — {c["address"]} (Category: {cat})')
         lines.append("")
 
     return "\n".join(lines)
@@ -202,7 +225,15 @@ def _code_verify(
         if i >= len(attractions_with_candidates):
             break
 
-        match_idx = entry.get("match", -1)
+        raw_match = entry.get("match", -1)
+        if raw_match is None:
+            match_idx = -1
+        else:
+            try:
+                match_idx = int(raw_match)
+            except ValueError:
+                match_idx = -1
+                
         alt_query = entry.get("alt")
         candidates = attractions_with_candidates[i]["candidates"]
 
@@ -265,7 +296,6 @@ async def resolve_all_attractions(
         for attr_idx, attr in enumerate(segment.get("attractions", [])):
             all_attractions.append({
                 "name": attr.get("name", ""),
-                "other_name": attr.get("other_name"),
                 "segment_idx": seg_idx,
                 "attraction_idx": attr_idx,
                 "is_include": False,
@@ -277,23 +307,31 @@ async def resolve_all_attractions(
 
     logger.info(f"[resolve] Resolving {len(all_attractions)} attractions for '{destination}'")
 
-    # --- Step 2: Fetch candidates (parallel), using other_name when available ---
+    # --- Step 2: Fetch candidates (parallel) ---
     semaphore = asyncio.Semaphore(5)
     all_candidates = await asyncio.gather(*[
         _fetch_candidates(
-            a["name"], semaphore, location_bias,
-            other_name=a.get("other_name"),
+            a["name"], semaphore, location_bias
         )
         for a in all_attractions
     ])
 
-    awc = [  # attractions_with_candidates
-        {"name": a["name"], "candidates": c}
-        for a, c in zip(all_attractions, all_candidates)
-    ]
+    # Track all queries that have been tried per attraction
+    searched_queries: dict[int, list[str]] = {}
+    for a_idx, info in enumerate(all_attractions):
+        searched_queries[a_idx] = [info["name"]]
+
+    awc = []  # attractions_with_candidates
+    for a, c in zip(all_attractions, all_candidates):
+        search_query = a["name"]
+        awc.append({
+            "name": a["name"],
+            "search_query": search_query,
+            "candidates": c
+        })
 
     # --- Step 3: LLM Verify (ONE call) ---
-    prompt = _build_verify_prompt(awc, destination)
+    prompt = _build_verify_prompt(awc, destination, failed_queries=searched_queries, alt_language="local")
     messages = [
         SystemMessage(content=VERIFY_SYSTEM_PROMPT),
         HumanMessage(content=prompt),
@@ -310,27 +348,45 @@ async def resolve_all_attractions(
             llm_results = []
     except Exception as e:
         logger.error(f"[resolve] LLM verify failed: {e}", exc_info=True)
-        return _fallback_first_candidate(attraction_result, all_attractions, awc)
-
+        # Without verify, we return unchanged. No fallback to first candidate to avoid hallucination.
+        return attraction_result
     # --- Step 4: Code Verify ---
     verified, failed = _code_verify(llm_results, awc)
 
     logger.info(f"[resolve] Verified: {len(verified)}, Failed: {len(failed)}")
 
-    # --- Step 5: Retry failed with alt_query ---
-    retry_items = [(f["idx"], f["alt"]) for f in failed if f.get("alt")]
-    if retry_items:
-        logger.info(f"[resolve] Retrying {len(retry_items)} with alt queries...")
+    # --- Step 5: Retry pipeline (local alt → English alt → drop) ---
+    # Track all queries that have been tried per attraction
+    # (already initialized before Round 1 as `searched_queries`)
+
+    still_failed_indices = set(f["idx"] for f in failed)
+
+    # --- Round 2: Retry with local-language alt ---
+    local_retry_items = [(f["idx"], f["alt"]) for f in failed if f.get("alt")]
+    en_retry_items: list[tuple[int, str]] = []
+
+    if local_retry_items:
+        logger.info(f"[resolve] Round 2: Retrying {len(local_retry_items)} with local-language alt queries...")
 
         retry_awc = []
         retry_original_indices = []
-        for orig_idx, alt_query in retry_items:
+        for orig_idx, alt_query in local_retry_items:
+            searched_queries.setdefault(orig_idx, []).append(alt_query)
             candidates = await _fetch_candidates(alt_query, semaphore, location_bias)
-            retry_awc.append({"name": all_attractions[orig_idx]["name"], "candidates": candidates})
+            retry_awc.append({
+                "name": all_attractions[orig_idx]["name"],
+                "search_query": alt_query,
+                "candidates": candidates,
+            })
             retry_original_indices.append(orig_idx)
 
         if retry_awc:
-            retry_prompt = _build_verify_prompt(retry_awc, destination)
+            # Verify — if still no match, LLM suggests ENGLISH alt this time
+            retry_prompt = _build_verify_prompt(
+                retry_awc, destination,
+                {i: searched_queries.get(retry_original_indices[i], []) for i in range(len(retry_awc))},
+                alt_language="english",
+            )
             try:
                 retry_result = await llm_verify.ainvoke([
                     SystemMessage(content=VERIFY_SYSTEM_PROMPT),
@@ -342,15 +398,74 @@ async def resolve_all_attractions(
                 if not isinstance(retry_llm, list):
                     retry_llm = []
 
-                retry_verified, _ = _code_verify(retry_llm, retry_awc)
+                retry_verified, retry_failed_2 = _code_verify(retry_llm, retry_awc)
                 # Map back to original indices
                 for rv in retry_verified:
                     local_idx = rv["idx"]
                     if local_idx < len(retry_original_indices):
                         rv["idx"] = retry_original_indices[local_idx]
                         verified.append(rv)
+                        still_failed_indices.discard(rv["idx"])
+
+                # Collect English alt suggestions for Round 3
+                for rf in retry_failed_2:
+                    local_idx = rf["idx"]
+                    en_alt = rf.get("alt")  # Should be English per our prompt
+                    if en_alt and local_idx < len(retry_original_indices):
+                        orig_idx = retry_original_indices[local_idx]
+                        if orig_idx in still_failed_indices:
+                            searched_queries.setdefault(orig_idx, []).append(en_alt)
+                            en_retry_items.append((orig_idx, en_alt))
             except Exception as e:
-                logger.error(f"[resolve] Retry LLM verify failed: {e}")
+                logger.error(f"[resolve] Round 2 LLM verify failed: {e}")
+
+    # --- Round 3: Retry with English alt ---
+    if en_retry_items:
+        logger.info(f"[resolve] Round 3: Retrying {len(en_retry_items)} with English names...")
+        en_awc = []
+        en_original_indices = []
+        for orig_idx, en_query in en_retry_items:
+            candidates = await _fetch_candidates(en_query, semaphore, location_bias)
+            en_awc.append({
+                "name": all_attractions[orig_idx]["name"],
+                "search_query": en_query,
+                "candidates": candidates,
+            })
+            en_original_indices.append(orig_idx)
+
+        if en_awc:
+            # Final verify — no more alt suggestions
+            en_prompt = _build_verify_prompt(
+                en_awc, destination,
+                {i: searched_queries.get(en_original_indices[i], []) for i in range(len(en_awc))},
+                alt_language=None,
+            )
+            try:
+                en_result = await llm_verify.ainvoke([
+                    SystemMessage(content=VERIFY_SYSTEM_PROMPT),
+                    HumanMessage(content=en_prompt),
+                ])
+                en_llm = _extract_json(en_result.content)
+                if isinstance(en_llm, dict):
+                    en_llm = en_llm.get("results", en_llm.get("data", []))
+                if not isinstance(en_llm, list):
+                    en_llm = []
+
+                en_verified, _ = _code_verify(en_llm, en_awc)
+                for ev in en_verified:
+                    local_idx = ev["idx"]
+                    if local_idx < len(en_original_indices):
+                        ev["idx"] = en_original_indices[local_idx]
+                        verified.append(ev)
+                logger.info(f"[resolve] Round 3: resolved {len(en_verified)} more")
+            except Exception as e:
+                logger.error(f"[resolve] Round 3 English retry failed: {e}")
+
+    # Log dropped attractions after all retries
+    final_verified_indices = {v["idx"] for v in verified}
+    dropped = [all_attractions[i]["name"] for i in range(len(all_attractions)) if i not in final_verified_indices]
+    if dropped:
+        logger.warning(f"[resolve] DROPPED after all retries: {dropped}")
 
     # --- Step 6: Dedup by placeId (code, not LLM) ---
     seen_place_ids = {}
@@ -374,6 +489,7 @@ async def resolve_all_attractions(
                 "placeId": v["placeId"],
                 "title": v["title"],
                 "location": location,
+                "db_data": db_data,
             }
 
     _apply_to_segments(attraction_result, all_attractions, resolved_map, duplicate_indices, on_place_resolved=on_place_resolved)
@@ -437,6 +553,8 @@ def _apply_to_segments(
             attraction["placeId"] = resolved["placeId"]
             if resolved.get("location"):
                 attraction["_location"] = resolved["location"]
+            if resolved.get("db_data"):
+                attraction["db_data"] = resolved["db_data"]
 
     # Remove duplicates (reverse order to preserve indices)
     for seg_idx in range(len(segments)):
@@ -450,33 +568,72 @@ def _apply_to_segments(
                 removed = attrs.pop(idx)
                 logger.info(f"[resolve] Removed duplicate: '{removed.get('name', '?')}'")
 
+async def resolve_place_names_batch(
+    names: list[str],
+    destination: str,
+    location_bias: str | None = None,
+) -> list[dict]:
+    """Batch resolve a list of attraction names using LLM verification.
+    
+    Returns a list of dicts:
+    [
+        {
+            "original_name": "...",
+            "placeId": "...",
+            "title": "...",
+            "db_data": { full db record }
+        },
+        ...
+    ]
+    Ignores names that could not be resolved.
+    """
+    if not names:
+        return []
 
-def _fallback_first_candidate(
-    attraction_result: dict,
-    all_attractions: list[dict],
-    awc: list[dict],
-) -> dict:
-    """Fallback: use first candidate for each attraction when LLM fails."""
-    logger.warning("[resolve] Fallback: using first candidate per attraction")
-    segments = attraction_result.get("segments", [])
+    logger.info(f"[resolve] Batch resolving {len(names)} names for '{destination}'")
+    semaphore = asyncio.Semaphore(5)
 
-    for i, info in enumerate(all_attractions):
-        candidates = awc[i]["candidates"] if i < len(awc) else []
-        if not candidates:
-            continue
+    all_candidates = await asyncio.gather(*[
+        _fetch_candidates(name, semaphore, location_bias)
+        for name in names
+    ])
 
-        seg_idx = info["segment_idx"]
-        attr_idx = info["attraction_idx"]
-        if seg_idx >= len(segments):
-            continue
-        attractions = segments[seg_idx].get("attractions", [])
-        if attr_idx >= len(attractions):
-            continue
-        attraction = attractions[attr_idx]
-        first = candidates[0]
+    awc = []
+    for name, candidates in zip(names, all_candidates):
+        awc.append({
+            "name": name,
+            "search_query": name,
+            "candidates": candidates
+        })
 
-        attraction["name"] = first["title"]
-        attraction["placeId"] = first["placeId"]
+    # LLM Verify (ONE call)
+    prompt = _build_verify_prompt(awc, destination, alt_language=None)
+    
+    try:
+        result = await llm_verify.ainvoke([
+            SystemMessage(content=VERIFY_SYSTEM_PROMPT),
+            HumanMessage(content=prompt),
+        ])
+        llm_results = _extract_json(result.content)
+        if isinstance(llm_results, dict):
+            llm_results = llm_results.get("results", llm_results.get("data", []))
+        if not isinstance(llm_results, list):
+            llm_results = []
+            
+        verified, _ = _code_verify(llm_results, awc)
+    except Exception as e:
+        logger.error(f"[resolve] Batch LLM verify failed: {e}")
+        verified = []
 
-    return attraction_result
-
+    resolved_list = []
+    for v in verified:
+        idx = v["idx"]
+        if idx < len(names):
+            resolved_list.append({
+                "original_name": names[idx],
+                "placeId": v["placeId"],
+                "title": v["title"],
+                "db_data": v.get("db_data"),
+            })
+            
+    return resolved_list

@@ -76,7 +76,9 @@ export default function AIChat({
   const [showBuilder, setShowBuilder] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState("");
-  const [conversationToDelete, setConversationToDelete] = useState<string | null>(null);
+  const [conversationToDelete, setConversationToDelete] = useState<
+    string | null
+  >(null);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isConversationsLoading, setIsConversationsLoading] = useState(true);
@@ -95,33 +97,9 @@ export default function AIChat({
     isStreaming,
   } = useAgentStream();
 
-  // Map mode integration
-  const {
-    setMapMode,
-    setAiResolvedPlaces,
-    clearAiResolvedPlaces,
-  } = useItineraryContext();
-
-  // Switch to AI Explore mode when streaming starts
-  useEffect(() => {
-    if (isStreaming) {
-      setMapMode("aiExplore");
-    }
-  }, [isStreaming, setMapMode]);
-
-  // Sync resolved places from stream to context
-  useEffect(() => {
-    if (streamState.resolvedPlaces.length > 0) {
-      setAiResolvedPlaces(streamState.resolvedPlaces);
-    }
-  }, [streamState.resolvedPlaces, setAiResolvedPlaces]);
-
-  // Wrapped close handler: reset map mode and clear AI places
   const handleClose = useCallback(() => {
-    setMapMode("plan");
-    clearAiResolvedPlaces();
     onClose();
-  }, [onClose, setMapMode, clearAiResolvedPlaces]);
+  }, [onClose]);
 
   // Fetch Conversations
   const fetchConversations = useCallback(async () => {
@@ -228,7 +206,7 @@ export default function AIChat({
 
       if (updatedConversations.length > 0) {
         if (activeConversationId === conversationToDelete) {
-            setActiveConversationId(updatedConversations[0].id);
+          setActiveConversationId(updatedConversations[0].id);
         }
       } else {
         setActiveConversationId(null);
@@ -283,16 +261,29 @@ export default function AIChat({
     ) {
       const saveAIResponse = async () => {
         try {
-          // Include generatedPlanData (apply_data) if available
-          const applyData = streamState.structuredData
-            ? (streamState.structuredData as any)?.apply_data
-            : undefined;
+          let minimalDataToSave: string | undefined;
+          if (streamState.structuredData) {
+            const minimal: Record<string, unknown> = {};
+            const sd = streamState.structuredData as Record<string, unknown>;
+            if (sd.hotel_agent) minimal.hotel_agent = sd.hotel_agent;
+            if (sd.flight_agent) minimal.flight_agent = sd.flight_agent;
+            if (sd.preparation_agent) minimal.preparation_agent = sd.preparation_agent;
+            if (sd.attraction_agent) minimal.attraction_agent = sd.attraction_agent;
+            if (sd.restaurant_agent) minimal.restaurant_agent = sd.restaurant_agent;
+
+            if (sd.apply_data) {
+              minimal.apply_data = sd.apply_data;
+            }
+            if (Object.keys(minimal).length > 0) {
+              minimalDataToSave = JSON.stringify(minimal);
+            }
+          }
 
           const newMsg = await addMessage(targetConversationId, {
             conversationId: targetConversationId,
             content: streamState.streamedContent,
             messageRole: MessageRole.Assistant,
-            generatedPlanData: applyData ? JSON.stringify(applyData) : undefined,
+            generatedPlanData: minimalDataToSave,
           });
           // Only update messages list if still viewing the same conversation
           if (streamingConversationIdRef.current === activeConversationId) {
@@ -419,7 +410,9 @@ export default function AIChat({
                       <Pencil className="w-3 h-3 text-white" />
                     </button>
                     <button
-                      onClick={() => setConversationToDelete(activeConversationId)}
+                      onClick={() =>
+                        setConversationToDelete(activeConversationId)
+                      }
                       className="p-1 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity bg-red-100 hover:bg-red-200"
                       title="Delete conversation"
                     >
@@ -491,7 +484,9 @@ export default function AIChat({
             isStreaming ? streamState.streamedContent : undefined
           }
           activeAgents={isStreaming ? streamState.activeAgents : undefined}
-          completedAgents={isStreaming ? streamState.completedAgents : undefined}
+          completedAgents={
+            isStreaming ? streamState.completedAgents : undefined
+          }
           isStreaming={isStreaming}
           structuredData={streamState.structuredData}
           onApplyPlan={async (mode, messageId) => {
@@ -501,7 +496,9 @@ export default function AIChat({
               const msg = backendMessages.find((m: any) => m.id === messageId);
               if (msg?.generatedPlanData) {
                 try {
-                  applyData = JSON.parse(msg.generatedPlanData);
+                  const parsedFullData = JSON.parse(msg.generatedPlanData);
+                  // Extract apply_data from the full structured context
+                  applyData = parsedFullData?.apply_data || parsedFullData;
                 } catch {
                   toast.error("Invalid plan data");
                   return;
@@ -516,15 +513,46 @@ export default function AIChat({
               return;
             }
             try {
-              const requestBody = {
-                mode: mode === "CurrentPlan" ? 0 : 1,
-                ...applyData,
-              };
+              // Unwrap sectioned apply_data format into flat format for .NET
+              // Sectioned format: { plan_context: {...}, sections: { itinerary: { is_apply, data }, ... } }
+              // Flat format: { mode, startTime, endTime, currencyCode, itineraryDays, expenseItems, ... }
+              let requestBody: Record<string, unknown>;
+
+              if (applyData.sections) {
+                // New sectioned format
+                const planCtx = applyData.plan_context || {};
+                const sections = applyData.sections || {};
+
+                requestBody = {
+                  mode: mode === "CurrentPlan" ? 0 : 1,
+                  startTime: planCtx.startTime,
+                  endTime: planCtx.endTime,
+                  currencyCode: planCtx.currencyCode,
+                  // Only include sections that have is_apply = true
+                  itineraryDays: sections.itinerary?.is_apply
+                    ? sections.itinerary.data
+                    : null,
+                  expenseItems: sections.budget?.is_apply
+                    ? sections.budget.data
+                    : null,
+                  packingLists: sections.packing?.is_apply
+                    ? sections.packing.data
+                    : null,
+                  notes: sections.notes?.is_apply ? sections.notes.data : null,
+                };
+              } else {
+                // Legacy flat format (backwards compatible)
+                requestBody = {
+                  mode: mode === "CurrentPlan" ? 0 : 1,
+                  ...applyData,
+                };
+              }
+
               const updatedPlan = await applyAIPlan(planId, requestBody);
               toast.success(
                 mode === "CurrentPlan"
                   ? "Plan updated successfully!"
-                  : "New plan created successfully!"
+                  : "New plan created successfully!",
               );
 
               // Mark the message as applied in DB
@@ -533,8 +561,14 @@ export default function AIChat({
                   const updatedMsg = await markMessageApplied(messageId);
                   setBackendMessages((prev) =>
                     prev.map((m: any) =>
-                      m.id === messageId ? { ...m, applyGeneratedPlanAt: updatedMsg.applyGeneratedPlanAt } : m
-                    )
+                      m.id === messageId
+                        ? {
+                            ...m,
+                            applyGeneratedPlanAt:
+                              updatedMsg.applyGeneratedPlanAt,
+                          }
+                        : m,
+                    ),
                   );
                 } catch {
                   // Non-critical: apply succeeded, just couldn't mark timestamp

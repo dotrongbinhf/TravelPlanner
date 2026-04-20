@@ -4,27 +4,16 @@ import {
   EXPENSE_CATEGORIES,
 } from "@/types/budget";
 import { Check, Pencil, Trash2, X } from "lucide-react";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 interface ExpenseCardProps {
   expenseItem?: ExpenseItem;
   isEditing: boolean;
   name: string;
   amount: string;
-  category: ExpenseCategory;
-  groupName?: string;
   currencyLocale: string;
   currencySymbol: string;
   onNameChange: (value: string) => void;
   onAmountChange: (value: string) => void;
-  onCategoryChange: (value: ExpenseCategory) => void;
-  onGroupNameChange?: (value: string) => void;
   onConfirm: () => void;
   onCancel: () => void;
   onEdit?: () => void;
@@ -38,14 +27,10 @@ export default function ExpenseCard({
   isEditing,
   name,
   amount,
-  category,
-  groupName,
   currencyLocale,
   currencySymbol,
   onNameChange,
   onAmountChange,
-  onCategoryChange,
-  onGroupNameChange,
   onConfirm,
   onCancel,
   onEdit,
@@ -91,43 +76,6 @@ export default function ExpenseCard({
               placeholder="Expense name..."
               className="font-medium text-sm bg-transparent rounded-sm p-1 border border-2 border-dashed border-gray-400 focus:border-blue-500 outline-none placeholder:text-gray-400 w-full min-w-0"
             />
-
-            {/* Category Select - styled to look minimal */}
-            <Select
-              value={category.toString()}
-              onValueChange={(value) =>
-                onCategoryChange(Number(value) as ExpenseCategory)
-              }
-            >
-              <SelectTrigger className="w-fit h-auto border border-2 border-gray-400 border-dashed data-[state=open]:border-blue-500 bg-transparent px-2 text-xs justify-start !focus:border-gray-400">
-                <SelectValue placeholder="Select category" />
-              </SelectTrigger>
-              <SelectContent position="popper">
-                {EXPENSE_CATEGORIES.map((cat) => (
-                  <SelectItem key={cat.value} value={cat.value.toString()}>
-                    <div className="flex items-center gap-2">
-                      <div
-                        className="w-3 h-3 rounded-full"
-                        style={{ backgroundColor: cat.color }}
-                      />
-                      <span>{cat.label}</span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            {/* Optional Group Name Input */}
-            {onGroupNameChange && (
-              <input
-                type="text"
-                value={groupName || ""}
-                onChange={(e) => onGroupNameChange(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Group (e.g., Phí tham quan)"
-                className="font-medium text-xs bg-transparent rounded-sm p-1 border border-2 border-dashed border-gray-400 focus:border-blue-500 outline-none placeholder:text-gray-400 w-full min-w-0"
-              />
-            )}
           </div>
         </div>
 
@@ -187,7 +135,6 @@ export default function ExpenseCard({
           <span className="text-sm font-medium text-gray-700">
             {expenseItem?.name}
           </span>
-          <span className="text-xs text-gray-500">{categoryInfo.label}</span>
         </div>
       </div>
 

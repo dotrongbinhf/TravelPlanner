@@ -27,7 +27,6 @@ export function useAgentStream() {
     completedAgents: [],
     streamedContent: "",
     structuredData: null,
-    resolvedPlaces: [],
     isComplete: false,
     error: null,
   });
@@ -53,7 +52,6 @@ export function useAgentStream() {
         let activeAgents = [...prev.activeAgents];
         let completedAgents = [...prev.completedAgents];
         let streamedContent = prev.streamedContent;
-        let resolvedPlaces = prev.resolvedPlaces;
         let isComplete = prev.isComplete;
         let error = prev.error;
 
@@ -79,27 +77,26 @@ export function useAgentStream() {
             }
             break;
 
-          case "place_resolved":
-            console.log("📍 received place_resolved event:", event);
-            if (event.placeData) {
-              const place = event.placeData as ResolvedPlace;
-              console.log("📍 processed place:", place);
-              // Deduplicate by placeId
-              if (!resolvedPlaces.some((p) => p.placeId === place.placeId)) {
-                resolvedPlaces = [...resolvedPlaces, place];
-                console.log("📍 added to resolvedPlaces array, new length:", resolvedPlaces.length);
-              }
-            } else {
-              console.warn("⚠️ place_resolved event came without placeData!", event);
-            }
-            break;
-
           case "structured_data":
             if (event.structuredData) {
+              if (event.agentName) {
+                return {
+                  ...prev,
+                  events: newEvents,
+                  structuredData: {
+                    ...(prev.structuredData || {}),
+                    [event.agentName]: event.structuredData,
+                  },
+                };
+              }
+              
               return {
                 ...prev,
                 events: newEvents,
-                structuredData: event.structuredData,
+                structuredData: {
+                  ...(prev.structuredData || {}),
+                  ...event.structuredData,
+                },
               };
             }
             break;
@@ -126,7 +123,6 @@ export function useAgentStream() {
           completedAgents,
           streamedContent,
           structuredData: prev.structuredData,
-          resolvedPlaces,
           isComplete,
           error,
         };
@@ -193,7 +189,6 @@ export function useAgentStream() {
         completedAgents: [],
         streamedContent: "",
         structuredData: null,
-        resolvedPlaces: [],
         isComplete: false,
         error: null,
       });

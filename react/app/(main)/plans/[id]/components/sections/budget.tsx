@@ -81,6 +81,7 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
   const budgetInputRef = useRef<HTMLInputElement>(null);
   const budgetContainerRef = useRef<HTMLDivElement>(null);
 
+  // Adding state — category is set by the "+" button
   const [isAdding, setIsAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [newAmount, setNewAmount] = useState("");
@@ -88,12 +89,10 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
     ExpenseCategory.OTHER,
   );
 
-  const [newGroupName, setNewGroupName] = useState("");
-
+  // Editing state
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editAmount, setEditAmount] = useState("");
-  const [editGroupName, setEditGroupName] = useState("");
   const [editCategory, setEditCategory] = useState<ExpenseCategory>(
     ExpenseCategory.OTHER,
   );
@@ -103,13 +102,6 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
   const [expenseToDelete, setExpenseToDelete] = useState<ExpenseItem | null>(
     null,
   );
-
-  // Group editing state
-  const [editingGroupKey, setEditingGroupKey] = useState<{
-    category: number;
-    oldGroupName: string;
-  } | null>(null);
-  const [editingGroupNewName, setEditingGroupNewName] = useState("");
 
   const newExpenseRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -156,22 +148,21 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
     setEditCurrency(currencyCode);
   };
 
-  const handleAddExpense = () => {
+  const handleAddExpenseForCategory = (category: ExpenseCategory) => {
     setIsAdding(true);
     setNewName("");
     setNewAmount("");
-    setNewCategory(ExpenseCategory.OTHER);
-    setNewGroupName("");
+    setNewCategory(category);
   };
 
   const handleConfirmAdd = async () => {
     if (!newName.trim()) {
-      toast.error("Vui lòng nhập tên khoản phí");
+      toast.error("Please enter an expense name");
       return;
     }
     const amountVal = parseInt(newAmount.replace(/[^\d]/g, "")) || 0;
     if (amountVal <= 0) {
-      toast.error("Số tiền phải lớn hơn 0");
+      toast.error("Amount must be greater than 0");
       return;
     }
 
@@ -180,7 +171,6 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
         name: newName.trim(),
         amount: amountVal,
         category: newCategory,
-        groupName: newGroupName.trim() || undefined,
       });
       updateExpenseItems([...expenseItems, newExpense]);
       toast.success("Created New Expense");
@@ -196,7 +186,6 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
     setNewName("");
     setNewAmount("");
     setNewCategory(ExpenseCategory.OTHER);
-    setNewGroupName("");
   };
 
   const handleDeleteExpense = (expense: ExpenseItem) => {
@@ -225,7 +214,6 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
     setEditName(expense.name);
     setEditAmount(expense.amount.toLocaleString(currencyLocale));
     setEditCategory(expense.category);
-    setEditGroupName(expense.groupName || "");
   };
 
   const handleConfirmEdit = async () => {
@@ -237,7 +225,6 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
           name: editName.trim(),
           amount,
           category: editCategory,
-          groupName: editGroupName.trim() || undefined,
         });
         updateExpenseItems(
           expenseItems.map((e) => (e.id === editingId ? updatedExpense : e)),
@@ -257,102 +244,20 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
     setEditName("");
     setEditAmount("");
     setEditCategory(ExpenseCategory.OTHER);
-    setEditGroupName("");
   };
 
-  const handleEditGroup = (catVal: number, groupName: string) => {
-    setEditingGroupKey({ category: catVal, oldGroupName: groupName });
-    setEditingGroupNewName(groupName);
-  };
-
-  const handleConfirmEditGroup = async () => {
-    if (!editingGroupKey) return;
-    const { oldGroupName, category } = editingGroupKey;
-    const newName = editingGroupNewName.trim();
-    if (!newName) {
-      toast.error("Tên nhóm không được để trống");
-      return;
-    }
-
-    const itemsInGroup = expenseItems.filter(
-      (e) => e.category === category && e.groupName === oldGroupName,
-    );
-
-    try {
-      const promises = itemsInGroup.map((item) =>
-        updateExpenseItem(item.id, {
-          name: item.name,
-          amount: item.amount,
-          category: item.category,
-          groupName: newName,
-        }),
-      );
-      const updatedItems = await Promise.all(promises);
-
-      updateExpenseItems(
-        expenseItems.map((e) => {
-          const updated = updatedItems.find((u) => u.id === e.id);
-          return updated || e;
-        }),
-      );
-      toast.success("Đổi tên nhóm thành công");
-    } catch (e) {
-      toast.error("Lỗi khi sửa tên nhóm");
-    }
-    setEditingGroupKey(null);
-  };
-
-  const handleDeleteGroup = async (catVal: number, groupName: string) => {
-    if (
-      !confirm(
-        `Bạn có chắc muốn xoá toàn bộ chi phí trong nhóm "${groupName}" không?`,
-      )
-    )
-      return;
-    const itemsInGroup = expenseItems.filter(
-      (e) => e.category === catVal && e.groupName === groupName,
-    );
-    try {
-      const promises = itemsInGroup.map((item) => deleteExpenseItem(item.id));
-      await Promise.all(promises);
-      updateExpenseItems(
-        expenseItems.filter(
-          (e) => !(e.category === catVal && e.groupName === groupName),
-        ),
-      );
-      toast.success("Xoá nhóm thành công");
-    } catch (e) {
-      toast.error("Lỗi khi xoá nhóm");
-    }
-  };
-
-  const getCategoryLabel = (cat: ExpenseCategory) => {
-    return EXPENSE_CATEGORIES.find((c) => c.value === cat)?.label || "Other";
-  };
-
+  // Build ALL categories (always show all 6)
   const categoryGroups = useMemo(() => {
-    const categories = EXPENSE_CATEGORIES.map((cat) => {
+    return EXPENSE_CATEGORIES.map((cat) => {
       const items = expenseItems.filter((e) => e.category === cat.value);
       const total = items.reduce((sum, e) => sum + e.amount, 0);
-
-      const noGroupItems = items.filter((e) => !e.groupName);
-      const withGroupItems = items.filter((e) => !!e.groupName);
-
-      const groups: Record<string, ExpenseItem[]> = {};
-      withGroupItems.forEach((e) => {
-        if (!groups[e.groupName!]) groups[e.groupName!] = [];
-        groups[e.groupName!].push(e);
-      });
-
       return {
         ...cat,
-        items: noGroupItems,
-        groups,
+        items,
         total,
-        allCount: items.length,
+        count: items.length,
       };
-    }).filter((c) => c.allCount > 0);
-    return categories;
+    });
   }, [expenseItems]);
 
   useEffect(() => {
@@ -391,7 +296,6 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
-      // Ignore clicks inside Select dropdown portal
       if (
         target.closest('[data-slot="select-content"]') ||
         target.closest("[data-radix-popper-content-wrapper]")
@@ -420,7 +324,6 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
-      // Ignore clicks inside Select dropdown portal
       if (
         target.closest('[data-slot="select-content"]') ||
         target.closest("[data-radix-popper-content-wrapper]")
@@ -455,15 +358,6 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
     >
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-gray-800">Budget</h2>
-
-        <button
-          className="cursor-pointer px-4 py-3 flex gap-2 items-center bg-green-400 hover:bg-green-500 text-white rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-          onClick={handleAddExpense}
-          disabled={isAdding || editingId !== null || isEditingBudget}
-        >
-          <Plus size={16} strokeWidth={3} />
-          <span className="text-sm font-medium">Add expense</span>
-        </button>
       </div>
 
       {/* Summary Cards */}
@@ -565,14 +459,13 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
       </CustomDialog>
 
       {/* Pie Chart */}
-      {/* <ExpensePieChart expenseItems={expenseItems} /> */}
       <ExpenseChart
         expenseItems={expenseItems}
         currencySymbol={currencySymbol}
         currencyLocale={currencyLocale}
       />
 
-      {/* Expenses List */}
+      {/* Expenses List — always show all 6 categories */}
       <div className="flex flex-col gap-3">
         <h3 className="font-semibold text-base text-gray-800">Expenses</h3>
 
@@ -594,214 +487,82 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
                       <span className="font-semibold text-gray-800 text-sm md:text-base">
                         {cat.label}
                       </span>
+                      <span className="text-xs text-gray-400 font-medium">
+                        ({cat.count})
+                      </span>
                     </div>
-                    <span className="font-bold text-gray-700 text-sm md:text-base">
-                      {currencySymbol}
-                      {cat.total.toLocaleString(currencyLocale)}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-gray-700 text-sm md:text-base">
+                        {currencySymbol}
+                        {cat.total.toLocaleString(currencyLocale)}
+                      </span>
+                      <button
+                        className="p-1.5 rounded-md bg-white hover:bg-green-50 text-green-500 hover:text-green-600 border border-gray-200 hover:border-green-200 transition-all shadow-sm opacity-0 group-hover:opacity-100 hover:!opacity-100"
+                        title={`Add ${cat.label} expense`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleAddExpenseForCategory(cat.value);
+                          setTimeout(() => {
+                            nameInputRef.current?.focus();
+                            newExpenseRef.current?.scrollIntoView({
+                              behavior: "smooth",
+                              block: "center",
+                            });
+                          }, 100);
+                        }}
+                      >
+                        <Plus size={14} />
+                      </button>
+                    </div>
                   </div>
                 </AccordionTrigger>
-                <AccordionContent className="px-5 pb-5 pt-3 flex flex-col gap-4 bg-slate-50/40">
-                  {Object.keys(cat.groups).length > 0 && (
-                    <Accordion
-                      type="multiple"
-                      className="flex flex-col gap-3 w-full"
-                    >
-                      {Object.entries(cat.groups).map(([groupName, gItems]) => {
-                        const groupTotal = gItems.reduce(
-                          (s, e) => s + e.amount,
-                          0,
-                        );
-                        return (
-                          <AccordionItem
-                            key={groupName}
-                            value={groupName}
-                            className="border-none bg-transparent"
-                          >
-                            <AccordionTrigger className="group px-1 py-1.5 hover:bg-transparent hover:no-underline transition-colors cursor-pointer">
-                              <div className="flex justify-between items-center w-full pr-4">
-                                {editingGroupKey?.oldGroupName === groupName &&
-                                editingGroupKey?.category === cat.value ? (
-                                  <div
-                                    className="flex items-center gap-2 w-full max-w-[250px]"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    <input
-                                      value={editingGroupNewName}
-                                      onChange={(e) =>
-                                        setEditingGroupNewName(e.target.value)
-                                      }
-                                      className="text-[13px] uppercase tracking-wider font-bold text-gray-700 bg-white border border-blue-400 focus:border-blue-500 rounded p-1.5 w-full outline-none shadow-sm"
-                                      autoFocus
-                                      onKeyDown={(e) => {
-                                        if (e.key === "Enter")
-                                          handleConfirmEditGroup();
-                                        if (e.key === "Escape")
-                                          setEditingGroupKey(null);
-                                      }}
-                                    />
-                                    <button
-                                      onClick={handleConfirmEditGroup}
-                                      className="text-green-600 hover:bg-green-100 p-1 rounded transition-colors"
-                                    >
-                                      <Check size={14} />
-                                    </button>
-                                    <button
-                                      onClick={() => setEditingGroupKey(null)}
-                                      className="text-gray-500 hover:bg-gray-200 p-1 rounded transition-colors"
-                                    >
-                                      <X size={14} />
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center gap-3 w-fit mr-4">
-                                    <h4 className="text-[13px] font-bold text-gray-600 uppercase tracking-widest truncate">
-                                      {groupName}
-                                    </h4>
-                                    <div
-                                      className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity gap-1"
-                                      onClick={(e) => e.stopPropagation()}
-                                    >
-                                      <button
-                                        className="p-1.5 rounded-md bg-white hover:bg-slate-100 text-slate-500 hover:text-slate-700 border border-slate-200 transition-all shadow-sm"
-                                        onClick={() =>
-                                          handleEditGroup(cat.value, groupName)
-                                        }
-                                        title="Edit Group Name"
-                                      >
-                                        <Pencil size={12} />
-                                      </button>
-                                      <button
-                                        className="p-1.5 rounded-md bg-white hover:bg-red-50 text-red-400 hover:text-red-600 border border-slate-200 hover:border-red-200 transition-all shadow-sm"
-                                        onClick={() =>
-                                          handleDeleteGroup(
-                                            cat.value,
-                                            groupName,
-                                          )
-                                        }
-                                        title="Delete Group"
-                                      >
-                                        <Trash2 size={12} />
-                                      </button>
-                                      <button
-                                        className="p-1.5 rounded-md bg-white hover:bg-slate-100 text-slate-500 hover:text-slate-700 border border-slate-200 transition-all shadow-sm hidden md:flex"
-                                        title="Add New Expense"
-                                        onClick={() => {
-                                          setIsAdding(true);
-                                          setNewCategory(cat.value);
-                                          setNewGroupName(groupName);
-                                          setNewName("");
-                                          setNewAmount("");
-                                          setTimeout(() => {
-                                            nameInputRef.current?.focus();
-                                            newExpenseRef.current?.scrollIntoView(
-                                              {
-                                                behavior: "smooth",
-                                                block: "center",
-                                              },
-                                            );
-                                          }, 100);
-                                        }}
-                                      >
-                                        <Plus size={12} />
-                                      </button>
-                                    </div>
-                                  </div>
-                                )}
-                                <span className="text-[13px] font-bold text-gray-600 ml-auto whitespace-nowrap bg-white px-2 py-0.5 rounded-md border border-gray-100">
-                                  {currencySymbol}
-                                  {groupTotal.toLocaleString(currencyLocale)}
-                                </span>
-                              </div>
-                            </AccordionTrigger>
-                            <AccordionContent className="pl-3 pr-1 pb-1 flex flex-col gap-2.5 border-l-2 border-slate-200 ml-1.5 mt-2">
-                              {gItems.map((expense) => (
-                                <ExpenseCard
-                                  key={expense.id}
-                                  expenseItem={expense}
-                                  isEditing={editingId === expense.id}
-                                  name={editName}
-                                  amount={editAmount}
-                                  category={editCategory}
-                                  groupName={editGroupName}
-                                  currencyLocale={currencyLocale}
-                                  currencySymbol={currencySymbol}
-                                  onNameChange={setEditName}
-                                  onAmountChange={setEditAmount}
-                                  onCategoryChange={setEditCategory}
-                                  onGroupNameChange={setEditGroupName}
-                                  onConfirm={handleConfirmEdit}
-                                  onCancel={handleCancelEdit}
-                                  onEdit={() => handleEditExpense(expense)}
-                                  onDelete={() => handleDeleteExpense(expense)}
-                                  nameInputRef={editNameInputRef}
-                                  containerRef={editExpenseRef}
-                                />
-                              ))}
-                            </AccordionContent>
-                          </AccordionItem>
-                        );
-                      })}
-                    </Accordion>
+                <AccordionContent className="px-5 pb-5 pt-3 flex flex-col gap-2.5 bg-slate-50/40">
+                  {cat.items.length > 0 ? (
+                    cat.items.map((expense) => (
+                      <ExpenseCard
+                        key={expense.id}
+                        expenseItem={expense}
+                        isEditing={editingId === expense.id}
+                        name={editName}
+                        amount={editAmount}
+                        currencyLocale={currencyLocale}
+                        currencySymbol={currencySymbol}
+                        onNameChange={setEditName}
+                        onAmountChange={setEditAmount}
+                        onConfirm={handleConfirmEdit}
+                        onCancel={handleCancelEdit}
+                        onEdit={() => handleEditExpense(expense)}
+                        onDelete={() => handleDeleteExpense(expense)}
+                        nameInputRef={editNameInputRef}
+                        containerRef={editExpenseRef}
+                      />
+                    ))
+                  ) : (
+                    <div className="py-3 text-center text-gray-400 text-xs">
+                      No expenses yet
+                    </div>
                   )}
 
-                  {cat.items.length > 0 && (
-                    <div className="flex flex-col gap-2.5 mt-1">
-                      {cat.items.map((expense) => (
-                        <ExpenseCard
-                          key={expense.id}
-                          expenseItem={expense}
-                          isEditing={editingId === expense.id}
-                          name={editName}
-                          amount={editAmount}
-                          category={editCategory}
-                          groupName={editGroupName}
-                          currencyLocale={currencyLocale}
-                          currencySymbol={currencySymbol}
-                          onNameChange={setEditName}
-                          onAmountChange={setEditAmount}
-                          onCategoryChange={setEditCategory}
-                          onGroupNameChange={setEditGroupName}
-                          onConfirm={handleConfirmEdit}
-                          onCancel={handleCancelEdit}
-                          onEdit={() => handleEditExpense(expense)}
-                          onDelete={() => handleDeleteExpense(expense)}
-                          nameInputRef={editNameInputRef}
-                          containerRef={editExpenseRef}
-                        />
-                      ))}
-                    </div>
+                  {/* Inline add form when adding to this category */}
+                  {isAdding && newCategory === cat.value && (
+                    <ExpenseCard
+                      isEditing={true}
+                      name={newName}
+                      amount={newAmount}
+                      currencyLocale={currencyLocale}
+                      currencySymbol={currencySymbol}
+                      onNameChange={setNewName}
+                      onAmountChange={setNewAmount}
+                      onConfirm={handleConfirmAdd}
+                      onCancel={handleCancelAdd}
+                      nameInputRef={nameInputRef}
+                      containerRef={newExpenseRef}
+                    />
                   )}
                 </AccordionContent>
               </AccordionItem>
             ))}
           </Accordion>
-
-          {isAdding && (
-            <ExpenseCard
-              isEditing={true}
-              name={newName}
-              amount={newAmount}
-              category={newCategory}
-              groupName={newGroupName}
-              currencyLocale={currencyLocale}
-              currencySymbol={currencySymbol}
-              onNameChange={setNewName}
-              onAmountChange={setNewAmount}
-              onCategoryChange={setNewCategory}
-              onGroupNameChange={setNewGroupName}
-              onConfirm={handleConfirmAdd}
-              onCancel={handleCancelAdd}
-              nameInputRef={nameInputRef}
-              containerRef={newExpenseRef}
-            />
-          )}
-
-          {expenseItems.length === 0 && !isAdding && (
-            <div className="p-6 bg-gray-50 rounded-lg text-center text-gray-400 text-sm">
-              No expenses added yet. Click "Add expense" to get started.
-            </div>
-          )}
         </div>
       </div>
 

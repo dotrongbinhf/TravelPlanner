@@ -48,7 +48,6 @@ namespace dotnet.Dtos.Plan
         public string Category { get; set; } = "Other"; // Maps to ExpenseCategory enum
         public string Name { get; set; } = string.Empty;
         public double Amount { get; set; }
-        public string? GroupName { get; set; } // Group name for collapsible grouping
     }
 
     public class AIPackingList

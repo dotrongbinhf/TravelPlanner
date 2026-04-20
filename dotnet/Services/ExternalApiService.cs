@@ -342,7 +342,7 @@ namespace dotnet.Services
                 ReviewsPerRating = new Dictionary<int, int>(),
                 Cid = "",
                 Description = "",
-                Thumbnail = "https://placehold.co/600x400?text=No+Image",
+                Thumbnail = "",
                 Images = [],
                 UserReviews = [],
                 CreatedDate = DateTime.UtcNow,

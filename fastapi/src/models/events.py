@@ -21,8 +21,6 @@ class EventType(str, Enum):
     TOOL_END = "tool_end"
     TEXT_CHUNK = "text_chunk"
     STRUCTURED_DATA = "structured_data"
-    DB_COMMANDS = "db_commands"
-    PLACE_RESOLVED = "place_resolved"
     WORKFLOW_COMPLETE = "workflow_complete"
     ERROR = "error"
 
@@ -45,8 +43,6 @@ class AgentEvent(BaseModel):
     output_summary: Optional[str] = None
     final_response: Optional[str] = None
     structured_data: Optional[dict[str, Any]] = None
-    db_commands: Optional[list[dict[str, Any]]] = None
-    place_data: Optional[dict[str, Any]] = None
     error_message: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.now)
 
@@ -73,10 +69,6 @@ class AgentEvent(BaseModel):
             data["final_response"] = self.final_response
         if self.structured_data is not None:
             data["structured_data"] = self.structured_data
-        if self.db_commands is not None:
-            data["db_commands"] = self.db_commands
-        if self.place_data is not None:
-            data["place_data"] = self.place_data
         if self.error_message is not None:
             data["error_message"] = self.error_message
         return data

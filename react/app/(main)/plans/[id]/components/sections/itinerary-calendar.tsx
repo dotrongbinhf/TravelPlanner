@@ -99,6 +99,9 @@ export default function ItineraryCalendar({
 
   const [calendarEditingItem, setCalendarEditingItem] =
     useState<ItineraryItem | null>(null);
+  const [calendarEditedPlaceId, setCalendarEditedPlaceId] = useState<string | null>(null);
+  const [calendarEditedPlaceName, setCalendarEditedPlaceName] = useState("");
+  const [calendarEditedNote, setCalendarEditedNote] = useState("");
   const [calendarDeletingItem, setCalendarDeletingItem] =
     useState<ItineraryItem | null>(null);
   const [calendarAddingDayId, setCalendarAddingDayId] = useState<string | null>(
@@ -117,7 +120,12 @@ export default function ItineraryCalendar({
   const editItemRef = useRef<(item: ItineraryItem) => void>(() => {});
   const deleteItemRef = useRef<(item: ItineraryItem) => void>(() => {});
 
-  editItemRef.current = (item) => setCalendarEditingItem(item);
+  editItemRef.current = (item) => {
+    setCalendarEditingItem(item);
+    setCalendarEditedPlaceId(item.place?.placeId ?? null);
+    setCalendarEditedPlaceName(item.place?.title ?? "");
+    setCalendarEditedNote(item.note ?? "");
+  };
   deleteItemRef.current = (item) => setCalendarDeletingItem(item);
 
   // Synchronous active-item
@@ -313,6 +321,8 @@ export default function ItineraryCalendar({
           itineraryDayId: targetDay.id,
           startTime: newStartTime,
           duration: newDuration,
+          placeId: (itineraryItem as ItineraryItem).place?.placeId ?? null,
+          note: (itineraryItem as ItineraryItem).note ?? undefined,
         },
       );
       // saveScrollPosition();
@@ -346,6 +356,8 @@ export default function ItineraryCalendar({
           itineraryDayId: (itineraryItem as ItineraryItem).itineraryDayId,
           startTime: newStartTime,
           duration: newDuration,
+          placeId: (itineraryItem as ItineraryItem).place?.placeId ?? null,
+          note: (itineraryItem as ItineraryItem).note ?? undefined,
         },
       );
       // saveScrollPosition();
@@ -457,11 +469,16 @@ export default function ItineraryCalendar({
         itineraryDayId: calendarEditingItem.itineraryDayId,
         startTime: calendarEditingItem.startTime,
         duration: calendarEditingItem.duration,
+        note: calendarEditedNote || undefined,
+        placeId: calendarEditedPlaceId,
       });
       // saveScrollPosition();
       onUpdateItem(response);
       toast.success("Updated item");
       setCalendarEditingItem(null);
+      setCalendarEditedPlaceId(null);
+      setCalendarEditedPlaceName("");
+      setCalendarEditedNote("");
     } catch (error) {
       console.error("Error updating item:", error);
       toast.error("Failed to update item");
@@ -834,7 +851,14 @@ export default function ItineraryCalendar({
       {calendarEditingItem && (
         <CustomDialog
           open={!!calendarEditingItem}
-          onOpenChange={(open) => !open && setCalendarEditingItem(null)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setCalendarEditingItem(null);
+              setCalendarEditedPlaceId(null);
+              setCalendarEditedPlaceName("");
+              setCalendarEditedNote("");
+            }
+          }}
           title="Edit Item"
           confirmLabel="Confirm"
           onConfirm={handleConfirmCalendarEditItem}
@@ -850,6 +874,12 @@ export default function ItineraryCalendar({
             duration={calendarEditingItem.duration || ""}
             setStartTime={handleSelectCalendarStartTime}
             setDuration={handleSelectCalendarDuration}
+            note={calendarEditedNote}
+            setNote={setCalendarEditedNote}
+            placeId={calendarEditedPlaceId}
+            setPlaceId={setCalendarEditedPlaceId}
+            placeName={calendarEditedPlaceName}
+            setPlaceName={setCalendarEditedPlaceName}
           />
         </CustomDialog>
       )}

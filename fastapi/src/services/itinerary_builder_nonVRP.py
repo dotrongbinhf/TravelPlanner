@@ -25,11 +25,6 @@ logger = logging.getLogger(__name__)
 # Day-of-week mapping: Python weekday() → OpenHours key
 WEEKDAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
-
-# ============================================================================
-# Copied from itinerary_builder.py — self-contained
-# ============================================================================
-
 def extract_place_names(
     agent_outputs: dict[str, Any],
     plan_context: dict[str, Any] | None = None,
@@ -37,6 +32,7 @@ def extract_place_names(
     """
     Extract place names from flight/hotel/attraction agent outputs.
     Reads departure_logistics from mobility_plan for non-flight trips.
+    Handles estimated entries from draft mode (estimated: true).
     """
     result = {"airports": [], "hotels": [], "attractions": []}
     plan_context = plan_context or {}
@@ -74,7 +70,7 @@ def extract_place_names(
                 "placeId": return_flight.get("arrival_airport_placeId"),
             })
 
-    # --- Non-flight: extract from departure_logistics / return_logistics ---
+    # --- Non-flight / Estimated flight: read from departure_logistics ---
     if not result["airports"]:
         mobility_plan = plan_context.get("mobility_plan") or {}
         dep_log = mobility_plan.get("departure_logistics") or {}
@@ -82,7 +78,7 @@ def extract_place_names(
         mode = dep_log.get("mode")
 
         if mode and mode != "flight":
-            # Departure hub (destination side)
+            # Non-flight transport (coach/train/car — existing logic)
             hub_name = dep_log.get("hub_name")
             if hub_name:
                 result["airports"].append({
@@ -91,7 +87,6 @@ def extract_place_names(
                     "time": dep_log.get("ready_time") or dep_log.get("arrival_time", "07:00"),
                     "placeId": dep_log.get("hub_placeId"),
                 })
-            # Return hub (destination side)
             ret_hub = ret_log.get("hub_name")
             if ret_hub:
                 result["airports"].append({
@@ -99,6 +94,25 @@ def extract_place_names(
                     "role": "return_departure",
                     "time": ret_log.get("departure_time", "15:00"),
                     "placeId": ret_log.get("hub_placeId"),
+                })
+
+        elif mode == "flight" and dep_log.get("estimated"):
+            # DRAFT MODE: Estimated flight — NOT resolved, just labels for LLM
+            hub_name = dep_log.get("hub_name")
+            if hub_name:
+                result["airports"].append({
+                    "name": hub_name,
+                    "role": "outbound_arrival",
+                    "time": dep_log.get("arrival_time", "09:00"),
+                    "estimated": True,
+                })
+            ret_hub = ret_log.get("hub_name")
+            if ret_hub:
+                result["airports"].append({
+                    "name": ret_hub,
+                    "role": "return_departure",
+                    "time": ret_log.get("start_time", "18:00"),
+                    "estimated": True,
                 })
 
     # --- Hotel ---
@@ -116,6 +130,31 @@ def extract_place_names(
                     "segment_name": segment.get("segment_name", ""),
                     "placeId": segment.get("recommend_hotel_placeId"),
                 })
+
+    # --- Estimated hotel from segments (draft mode) ---
+    if not result["hotels"]:
+        mobility_plan = plan_context.get("mobility_plan") or {}
+        segments = mobility_plan.get("segments", [])
+        start_date = plan_context.get("start_date", "")
+        for seg in segments:
+            if not seg.get("hotel_nights"):
+                continue
+            hotel_area = seg.get("hotel_search_area", "")
+            if not hotel_area:
+                continue
+            nights = seg["hotel_nights"]
+            ci_date = _add_days(start_date, min(nights)) if start_date else ""
+            co_date = _add_days(start_date, max(nights) + 1) if start_date else ""
+            result["hotels"].append({
+                "name": f"Khách sạn kv. {hotel_area}",
+                "check_in": ci_date,
+                "check_in_time": "14:00",
+                "check_out": co_date,
+                "check_out_time": "12:00",
+                "segment_name": seg.get("segment_name", ""),
+                "estimated": True,
+                "hotel_area": hotel_area,
+            })
 
     # --- Attractions ---
     attraction = agent_outputs.get("attraction_agent", {})
@@ -138,6 +177,17 @@ def extract_place_names(
                     result["attractions"].append(attr_entry)
 
     return result
+
+
+def _add_days(date_str: str, days: int) -> str:
+    """Add days to a date string (YYYY-MM-DD)."""
+    if not date_str:
+        return ""
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        return (dt + timedelta(days=days)).strftime("%Y-%m-%d")
+    except ValueError:
+        return ""
 
 
 async def _resolve_single_place(
@@ -211,11 +261,16 @@ async def resolve_all_places(
                 logger.error(f"[resolve] DB lookup failed for pre-resolved '{name}': {e}")
             return None
 
-    # Deduplicate airports
+    # Deduplicate airports — skip estimated entries
     unique_airport_names: list[str] = []
     seen_airports: set[str] = set()
     airport_place_ids: dict[str, str] = {}  # name → placeId
+    estimated_airports: list[dict] = []
     for airport_info in place_names.get("airports", []):
+        if airport_info.get("estimated"):
+            # Draft mode: don't resolve, pass through as-is
+            estimated_airports.append(airport_info)
+            continue
         name = airport_info["name"]
         if name not in seen_airports:
             seen_airports.add(name)
@@ -223,7 +278,9 @@ async def resolve_all_places(
             if airport_info.get("placeId"):
                 airport_place_ids[name] = airport_info["placeId"]
 
-    hotels_list = place_names.get("hotels", [])
+    # Filter hotels — skip estimated entries
+    hotels_to_resolve = [h for h in place_names.get("hotels", []) if not h.get("estimated")]
+    estimated_hotels = [h for h in place_names.get("hotels", []) if h.get("estimated")]
     attractions_list = place_names.get("attractions", [])
 
     # Build tasks — use pre-resolved placeId when available
@@ -235,7 +292,7 @@ async def resolve_all_places(
     hotel_tasks = [
         _resolve_by_place_id(h["placeId"], h["name"]) if h.get("placeId")
         else _resolve_with_limit(h["name"])
-        for h in hotels_list
+        for h in hotels_to_resolve
     ]
     attraction_tasks = [
         _resolve_by_place_id(a["placeId"], a["name"]) if a.get("placeId")
@@ -254,12 +311,20 @@ async def resolve_all_places(
     attraction_results = all_results[ap_count + ht_count:]
 
     airport_cache = dict(zip(unique_airport_names, airport_results))
+    # Add resolved airports
     for airport_info in place_names.get("airports", []):
-        name = airport_info["name"]
-        resolved["airports"].append({**airport_info, "resolved": airport_cache.get(name)})
+        if airport_info.get("estimated"):
+            # Pass through estimated entries with resolved=None
+            resolved["airports"].append({**airport_info, "resolved": None})
+        else:
+            name = airport_info["name"]
+            resolved["airports"].append({**airport_info, "resolved": airport_cache.get(name)})
 
-    for hotel_info, place_data in zip(hotels_list, hotel_results):
+    # Add resolved hotels + estimated hotels
+    for hotel_info, place_data in zip(hotels_to_resolve, hotel_results):
         resolved["hotels"].append({**hotel_info, "resolved": place_data})
+    for hotel_info in estimated_hotels:
+        resolved["hotels"].append({**hotel_info, "resolved": None})
 
     for attr_info, place_data in zip(attractions_list, attraction_results):
         resolved["attractions"].append({**attr_info, "resolved": place_data})
@@ -548,7 +613,7 @@ def build_attractions_info(
         hours_by_day = {}
         for day_idx in range(num_days):
             day_name = day_weekday_names[day_idx]
-            day_label = f"day_{day_idx} ({day_name[:3].capitalize()})"
+            day_label = f"day_{day_idx + 1} ({day_name[:3].capitalize()})"
 
             if not open_hours:
                 hours_by_day[day_label] = "08:00-22:00 (assumed)"
@@ -631,6 +696,14 @@ def build_schedule_constraints(
                 "departure_time": outbound.get("departure_time", ""),
                 "note": "Arrive by flight.",
             }
+    elif dep_mode == "flight" and dep_log.get("estimated"):
+        # DRAFT MODE: Use Macro Planning estimates
+        constraints["day_0_arrival"] = {
+            "location": dep_log.get("hub_name", "Airport"),
+            "departure_time": dep_log.get("start_time", ""),
+            "arrival_time": dep_log.get("arrival_time", "09:00"),
+            "note": dep_log.get("note", "Estimated flight arrival"),
+        }
     elif dep_mode in ("coach", "train") and dep_log.get("hub_name"):
         constraints["day_0_arrival"] = {
             "location": dep_log.get("hub_name", ""),
@@ -671,6 +744,22 @@ def build_schedule_constraints(
                     "arrival_time": return_flight.get("arrival_time", ""),
                     "note": f"Must arrive at {dep_airport} by {deadline_time} (2h before {dep_time} flight).",
                 }
+    elif ret_mode == "flight" and ret_log.get("estimated"):
+        # DRAFT MODE: Use Macro Planning estimates for return flight deadline
+        ret_start = ret_log.get("start_time", "")
+        if ret_start:
+            parts = ret_start.split(":")
+            start_min = int(parts[0]) * 60 + int(parts[1])
+            deadline_min = max(480, start_min - 120)
+            deadline_time = f"{deadline_min // 60:02d}:{deadline_min % 60:02d}"
+            constraints["last_day_deadline"] = {
+                "mode": "flight",
+                "location": ret_log.get("hub_name", "Airport"),
+                "deadline_time": deadline_time,
+                "start_time": ret_start,
+                "arrival_time": ret_log.get("arrival_time", ""),
+                "note": f"Estimated return flight. Arrive at airport by {deadline_time}.",
+            }
     elif ret_mode in ("coach", "train") and ret_log.get("hub_name"):
         ret_start = ret_log.get("start_time", "")
         # 30-min buffer: arrive at hub 30 min before departure for boarding/tickets
@@ -716,17 +805,17 @@ def build_schedule_constraints(
         ci_time = _parse_hotel_time(ci_time_raw) if ci_time_raw else "14:00"
         co_time = _parse_hotel_time(co_time_raw) if co_time_raw else "12:00"
 
-        # Calculate 0-indexed day numbers for check-in and check-out
+        # Calculate 1-indexed day numbers for check-in and check-out
         ci_day_idx = None
         co_day_idx = None
         if start_date and ci_date:
             try:
-                ci_day_idx = (datetime.strptime(ci_date, "%Y-%m-%d") - start_date).days
+                ci_day_idx = (datetime.strptime(ci_date, "%Y-%m-%d") - start_date).days + 1
             except ValueError:
                 pass
         if start_date and co_date:
             try:
-                co_day_idx = (datetime.strptime(co_date, "%Y-%m-%d") - start_date).days
+                co_day_idx = (datetime.strptime(co_date, "%Y-%m-%d") - start_date).days + 1
             except ValueError:
                 pass
 
@@ -794,7 +883,8 @@ def build_schedule_constraints(
 
 async def run_itinerary_pipeline_nonVRP(
     agent_outputs: dict[str, Any],
-    orchestrator_plan: dict[str, Any],
+    macro_plan: dict[str, Any],
+    plan_context: dict[str, Any] = None,
     useAPI_RouteMatrix: bool = False,
 ) -> dict[str, Any]:
     """
@@ -806,7 +896,12 @@ async def run_itinerary_pipeline_nonVRP(
     5. Build soft schedule constraints
     6. Return everything for LLM scheduling
     """
-    plan_context = orchestrator_plan.get("plan_context", {})
+    # plan_context comes from current_plan (single source of truth)
+    # Inject mobility_plan from macro_plan so internal functions can read it
+    plan_context = dict(plan_context or {})
+    mobility_plan = macro_plan.get("mobility_plan", {})
+    if mobility_plan:
+        plan_context["mobility_plan"] = mobility_plan
     flight_data = agent_outputs.get("flight_agent", {})
 
     logger.info("=" * 60)

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 llm_flight = (
     ChatOpenAI(
-        model="google/gemini-3.1-flash-lite-preview",
+        model=settings.MODEL_NAME,
         api_key=settings.VERCEL_AI_GATEWAY_API_KEY,
         base_url="https://ai-gateway.vercel.sh/v1",
         temperature=0.3,
@@ -23,48 +23,26 @@ llm_flight = (
     )
     if settings.USE_VERCEL_AI_GATEWAY
     else ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite-preview",
-        google_api_key=settings.GOOGLE_GEMINI_API_KEY_FLIGHT,
+        model=settings.MODEL_NAME,
+        google_api_key=settings.GOOGLE_GEMINI_API_KEY_FLIGHT or settings.GOOGLE_GEMINI_API_KEY,
         temperature=0.3,
         streaming=False,
     )
 )
-
-FLIGHT_AGENT_MOCK= {
-  "type": "round_trip",
-  "directions": "both",
-  "outbound_flights_found": True,
-  "recommend_outbound_flight": {
-    "flight_number": "VN 240",
-    "departure_time": "07:00",
-    "departure_airport_name": "Tan Son Nhat International Airport",
-    "arrival_time": "09:10",
-    "arrival_airport_name": "Noi Bai International Airport"
-  },
-  "recommend_outbound_note": "This flight arrives at 09:10, fitting perfectly within your requested arrival window of 9:00 AM - 11:00 AM, allowing you to start your Hanoi exploration as planned.",
-  "return_flights_found": True,
-  "recommend_return_flight": {
-    "flight_number": "VN 257",
-    "departure_time": "17:30",
-    "departure_airport_name": "Noi Bai International Airport",
-    "arrival_time": "19:40",
-    "arrival_airport_name": "Tan Son Nhat International Airport"
-  },
-  "recommend_return_note": "This flight departs at 17:30, which aligns well with your preference for an afternoon flight (4:00 PM - 6:00 PM) on your last day, giving you time for final activities or shopping."
-}
 
 FLIGHT_AGENT_SYSTEM = """You are the Flight Agent for a travel planning system.
 
 You find flights using search_airports and search_flights tools.
 
 ## Input
-You receive two pieces of context from the Orchestrator:
+You receive:
 1. **plan_context**: Shared trip info (departure city, destination, dates, passengers, budget, currency)
-2. **flight context**: Flight-specific info (infants_in_seat/infants_on_lap, user preferences including type, directions, travel_class, max_price, outbound_times, return_times)
+2. **mobility_plan**: Trip logistics (if available)
+3. **task**: Flight-specific requirements — type (one_way/round_trip), directions, preferred time windows (outbound_times/return_times), infants_in_seat/infants_on_lap, travel class, any user notes
 
 ## Determine Search Flow
 
-Read `type` and `directions` from user_flight_preferences:
+Read `type` and `directions` from the task:
 - **type**: "one_way" (default) or "round_trip"
 - **directions**: "both" (default), "outbound_only", or "return_only"
 
@@ -76,20 +54,20 @@ Read `type` and `directions` from user_flight_preferences:
 | round_trip| both           | ROUND-TRIP FLOW               |
 
 ## Process
-1. Read both plan_context and flight context carefully
+1. Read plan_context and task carefully
 2. Determine airport IATA codes from plan_context.departure and plan_context.destination:
    - Use your knowledge of common airports (e.g., "Ho Chi Minh City" → SGN, "Hanoi" → HAN)
    - If uncertain, call search_airports to find the nearest airports
-3. Map user preferences and plan_context to search_flights parameters:
+3. Map task preferences and plan_context to search_flights parameters:
   - travel_class: "economy"→1, "premium_economy"→2, "business"→3, "first"→4
   - For round_trip: outbound_date = plan_context.start_date, return_date = plan_context.end_date
   - For one_way: outbound_date = plan_context.start_date (outbound) or end_date (return), do NOT pass return_date
-  - max_price: pass if user specified
-  - **Convert outbound_times and return_times** to SerpApi format (see below)
+  - max_price: pass if specified in task
+  - **Convert outbound_times and return_times** from task to SerpApi format (see below)
 
 ## Converting Time Preferences to SerpApi Format
 
-The Orchestrator provides:
+The task provides:
 - `outbound_times` as desired ARRIVAL time at destination (e.g., "arrive 8:00 AM - 10:00 AM at destination")
 - `return_times` as desired DEPARTURE time from destination (e.g., "depart 3:00 PM - 7:00 PM from destination")
 
@@ -228,18 +206,24 @@ EXAMPLE - FINAL OUTPUT STRUCTURE:
   "outbound_flights_found": true,
   "recommend_outbound_flight": {
     "flight_number": "VN123",
+    "airline": "Vietnam Airlines",
     "departure_time": "08:00",
+    "departure_airport_id": "SGN",
     "departure_airport_name": "Tan Son Nhat International Airport",
     "arrival_time": "10:00",
+    "arrival_airport_id": "HAN",
     "arrival_airport_name": "Noi Bai International Airport"
   },
   "recommend_outbound_note": "Note for outbound flight",
   "return_flights_found": true,
   "recommend_return_flight": {
     "flight_number": "VN456",
+    "airline": "Vietnam Airlines",
     "departure_time": "18:00",
+    "departure_airport_id": "HAN",
     "departure_airport_name": "Noi Bai International Airport",
     "arrival_time": "20:00",
+    "arrival_airport_id": "SGN",
     "arrival_airport_name": "Tan Son Nhat International Airport"
   },
   "recommend_return_note": "Note for return flight"
@@ -328,7 +312,7 @@ def _get_google_flights_url(tool_logs: list[dict], search_index_from_end: int = 
 
 def _extract_alternatives_from_search(
     tool_logs: list[dict], chosen_fns: list[str],
-    search_index_from_end: int = 0, max_alts: int = 3,
+    search_index_from_end: int = 0, max_alts: int = 2,
     direction_label: str = ""
 ) -> list[dict]:
     """Extract alternative flights from a specific search_flights call."""
@@ -369,19 +353,23 @@ def _extract_alternatives_from_search(
             dep_airport = first_seg.get("DepartureAirport", first_seg.get("departureAirport", {}))
             arr_airport = flights_list[-1].get("ArrivalAirport", flights_list[-1].get("arrivalAirport", {}))
             
-            dep_name = dep_airport.get("Name", dep_airport.get("name", "")) if isinstance(dep_airport, dict) else str(dep_airport)
+            dep_id = dep_airport.get("Id", dep_airport.get("id", "")) if isinstance(dep_airport, dict) else ""
             dep_time = dep_airport.get("Time", dep_airport.get("time", "")) if isinstance(dep_airport, dict) else ""
-            arr_name = arr_airport.get("Name", arr_airport.get("name", "")) if isinstance(arr_airport, dict) else str(arr_airport)
+            arr_id = arr_airport.get("Id", arr_airport.get("id", "")) if isinstance(arr_airport, dict) else ""
             arr_time = arr_airport.get("Time", arr_airport.get("time", "")) if isinstance(arr_airport, dict) else ""
             airline = first_seg.get("Airline", first_seg.get("airline", ""))
+            stops = len(flights_list) - 1
             
             alt = {
                 "flight_number": fn,
                 "airline": airline,
-                "departure": f"{dep_name} {dep_time}".strip(),
-                "arrival": f"{arr_name} {arr_time}".strip(),
+                "departure_time": dep_time,
+                "departure_airport_id": dep_id,
+                "arrival_time": arr_time,
+                "arrival_airport_id": arr_id,
                 "price": price,
                 "total_duration_min": total_dur,
+                "stops": stops,
             }
             if direction_label:
                 alt["direction"] = direction_label
@@ -465,32 +453,48 @@ def _extract_total_price_and_enrich(flight_result: dict, tool_logs: list[dict]) 
 
 
 async def flight_agent_node(state: GraphState) -> dict[str, Any]:
-    """Flight Agent — Airport + flight search. Runs in Phase 1 (parallel)."""
+    """Flight Agent — Airport + flight search. Pipeline or standalone mode."""
     logger.info("=" * 60)
-    logger.info("✈️ [FLIGHT_AGENT] Node entered (Phase 1)")
+    logger.info("✈️ [FLIGHT_AGENT] Node entered")
 
-    plan = state.get("orchestrator_plan", {})
-    plan_context = plan.get("plan_context", {})
-    flight_ctx = plan.get("flight", {})
+    plan = state.get("macro_plan", {})
+    current_plan = state.get("current_plan", {})
+    plan_context = current_plan.get("plan_context", {})
+    mobility_plan = plan.get("mobility_plan", {})
 
-    if not flight_ctx:
-        logger.info("   No flight context → skip")
+    # Unified task request — from Orchestrator (pipeline) or Intent (standalone)
+    agent_requests = plan.get("agent_requests", {})
+    agent_request = agent_requests.get("flight", "")
+
+    if not agent_request:
+        logger.info("   No agent_request for flight → skip")
         return {
             "agent_outputs": {"flight_agent": {"flights_found": False, "skipped": True}},
             "messages": [AIMessage(content="[Flight Agent] No flight search needed")],
         }
 
+    is_pipeline = bool(plan.get("task_list"))
+    logger.info(f"   Mode: {'PIPELINE' if is_pipeline else 'STANDALONE'}")
+
     flight_result = {}
 
     try:
-        # Build the human message with both plan_context and flight-specific context
-        human_content = f"""Plan context (shared trip info):
+        # Ensure direction defaults are explicit for the LLM
+        task_lower = agent_request.lower()
+        direction_hint = ""
+        if "outbound_only" not in task_lower and "return_only" not in task_lower and "one direction" not in task_lower:
+            if "directions" not in task_lower and "direction" not in task_lower:
+                direction_hint = '\n\nIMPORTANT: The user did not specify a direction. Default to type="one_way", directions="both" — search BOTH outbound AND return as two separate one-way flights.'
+
+        # Build the human message with plan_context + agent_request
+        human_content = f"""Plan context:
 {json.dumps(plan_context, indent=2, ensure_ascii=False)}
 
-Flight-specific context:
-{json.dumps(flight_ctx, indent=2, ensure_ascii=False)}
+Mobility plan:
+{json.dumps(mobility_plan, indent=2, ensure_ascii=False) if mobility_plan else "N/A"}
 
-Search for flights based on this context. Use the plan_context for dates, passengers, and budget info. Use the flight context for trip type, passengers specific (infants_in_seat, infants_on_lap), and preferences."""
+Task:
+{agent_request}{direction_hint}"""
 
         llm_messages = [
             SystemMessage(content=FLIGHT_AGENT_SYSTEM),
@@ -560,6 +564,9 @@ Search for flights based on this context. Use the plan_context for dates, passen
 
     logger.info("✈️ [FLIGHT_AGENT] Node completed")
     logger.info("=" * 60)
+
+    if "tools" in flight_result:
+        flight_result.pop("tools", None)
 
     return {
         "agent_outputs": {"flight_agent": flight_result},
