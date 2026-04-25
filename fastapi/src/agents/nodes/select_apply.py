@@ -10,7 +10,7 @@ this node:
    - Builds constraint_overrides (same mechanism as user-provided times)
    - Updates _cached_pipeline (schedule_constraints, distance_pairs)
    - Generates an auto_user_message for Itinerary Modify mode
-   - Sets selection_update flag so Itinerary knows this is a selection-triggered rerange
+   - Sets constraint_overrides flag so Itinerary knows this is a selection-triggered rerange
 """
 
 import asyncio
@@ -23,8 +23,8 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from src.agents.state import GraphState
-from src.agents.nodes.utils import _extract_json, _get_latest_user_message
-from src.services.itinerary_builder_nonVRP import (
+from src.agents.nodes.utils import _extract_json, _run_agent_with_tools
+from src.services.itinerary_builder import (
     _resolve_single_place,
     build_location_list,
     build_symmetric_distance_pairs,
@@ -71,51 +71,88 @@ Note: Day and meal_type are ONLY extracted if the user explicitly specifies them
 
 # ── LLM-based selection matching ─────────────────────────────────────────
 
-async def _llm_match_hotel(hotel_search: dict, user_message: str) -> dict | None:
-    """Use LLM to match user's selection to hotel search results."""
+HOTEL_SELECT_MATCH_SYSTEM = """\
+You are a hotel selection matcher for a travel planning system.
+
+Given a list of available hotels grouped by segment (location/dates) and the user's message, determine which hotel the user selected for each segment.
+Return a list of selections, where each selection specifies the `segment_index` and the 0-based `selected_hotel_index` within that segment.
+If the user's message is ambiguous, or they ask to select a hotel not in the list, return an empty array for `selections` and provide a `clarification_response` asking them to clarify in the SAME language the user used.
+You only need to return selections for segments where the user explicitly chose a hotel.
+
+Response format:
+{
+    "selections": [
+        { "segment_index": 0, "selected_hotel_index": 1 }
+    ],
+    "clarification_response": "..."
+}
+"""
+
+async def _llm_match_hotel(hotel_search: dict, user_message: str) -> list[dict] | dict | None:
+    """Use LLM to match user's selection to hotel search results. Returns a list of matched options or a clarification dict."""
     segments = hotel_search.get("segments", [])
     if not segments:
         return None
 
-    # Build options list for LLM
-    options = []
-    option_refs = []  # parallel list to map index → actual data
+    # Build options list for LLM grouped by segment
+    options_text_parts = []
+    option_refs = {}  # map (segment_idx, hotel_idx) → actual data
 
-    for seg in segments:
+    for seg_idx, seg in enumerate(segments):
+        seg_name = seg.get("segment_name", f"Segment {seg_idx}")
+        options_text_parts.append(f"Segment {seg_idx}: {seg_name}")
+        
+        hotel_idx = 0
         rec_name = seg.get("recommend_hotel_name", "")
         rate = seg.get("totalRate", "")
         rating = seg.get("overallRating", "")
-        options.append(f"{rec_name} (rate: {rate}, rating: {rating})")
-        option_refs.append({
+        
+        options_text_parts.append(f"  {hotel_idx}. RECOMMENDED: {rec_name} (rate: {rate}, rating: {rating})")
+        option_refs[(seg_idx, hotel_idx)] = {
             "name": rec_name,
             "segment": seg,
+            "segment_idx": seg_idx,
             "is_recommended": True,
-        })
+        }
+        hotel_idx += 1
 
         for alt in seg.get("alternatives", []):
             alt_name = alt.get("name", "")
             alt_rate = alt.get("totalRate", "")
             alt_rating = alt.get("overallRating", "")
-            options.append(f"{alt_name} (rate: {alt_rate}, rating: {alt_rating})")
-            option_refs.append({
+            options_text_parts.append(f"  {hotel_idx}. ALTERNATIVE: {alt_name} (rate: {alt_rate}, rating: {alt_rating})")
+            option_refs[(seg_idx, hotel_idx)] = {
                 "name": alt_name,
                 "alt_data": alt,
                 "segment": seg,
+                "segment_idx": seg_idx,
                 "is_recommended": False,
-            })
+            }
+            hotel_idx += 1
+            
+        options_text_parts.append("")
 
-    options_text = "\n".join(f"{i+1}. {opt}" for i, opt in enumerate(options))
+    options_text = "\n".join(options_text_parts)
 
     try:
         result = await llm_select.ainvoke([
-            SystemMessage(content=SELECT_MATCH_SYSTEM),
+            SystemMessage(content=HOTEL_SELECT_MATCH_SYSTEM),
             HumanMessage(content=f"Available hotels:\n{options_text}\n\nUser said: \"{user_message}\""),
         ])
         parsed = _extract_json(result.content)
-        idx = parsed.get("selected_index", -1)
-        if 0 <= idx < len(option_refs):
-            logger.info(f"🛒 [SELECT_APPLY] LLM matched hotel index {idx}: {option_refs[idx]['name']}")
-            return option_refs[idx]
+        selections = parsed.get("selections", [])
+        
+        matches = []
+        for sel in selections:
+            s_idx = sel.get("segment_index", -1)
+            h_idx = sel.get("selected_hotel_index", -1)
+            ref = option_refs.get((s_idx, h_idx))
+            if ref:
+                matches.append(ref)
+                
+        if matches:
+            logger.info(f"🛒 [SELECT_APPLY] LLM matched hotels: {[m['name'] for m in matches]}")
+            return matches
         else:
             return {"_is_clarification": True, "clarification_response": parsed.get("clarification_response")}
     except Exception as e:
@@ -124,71 +161,126 @@ async def _llm_match_hotel(hotel_search: dict, user_message: str) -> dict | None
     return None
 
 
+FLIGHT_SELECT_MATCH_SYSTEM = """\
+You are a flight selection matcher for a travel planning system.
+
+Given lists of available outbound and return flights, and the user's message, determine which flights the user selected.
+
+RULES:
+- Match by flight number (e.g. VU 751, VN 123), airline name, time, or ordinal ("first outbound", "second return").
+- If the user clearly refers to an outbound flight, return its 0-based index in `selected_outbound_index`. Otherwise, return -1.
+- If the user clearly refers to a return flight, return its 0-based index in `selected_return_index`. Otherwise, return -1.
+- If the user's message is ambiguous or none of the flights match what they asked for, return -1 for both and provide a `clarification_response` asking for clarification in the SAME language the user used.
+- Response MUST be JSON only.
+
+Response format:
+{
+    "selected_outbound_index": 0,
+    "selected_return_index": -1,
+    "clarification_response": "..."
+}
+"""
+
 async def _llm_match_flight(flight_search: dict, user_message: str) -> dict | None:
     """Use LLM to match user's selection to flight search results."""
-    options = []
-    option_refs = []
+    
+    outbound_options = []
+    outbound_refs = []
+    return_options = []
+    return_refs = []
 
-    # Recommended flight
     rec_out = flight_search.get("recommend_outbound_flight", {})
-    rec_ret = flight_search.get("recommend_return_flight", {})
     if rec_out:
-        desc = (
-            f"{rec_out.get('airline', '')} {rec_out.get('flight_number', '')} "
-            f"({rec_out.get('departure_time', '?')} → {rec_out.get('arrival_time', '?')})"
-        )
-        if rec_ret:
-            desc += (
-                f" + Return: {rec_ret.get('airline', '')} {rec_ret.get('flight_number', '')} "
-                f"({rec_ret.get('departure_time', '?')} → {rec_ret.get('arrival_time', '?')})"
-            )
-        price = flight_search.get("totalPrice", "")
-        options.append(f"{desc} — {price}")
-        option_refs.append({
-            "outbound": rec_out,
-            "return": rec_ret,
-            "totalPrice": flight_search.get("totalPrice"),
-            "is_recommended": True,
-        })
+        desc = f"RECOMMENDED: {rec_out.get('airline', '')} {rec_out.get('flight_number', '')} ({rec_out.get('departure_time', '?')} → {rec_out.get('arrival_time', '?')}) — {rec_out.get('price', '')}"
+        outbound_options.append(desc)
+        outbound_refs.append(rec_out)
+        
+    rec_ret = flight_search.get("recommend_return_flight", {})
+    if rec_ret:
+        desc = f"RECOMMENDED: {rec_ret.get('airline', '')} {rec_ret.get('flight_number', '')} ({rec_ret.get('departure_time', '?')} → {rec_ret.get('arrival_time', '?')}) — {rec_ret.get('price', '')}"
+        return_options.append(desc)
+        return_refs.append(rec_ret)
 
     # Alternatives
     for alt in flight_search.get("alternatives", []):
-        alt_out = alt.get("outbound_flight") or alt
-        alt_ret = alt.get("return_flight") or {}
-        desc = (
-            f"{alt_out.get('airline', '')} {alt_out.get('flight_number', '')} "
-            f"({alt_out.get('departure_time', '?')} → {alt_out.get('arrival_time', '?')})"
-        )
-        if alt_ret:
-            desc += (
-                f" + Return: {alt_ret.get('airline', '')} {alt_ret.get('flight_number', '')} "
-                f"({alt_ret.get('departure_time', '?')} → {alt_ret.get('arrival_time', '?')})"
-            )
-        price = alt.get("totalPrice") or alt.get("price", "")
-        options.append(f"{desc} — {price}")
-        option_refs.append({
-            "outbound": alt_out,
-            "return": alt_ret,
-            "totalPrice": price,
-            "is_recommended": False,
-            "alt_data": alt,
-        })
+        direction = alt.get("direction", "")
+        # Handle legacy nested format
+        if "outbound_flight" in alt:
+            alt_out = alt["outbound_flight"]
+            desc_out = f"ALTERNATIVE: {alt_out.get('airline', '')} {alt_out.get('flight_number', '')} ({alt_out.get('departure_time', '?')} → {alt_out.get('arrival_time', '?')}) — {alt_out.get('price', '')}"
+            outbound_options.append(desc_out)
+            outbound_refs.append(alt_out)
+            
+            if "return_flight" in alt:
+                alt_ret = alt["return_flight"]
+                desc_ret = f"ALTERNATIVE: {alt_ret.get('airline', '')} {alt_ret.get('flight_number', '')} ({alt_ret.get('departure_time', '?')} → {alt_ret.get('arrival_time', '?')}) — {alt_ret.get('price', '')}"
+                return_options.append(desc_ret)
+                return_refs.append(alt_ret)
+        else:
+            desc = f"ALTERNATIVE: {alt.get('airline', '')} {alt.get('flight_number', '')} ({alt.get('departure_time', '?')} → {alt.get('arrival_time', '?')}) — {alt.get('price', '')}"
+            if direction == "return":
+                return_options.append(desc)
+                return_refs.append(alt)
+            else:
+                outbound_options.append(desc)
+                outbound_refs.append(alt)
 
-    if not options:
+    if not outbound_options and not return_options:
         return None
 
-    options_text = "\n".join(f"{i+1}. {opt}" for i, opt in enumerate(options))
+    outbound_text = "\n".join(f"{i}. {opt}" for i, opt in enumerate(outbound_options))
+    return_text = "\n".join(f"{i}. {opt}" for i, opt in enumerate(return_options))
+
+    prompt = f"Available Outbound Flights:\n{outbound_text}\n\n"
+    if return_options:
+        prompt += f"Available Return Flights:\n{return_text}\n\n"
+    prompt += f"User said: \"{user_message}\""
 
     try:
         result = await llm_select.ainvoke([
-            SystemMessage(content=SELECT_MATCH_SYSTEM),
-            HumanMessage(content=f"Available flights:\n{options_text}\n\nUser said: \"{user_message}\""),
+            SystemMessage(content=FLIGHT_SELECT_MATCH_SYSTEM),
+            HumanMessage(content=prompt),
         ])
         parsed = _extract_json(result.content)
-        idx = parsed.get("selected_index", -1)
-        if 0 <= idx < len(option_refs):
-            logger.info(f"🛒 [SELECT_APPLY] LLM matched flight index {idx}")
-            return option_refs[idx]
+        
+        idx_out = parsed.get("selected_outbound_index", -1)
+        idx_ret = parsed.get("selected_return_index", -1)
+        
+        if idx_out >= 0 or idx_ret >= 0:
+            final_outbound = None
+            final_return = None
+            
+            if 0 <= idx_out < len(outbound_refs):
+                final_outbound = outbound_refs[idx_out]
+                logger.info(f"🛒 [SELECT_APPLY] LLM matched outbound flight index {idx_out}")
+
+            if 0 <= idx_ret < len(return_refs):
+                final_return = return_refs[idx_ret]
+                logger.info(f"🛒 [SELECT_APPLY] LLM matched return flight index {idx_ret}")
+                
+            # Calculate price
+            total_price = 0
+            if flight_search.get("type") == "round_trip":
+                total_price = flight_search.get("totalPrice", 0)
+            else:
+                def parse_price(p):
+                    if isinstance(p, (int, float)): return p
+                    if isinstance(p, str):
+                        try: return int(''.join(c for c in p if c.isdigit()))
+                        except: return 0
+                    return 0
+                
+                p_out = parse_price(final_outbound.get("price", 0)) if final_outbound else 0
+                p_ret = parse_price(final_return.get("price", 0)) if final_return else 0
+                total_price = p_out + p_ret
+                if total_price == 0:
+                    total_price = flight_search.get("totalPrice", 0)
+                    
+            return {
+                "outbound": final_outbound,
+                "return": final_return,
+                "totalPrice": total_price
+            }
         else:
             return {"_is_clarification": True, "clarification_response": parsed.get("clarification_response")}
     except Exception as e:
@@ -209,9 +301,9 @@ async def select_and_apply_node(state: GraphState) -> dict[str, Any]:
     logger.info("=" * 60)
     logger.info("🛒 [SELECT_APPLY] Node entered")
 
-    intent = state.get("routed_intent", "")
+    intent = (state.get("intent_output") or {}).get("intent", "")
     current_plan = state.get("current_plan", {})
-    user_message = _get_latest_user_message(state)
+    user_message = state.get("user_message", "")
     
     plan_context = current_plan.get("plan_context", {})
     language = plan_context.get("language", "en")
@@ -222,7 +314,7 @@ async def select_and_apply_node(state: GraphState) -> dict[str, Any]:
         return {
             "current_plan": current_plan,
             "final_response": msg,
-            "messages": [AIMessage(content="[Select Apply] No user message")],
+
         }
 
     logger.info(f"🛒 [SELECT_APPLY] Intent: {intent}, User: '{user_message[:80]}'")
@@ -239,7 +331,7 @@ async def select_and_apply_node(state: GraphState) -> dict[str, Any]:
         return {
             "current_plan": current_plan,
             "final_response": msg,
-            "messages": [AIMessage(content=f"[Select Apply] Unknown intent: {intent}")],
+
         }
 
 
@@ -259,9 +351,9 @@ async def _handle_hotel_selection(
         msg = "Bạn chưa có lịch trình nào. Hãy yêu cầu tôi tạo lịch trình trước khi chọn khách sạn nhé." if language == "vi" else "You don't have an itinerary yet. Please ask me to create an itinerary before selecting a hotel."
         return {
             "current_plan": current_plan,
-            "routed_intent": "select_hotel",
+            "intent_output": {"intent": "select_hotel"},
             "final_response": msg,
-            "messages": [AIMessage(content=msg)],
+
         }
 
     hotel_search = current_plan.get("hotel_search", {})
@@ -271,187 +363,201 @@ async def _handle_hotel_selection(
         return {
             "current_plan": current_plan,
             "final_response": msg,
-            "messages": [AIMessage(content="[Select Apply] No hotel search results")],
+
         }
 
     # 1. LLM match user's selection
-    match = await _llm_match_hotel(hotel_search, user_message)
-    if not match or match.get("_is_clarification"):
+    matches = await _llm_match_hotel(hotel_search, user_message)
+    if not matches or (isinstance(matches, dict) and matches.get("_is_clarification")):
         logger.warning(f"🏨 [SELECT_APPLY] LLM could not match selection")
-        fallback_msg = match.get("clarification_response") if match else None
+        fallback_msg = matches.get("clarification_response") if isinstance(matches, dict) else None
         if not fallback_msg:
             fallback_msg = "Tôi không rõ bạn muốn chọn khách sạn nào. Vui lòng nói rõ tên khách sạn." if language == "vi" else "I'm not sure which hotel you want to select. Please specify the name."
         return {
             "current_plan": current_plan,
             "final_response": fallback_msg,
-            "messages": [AIMessage(content=f"[Select Apply] Hotel match failed: {fallback_msg}")],
+
         }
 
-    hotel_name = match["name"]
-    segment = match["segment"]
-    logger.info(f"🏨 [SELECT_APPLY] Matched hotel: '{hotel_name}' (recommended={match['is_recommended']})")
-
-    # 2. Get hotel details
-    if match["is_recommended"]:
-        hotel_placeId = segment.get("recommend_hotel_placeId", "")
-        hotel_location = segment.get("_location")
-        check_in_time = _parse_hotel_time(segment.get("check_in_time", "14:00"))
-        check_out_time = _parse_hotel_time(segment.get("check_out_time", "12:00"))
-        total_rate = segment.get("totalRate", "")
-        check_in_date = segment.get("check_in", "")
-        check_out_date = segment.get("check_out", "")
-    else:
-        alt_data = match.get("alt_data", {})
-        # Use pre-resolved data from Hotel Agent if available
-        hotel_placeId = alt_data.get("placeId", "")
-        hotel_location = alt_data.get("_location")
-        # Use alternative-specific check-in/out times if available, fallback to segment
-        check_in_time = _parse_hotel_time(
-            alt_data.get("checkInTime") or segment.get("check_in_time", "14:00")
-        )
-        check_out_time = _parse_hotel_time(
-            alt_data.get("checkOutTime") or segment.get("check_out_time", "12:00")
-        )
-        total_rate = alt_data.get("totalRate", "")
-        check_in_date = segment.get("check_in", "")
-        check_out_date = segment.get("check_out", "")
-
-    # 3. Resolve placeId if needed
-    if not hotel_placeId:
-        logger.info(f"🏨 [SELECT_APPLY] Resolving placeId for '{hotel_name}'...")
-        try:
-            resolved = await _resolve_single_place(hotel_name)
-            if resolved:
-                hotel_placeId = resolved.get("placeId", "")
-                hotel_location = resolved.get("location")
-                logger.info(f"🏨 [SELECT_APPLY] Resolved: '{hotel_name}' → {hotel_placeId}")
-        except Exception as e:
-            logger.error(f"🏨 [SELECT_APPLY] Resolve failed for '{hotel_name}': {e}")
-
-    # 4. Update current_plan
-    plan_context = current_plan.get("plan_context", {})
-    current_plan["selected_hotel"] = {
-        "name": hotel_name,
-        "placeId": hotel_placeId,
-        "location": hotel_location,
-        "check_in_time": check_in_time,
-        "check_out_time": check_out_time,
-        "check_in_date": check_in_date,
-        "check_out_date": check_out_date,
-        "totalRate": total_rate,
-    }
-    logger.info(f"🏨 [SELECT_APPLY] Updated current_plan.selected_hotel: {hotel_name}")
-
-    # 5. Check if itinerary exists → prepare rerange
+    # Preparation for itinerary updates
     existing_itinerary = current_plan.get("itinerary", {})
     has_itinerary = bool(existing_itinerary.get("days"))
+    plan_context = current_plan.get("plan_context", {})
+    
+    cached_pipeline = copy.deepcopy(existing_itinerary.get("_cached_pipeline", {})) if has_itinerary else {}
+    schedule_constraints = cached_pipeline.get("schedule_constraints", {})
+    existing_days = existing_itinerary.get("days", [])
+    resolved_places = copy.deepcopy(existing_itinerary.get("resolved_places", {})) if has_itinerary else {}
+    
+    constraint_overrides = {"hotels": []}
+    auto_msgs = []
+    need_distance_recompute = False
+    
+    last_hotel_name = ""
+    last_hotel_placeId = ""
+
+    for match in matches:
+        hotel_name = match["name"]
+        segment = match["segment"]
+        segment_idx = match.get("segment_idx", 0)
+        old_hotel_name = segment.get("recommend_hotel_name", "")
+        logger.info(f"🏨 [SELECT_APPLY] Processing matched hotel: '{hotel_name}' (recommended={match['is_recommended']})")
+        
+        last_hotel_name = hotel_name
+
+        # 2. Get hotel details
+        if match["is_recommended"]:
+            hotel_placeId = segment.get("recommend_hotel_placeId", "")
+            hotel_location = segment.get("_location")
+            check_in_time = _parse_hotel_time(segment.get("check_in_time", "14:00"))
+            check_out_time = _parse_hotel_time(segment.get("check_out_time", "12:00"))
+            total_rate = segment.get("totalRate", "")
+            check_in_date = segment.get("check_in", "")
+            check_out_date = segment.get("check_out", "")
+        else:
+            alt_data = match.get("alt_data", {})
+            hotel_placeId = alt_data.get("placeId", "")
+            hotel_location = alt_data.get("_location")
+            check_in_time = _parse_hotel_time(
+                alt_data.get("checkInTime") or segment.get("check_in_time", "14:00")
+            )
+            check_out_time = _parse_hotel_time(
+                alt_data.get("checkOutTime") or segment.get("check_out_time", "12:00")
+            )
+            total_rate = alt_data.get("totalRate", "")
+            check_in_date = segment.get("check_in", "")
+            check_out_date = segment.get("check_out", "")
+
+        # 3. Resolve placeId if needed
+        if not hotel_placeId:
+            logger.info(f"🏨 [SELECT_APPLY] Resolving placeId for '{hotel_name}'...")
+            try:
+                resolved = await _resolve_single_place(hotel_name)
+                if resolved:
+                    hotel_placeId = resolved.get("placeId", "")
+                    hotel_location = resolved.get("location")
+                    logger.info(f"🏨 [SELECT_APPLY] Resolved: '{hotel_name}' → {hotel_placeId}")
+            except Exception as e:
+                logger.error(f"🏨 [SELECT_APPLY] Resolve failed for '{hotel_name}': {e}")
+                
+        last_hotel_placeId = hotel_placeId
+
+        # 4. Update current_plan hotel_search segments
+        if "segments" in current_plan.get("hotel_search", {}):
+            seg_to_update = current_plan["hotel_search"]["segments"][segment_idx]
+            seg_to_update["recommend_hotel_name"] = hotel_name
+            seg_to_update["recommend_hotel_placeId"] = hotel_placeId
+            seg_to_update["totalRate"] = total_rate
+            seg_to_update["check_in_time"] = check_in_time
+            seg_to_update["check_out_time"] = check_out_time
+            if not match["is_recommended"]:
+                alt_data = match.get("alt_data", {})
+                seg_to_update["link"] = alt_data.get("link", seg_to_update.get("link", ""))
+                seg_to_update["thumbnail"] = alt_data.get("thumbnail", seg_to_update.get("thumbnail", ""))
+                seg_to_update["overallRating"] = alt_data.get("overallRating", seg_to_update.get("overallRating", ""))
+                seg_to_update["reviews"] = alt_data.get("reviews", seg_to_update.get("reviews", 0))
+                seg_to_update["hotel_class"] = alt_data.get("hotel_class", seg_to_update.get("hotel_class", ""))
+
+        current_plan["selected_hotel"] = {
+            "name": hotel_name,
+            "placeId": hotel_placeId,
+            "location": hotel_location,
+            "check_in_time": check_in_time,
+            "check_out_time": check_out_time,
+            "check_in_date": check_in_date,
+            "check_out_date": check_out_date,
+            "totalRate": total_rate,
+            "segment_idx": segment_idx,
+        }
+
+        if has_itinerary:
+            target_nights = []
+            for h in schedule_constraints.get("hotels", []):
+                if h.get("segment_name") == segment.get("segment_name") or h.get("name") == old_hotel_name:
+                    h["name"] = hotel_name
+                    h["check_in_time"] = check_in_time
+                    h["check_out_time"] = check_out_time
+                    if h.get("check_in_day"):
+                        target_nights.append(h["check_in_day"])
+
+            constraint_overrides["hotels"].append({
+                "nights": target_nights,
+                "check_in_time": check_in_time,
+                "check_out_time": check_out_time,
+            })
+
+            # Pre-modify hotel names in existing stops
+            for day in existing_days:
+                for stop in day.get("stops", []):
+                    roles = stop.get("role", [])
+                    if isinstance(roles, str):
+                        roles = [roles]
+                    hotel_roles = {"check_in", "check_out", "end_day", "start_day", "rest", "luggage_drop", "luggage_pickup"}
+                    if set(roles) & hotel_roles:
+                        stop_name = stop.get("name", "").lower()
+                        if stop_name == old_hotel_name.lower() or not stop_name:
+                            stop["name"] = hotel_name
+
+            # Update resolved_places for this hotel
+            if hotel_location and hotel_placeId:
+                for h_info in resolved_places.get("hotels", []):
+                    if h_info.get("segment_name") == segment.get("segment_name") or h_info.get("name") == old_hotel_name:
+                        h_info["name"] = hotel_name
+                        h_info["resolved"] = {
+                            "placeId": hotel_placeId,
+                            "title": hotel_name,
+                            "location": hotel_location,
+                        }
+                need_distance_recompute = True
+
+            auto_msgs.append(f"Segment '{segment.get('segment_name', '')}': changed to {hotel_name} (check-in {check_in_time}, check-out {check_out_time}).")
 
     if has_itinerary:
         logger.info("🏨 [SELECT_APPLY] Existing itinerary found — preparing rerange...")
 
-        # Build constraint_overrides for hotel
-        num_days = plan_context.get("num_days", 1)
-        constraint_overrides = {
-            "hotels": [{
-                "nights": list(range(1, num_days)),
-                "check_in_time": check_in_time,
-                "check_out_time": check_out_time,
-            }]
-        }
-
-        # Update _cached_pipeline with new hotel info
-        cached_pipeline = copy.deepcopy(existing_itinerary.get("_cached_pipeline", {}))
-        schedule_constraints = cached_pipeline.get("schedule_constraints", {})
-
-        for h in schedule_constraints.get("hotels", []):
-            h["name"] = hotel_name
-            h["check_in_time"] = check_in_time
-            h["check_out_time"] = check_out_time
-
-        # Update hotel name in existing schedule stops
-        existing_days = existing_itinerary.get("days", [])
-        old_hotel_names = set()
-        for h in existing_itinerary.get("_cached_pipeline", {}).get("schedule_constraints", {}).get("hotels", []):
-            old_hotel_names.add(h.get("name", "").lower())
-
-        for day in existing_days:
-            for stop in day.get("stops", []):
-                roles = stop.get("role", [])
-                if isinstance(roles, str):
-                    roles = [roles]
-                hotel_roles = {"check_in", "check_out", "end_day", "start_day", "rest", "luggage_drop", "luggage_pickup"}
-                if set(roles) & hotel_roles:
-                    stop_name = stop.get("name", "").lower()
-                    if stop_name in old_hotel_names or not stop_name:
-                        stop["name"] = hotel_name
-
-        # Recompute distance matrix if new hotel has location
-        if hotel_location and hotel_placeId:
+        if need_distance_recompute:
             try:
-                logger.info("🏨 [SELECT_APPLY] Recomputing distance matrix with new hotel...")
-                resolved_places = copy.deepcopy(existing_itinerary.get("resolved_places", {}))
-
-                for h_info in resolved_places.get("hotels", []):
-                    h_info["name"] = hotel_name
-                    h_info["resolved"] = {
-                        "placeId": hotel_placeId,
-                        "title": hotel_name,
-                        "location": hotel_location,
-                    }
-
+                logger.info("🏨 [SELECT_APPLY] Recomputing distance matrix with new hotels...")
+                from src.services.itinerary_builder import build_location_list, build_symmetric_distance_pairs
                 locations = build_location_list(resolved_places)
                 if len(locations) >= 2:
                     transport = plan_context.get("local_transportation", "car")
+                    from src.tools.maps_tools import LOCAL_TRANSPORT_MAP
                     travel_mode = LOCAL_TRANSPORT_MAP.get(transport, "DRIVE")
+                    from src.tools.itinerary_tools import _build_distance_matrix
                     distance_matrix = await _build_distance_matrix(locations, travel_mode)
                     if distance_matrix:
                         new_distance_pairs = build_symmetric_distance_pairs(locations, distance_matrix)
                         cached_pipeline["distance_pairs"] = new_distance_pairs
                         logger.info(f"🏨 [SELECT_APPLY] Distance matrix updated: {len(new_distance_pairs)} pairs")
-
-                existing_itinerary["resolved_places"] = resolved_places
-
             except Exception as e:
                 logger.error(f"🏨 [SELECT_APPLY] Distance matrix recompute failed: {e}")
 
         cached_pipeline["schedule_constraints"] = schedule_constraints
         existing_itinerary["_cached_pipeline"] = cached_pipeline
+        existing_itinerary["resolved_places"] = resolved_places
+        existing_itinerary["days"] = existing_days
         current_plan["itinerary"] = existing_itinerary
 
-        # Build auto user message for Itinerary Modify
-        auto_msg = (
-            f"Hotel changed to \"{hotel_name}\". "
-            f"Check-in: {check_in_time}, Check-out: {check_out_time}. "
-            f"Update hotel name in all related stops (start_day, end_day, check_in, check_out, rest, luggage). "
-            f"Verify timing around check-in/check-out. Keep the rest unchanged."
-        )
+        auto_msg = " ".join(auto_msgs) + " Update hotel names in all related stops. You MUST completely re-evaluate and holistically re-pace the affected days to ensure a natural flow based on the new check-in/check-out times. Preserve existing activities as much as possible. ONLY add minor filler activities if there is a large gap, or drop non-essential activities if time is cut short. Handle luggage logistics. Keep unaffected days unchanged."
 
-        selection_update = {
+        constraint_overrides.update({
             "type": "hotel",
-            "hotel_name": hotel_name,
-            "hotel_placeId": hotel_placeId,
+            "hotel_name": last_hotel_name,
+            "hotel_placeId": last_hotel_placeId,
             "needs_rerange": True,
             "auto_user_message": auto_msg,
-            "constraint_overrides": constraint_overrides,
-        }
+        })
 
         return {
             "current_plan": current_plan,
-            "selection_update": selection_update,
             "constraint_overrides": constraint_overrides,
             "agent_outputs": {
-                "hotel_agent": {
-                    "segments": [{
-                        "recommend_hotel_name": hotel_name,
-                        "totalRate": total_rate,
-                        "check_in": current_plan.get("plan_context", {}).get("start_date", ""),
-                        "check_out": current_plan.get("plan_context", {}).get("end_date", ""),
-                        "segment_name": match.get("segment_name", "Selected Hotel")
-                    }]
-                }
+                "hotel_agent": current_plan["hotel_search"],
+                **({"restaurant_agent": current_plan["restaurant_search"]} if current_plan.get("restaurant_search") else {}),
             },
-            "routed_intent": "select_hotel",
-            "messages": [AIMessage(content=f"[Select Apply] Hotel selected: {hotel_name}, rerange triggered")],
+            "intent_output": {"intent": "select_hotel"},
+
         }
 
     # We don't need the else block since has_itinerary is now guaranteed above
@@ -475,9 +581,9 @@ async def _handle_flight_selection(
         msg = "Bạn chưa có lịch trình nào. Hãy yêu cầu tôi tạo lịch trình trước khi chọn chuyến bay nhé." if language == "vi" else "You don't have an itinerary yet. Please ask me to create an itinerary before selecting a flight."
         return {
             "current_plan": current_plan,
-            "routed_intent": "select_flight",
+            "intent_output": {"intent": "select_flight"},
             "final_response": msg,
-            "messages": [AIMessage(content=msg)],
+
         }
 
     flight_search = current_plan.get("flight_search", {})
@@ -487,7 +593,7 @@ async def _handle_flight_selection(
         return {
             "current_plan": current_plan,
             "final_response": msg,
-            "messages": [AIMessage(content="[Select Apply] No flight search results")],
+
         }
 
     # 1. LLM match user's selection
@@ -500,16 +606,31 @@ async def _handle_flight_selection(
         return {
             "current_plan": current_plan,
             "final_response": fallback_msg,
-            "messages": [AIMessage(content=f"[Select Apply] Flight match failed: {fallback_msg}")],
+
         }
 
-    outbound = match.get("outbound") or {}
-    return_flight = match.get("return") or {}
-    total_price = match.get("totalPrice", 0)
+    existing_outbound = flight_search.get("recommend_outbound_flight") or {}
+    existing_return = flight_search.get("recommend_return_flight") or {}
+    
+    outbound = match.get("outbound") or existing_outbound
+    return_flight = match.get("return") or existing_return
+    
+    total_price = 0
+    if flight_search.get("type") == "round_trip":
+        # round_trip must have both bundled, LLM returns total price.
+        total_price = match.get("totalPrice") or flight_search.get("totalPrice", 0)
+    else:
+        # one_way, prices are separate
+        if outbound:
+            total_price += outbound.get("price", 0)
+        if return_flight:
+            total_price += return_flight.get("price", 0)
+
     logger.info(
-        f"✈️ [SELECT_APPLY] Matched flight: "
+        f"✈️ [SELECT_APPLY] Final selected flight: "
         f"outbound={outbound.get('flight_number', '?')}, "
-        f"return={return_flight.get('flight_number', '?')}"
+        f"return={return_flight.get('flight_number', '?')} "
+        f"(Total: {total_price})"
     )
 
     # 2. Store selected flight
@@ -577,36 +698,29 @@ async def _handle_flight_selection(
                 f"depart {return_flight.get('departure_time', '?')} → arrive {return_flight.get('arrival_time', '?')}"
             )
 
-        if language == "vi":
-            auto_msg = (
-                f"Chuyến bay đã đổi. {outbound_info}. {return_info}. "
-                f"Cập nhật ngày đầu (outbound_arrival) và ngày cuối (return_departure). "
-                f"Nếu đến sớm hơn → có thể thêm hoạt động. Đến muộn hơn → bỏ bớt hoặc dời. "
-                f"Tương tự cho ngày về. Giữ nguyên các ngày giữa."
-            )
-        else:
-            auto_msg = (
-                f"Flight changed. {outbound_info}. {return_info}. "
-                f"Update day 1 (outbound_arrival) and last day (return_departure). "
-                f"If arriving earlier → add activities. Arriving later → remove or shift. "
-                f"Same for return day. Keep middle days unchanged."
-            )
+        auto_msg = (
+            f"Flight changed. {outbound_info}. {return_info}. "
+            f"This drastically changes the available time on the arrival and departure days. You MUST completely re-evaluate and holistically re-pace the schedules for these affected days to ensure a natural flow. "
+            f"Preserve existing activities as much as possible. ONLY add minor filler activities if there is a large gap, or drop non-essential activities if time is cut short. Handle luggage logistics (e.g. early drop-off if arriving early). Keep unaffected days unchanged."
+        )
 
-        selection_update = {
+        constraint_overrides.update({
             "type": "flight",
             "needs_rerange": True,
             "auto_user_message": auto_msg,
-            "constraint_overrides": constraint_overrides,
             "flight_agent_data": flight_agent_data,
-        }
+        })
 
         return {
             "current_plan": current_plan,
-            "selection_update": selection_update,
             "constraint_overrides": constraint_overrides,
-            "agent_outputs": {"flight_agent": flight_agent_data},
-            "routed_intent": "select_flight",
-            "messages": [AIMessage(content="[Select Apply] Flight selected, rerange triggered")],
+            "agent_outputs": {
+                "flight_agent": flight_agent_data,
+                # Preserve restaurant data so Synthesize can re-merge it into the updated itinerary
+                **({"restaurant_agent": current_plan["restaurant_search"]} if current_plan.get("restaurant_search") else {}),
+            },
+            "intent_output": {"intent": "select_flight"},
+
         }
 
     # We don't need the else block since has_itinerary is now guaranteed above
@@ -687,9 +801,9 @@ async def _handle_restaurant_selection(
         msg = "Bạn chưa có lịch trình nào. Hãy yêu cầu tôi tạo lịch trình trước khi chọn nhà hàng nhé." if language == "vi" else "You don't have an itinerary yet. Please ask me to create an itinerary before selecting a restaurant."
         return {
             "current_plan": current_plan,
-            "routed_intent": "select_restaurant",
+            "intent_output": {"intent": "select_restaurant"},
             "final_response": msg,
-            "messages": [AIMessage(content=msg)],
+
         }
 
     restaurant_search = current_plan.get("restaurant_search", {})
@@ -698,7 +812,7 @@ async def _handle_restaurant_selection(
         return {
             "current_plan": current_plan,
             "final_response": msg,
-            "messages": [AIMessage(content="[Select Apply] No restaurant search results")],
+
         }
 
     # 1. Match selection
@@ -710,7 +824,7 @@ async def _handle_restaurant_selection(
         return {
             "current_plan": current_plan,
             "final_response": fallback_msg,
-            "messages": [AIMessage(content=f"[Select Apply] Failed to match restaurant: {fallback_msg}")],
+
         }
 
     selected_place = match.get("alt_data") if match.get("is_alternative") else match.get("meal")
@@ -747,18 +861,18 @@ async def _handle_restaurant_selection(
             logger.info("🍽️ [SELECT_APPLY] Directly modified itinerary for restaurant!")
             return {
                 "current_plan": current_plan,
-                "selection_update": {"type": "restaurant", "needs_rerange": False},
-                "routed_intent": "select_restaurant",
+                "constraint_overrides": {"type": "restaurant", "needs_rerange": False},
+                "intent_output": {"intent": "select_restaurant"},
                 "agent_outputs": {"itinerary_agent": itinerary},
-                "messages": [AIMessage(content=f"[Select Apply] Applied restaurant {place_name}")],
+
             }
 
     # If could not apply to itinerary (e.g. standalone search without itinerary, or slot not found)
     msg = "Đã xảy ra lỗi hệ thống: Không thể áp dụng quán ăn này vào lịch trình của bạn. Vui lòng thử lại." if language == "vi" else "System error: Could not apply this restaurant to your itinerary. Please try again."
     return {
         "current_plan": current_plan,
-        "selection_update": {"type": "restaurant", "needs_rerange": False},
-        "routed_intent": "select_restaurant",
+        "constraint_overrides": {"type": "restaurant", "needs_rerange": False},
+        "intent_output": {"intent": "select_restaurant"},
         "final_response": msg,
-        "messages": [AIMessage(content=msg)],
+
     }

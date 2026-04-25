@@ -4,7 +4,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from src.agents.state import GraphState
-from src.agents.nodes.utils import _extract_json, _run_agent_with_tools, _get_latest_user_message
+from src.agents.nodes.utils import _extract_json, _run_agent_with_tools
 from src.tools.search_tools import tavily_search
 from src.services.place_resolution_llm import resolve_all_attractions
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -173,7 +173,7 @@ async def attraction_agent_node(state: GraphState) -> dict[str, Any]:
         logger.info("   No agent_request for attraction → skip")
         return {
             "agent_outputs": {"attraction_agent": {"attractions": [], "skipped": True}},
-            "messages": [AIMessage(content="[Attraction Agent] No attraction context provided")],
+
         }
 
     is_pipeline = bool(plan.get("task_list"))
@@ -248,6 +248,6 @@ Task:
 
     return {
         "agent_outputs": {"attraction_agent": attraction_result},
-        "messages": [AIMessage(content=f"[Attraction Agent] Found {total_attractions} resolved attractions for {destination} ({filtered_count} filtered)")],
+
     }
 

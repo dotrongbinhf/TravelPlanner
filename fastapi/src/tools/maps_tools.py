@@ -516,7 +516,7 @@ async def _nearby_via_text_search(
 
 
 # ============================================================================
-# ROUTE MATRIX — Internal function for VRP solver
+# ROUTE MATRIX — Internal function
 # ============================================================================
 
 # Map local_transportation (from Orchestrator) → Routes API travelMode
@@ -539,7 +539,7 @@ async def compute_route_matrix(
     """
     Internal function — compute NxN travel time matrix via Routes API.
     
-    Used by VRP solver, NOT exposed as an LLM tool.
+    Internal routing function, NOT exposed as an LLM tool.
     
     Args:
         locations: List of (lat, lng) tuples.

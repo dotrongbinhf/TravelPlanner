@@ -178,7 +178,7 @@ async def weather_fetch_node(state: GraphState) -> dict[str, Any]:
         logger.info("   No destination → skip")
         return {
             "agent_outputs": {"weather": {"daily": [], "skipped": True}},
-            "messages": [AIMessage(content="[Weather] No destination, skipping")],
+
         }
 
     start_date_str = plan_context.get("start_date", "")
@@ -190,7 +190,7 @@ async def weather_fetch_node(state: GraphState) -> dict[str, Any]:
         return {
             "agent_outputs": {"weather": {"daily": [], "skipped": True,
                 "outside_range_note": "No specific dates provided — cannot fetch weather forecast."}},
-            "messages": [AIMessage(content="[Weather] No dates, skipping")],
+
         }
 
     # Fallback: compute end_date from start_date + num_days if missing
@@ -210,7 +210,7 @@ async def weather_fetch_node(state: GraphState) -> dict[str, Any]:
             return {
                 "agent_outputs": {"weather": {"daily": [], "skipped": True,
                     "outside_range_note": "Missing end_date — cannot determine trip duration."}},
-                "messages": [AIMessage(content="[Weather] No end_date, skipping")],
+
             }
 
     weather_data = await _fetch_weather_for_trip(
@@ -226,5 +226,5 @@ async def weather_fetch_node(state: GraphState) -> dict[str, Any]:
 
     return {
         "agent_outputs": {"weather": weather_data},
-        "messages": [AIMessage(content=f"[Weather] Fetched forecast: {covered}/{total} days")],
+
     }

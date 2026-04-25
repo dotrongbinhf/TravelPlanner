@@ -63,7 +63,17 @@ export default function GroupedItineraryMarker({
         }
       }}
     >
-      <div className="relative flex flex-col items-center">
+      <div className="relative flex flex-col items-center group">
+        {/* Hover Tooltip */}
+        {!showPopover && (
+          <div className="absolute bottom-full mb-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-50 pointer-events-none">
+            <div className="bg-white px-2 py-1 rounded-md shadow-md border border-slate-200 text-xs font-bold text-slate-800 whitespace-nowrap text-center max-w-[150px] truncate">
+              {items[0]?.item.place?.title || "Multiple Items"}
+            </div>
+            <div className="w-2 h-2 bg-white rotate-45 -mt-1.5 border-r border-b border-slate-200 mx-auto"></div>
+          </div>
+        )}
+
         {/* Marker Pin */}
         <div
           className={cn(

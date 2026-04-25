@@ -31,6 +31,7 @@ import { HotelWidget } from "./widgets/HotelWidget";
 import { FlightWidget } from "./widgets/FlightWidget";
 import { AttractionWidget } from "./widgets/AttractionWidget";
 import { RestaurantWidget } from "./widgets/RestaurantWidget";
+import { useItineraryContext } from "@/contexts/ItineraryContext";
 
 export interface ChatMessage {
   id: string;
@@ -215,11 +216,11 @@ export default function ChatMessages({
   const isInitialLoadRef = useRef(true);
   const prevMsgCountRef = useRef(messages.length);
 
-  const [applyingMessageId, setApplyingMessageId] = useState<string | null>(
-    null,
-  );
+  const [applyingMessageId, setApplyingMessageId] = useState<string | null>(null);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [confirmMessageId, setConfirmMessageId] = useState<string | null>(null);
+
+  const { setChatPlaces } = useItineraryContext();
 
   const lastUserMsgId = [...messages].reverse().find(m => m.role === "user")?.id;
 
@@ -234,6 +235,101 @@ export default function ChatMessages({
       scrollToBottom();
     }
   }, [scrollToBottom]);
+
+  // Extract places from the latest message that contains widget data
+  useEffect(() => {
+    let latestWidgetData: any = null;
+    
+    // Check streaming data first
+    if (structuredData && (structuredData.hotel_agent || structuredData.attraction_agent || structuredData.restaurant_agent)) {
+      latestWidgetData = structuredData;
+    } else {
+      // Look for the latest message with widget data in history
+      const latestMsgWithData = [...messages].reverse().find(m => {
+        if (!m.generatedPlanData) return false;
+        try {
+          const parsed = JSON.parse(m.generatedPlanData);
+          return parsed.hotel_agent || parsed.attraction_agent || parsed.restaurant_agent;
+        } catch {
+          return false;
+        }
+      });
+      
+      if (latestMsgWithData?.generatedPlanData) {
+        try {
+          latestWidgetData = JSON.parse(latestMsgWithData.generatedPlanData);
+        } catch {}
+      }
+    }
+
+    if (latestWidgetData) {
+      import('@/contexts/ItineraryContext').then(({ ChatPlace }) => {
+        const places: typeof ChatPlace[] = [];
+        
+        // Extract Hotels
+        if (latestWidgetData.hotel_agent?.segments) {
+          latestWidgetData.hotel_agent.segments.forEach((seg: any) => {
+            const allHotels = [
+              { ...seg, id: seg.recommend_hotel_name },
+              ...(seg.alternatives || []).map((alt: any, idx: number) => ({ ...alt, id: alt.name || `alt-${idx}` }))
+            ];
+            
+            allHotels.forEach(h => {
+              if (h._location && (h._location.coordinates || (h._location.lat && h._location.lng))) {
+                places.push({
+                  id: h.id,
+                  placeId: h.place_id || h.placeId,
+                  name: h.name || h.recommend_hotel_name,
+                  location: h._location.coordinates 
+                    ? { lat: h._location.coordinates[1], lng: h._location.coordinates[0] }
+                    : { lat: h._location.lat, lng: h._location.lng },
+                  source: "hotel"
+                });
+              }
+            });
+          });
+        }
+        
+        // Extract Attractions
+        if (latestWidgetData.attraction_agent?.segments) {
+          latestWidgetData.attraction_agent.segments.forEach((seg: any) => {
+            if (seg._location && (seg._location.coordinates || (seg._location.lat && seg._location.lng))) {
+              places.push({
+                id: seg.title || seg.recommend_attraction_name,
+                placeId: seg.place_id || seg.placeId,
+                name: seg.title || seg.recommend_attraction_name,
+                location: seg._location.coordinates 
+                  ? { lat: seg._location.coordinates[1], lng: seg._location.coordinates[0] }
+                  : { lat: seg._location.lat, lng: seg._location.lng },
+                source: "attraction"
+              });
+            }
+          });
+        }
+        
+        // Extract Restaurants
+        if (latestWidgetData.restaurant_agent?.segments) {
+          latestWidgetData.restaurant_agent.segments.forEach((seg: any) => {
+            if (seg._location && (seg._location.coordinates || (seg._location.lat && seg._location.lng))) {
+              places.push({
+                id: seg.title || seg.recommend_restaurant_name,
+                placeId: seg.place_id || seg.placeId,
+                name: seg.title || seg.recommend_restaurant_name,
+                location: seg._location.coordinates 
+                  ? { lat: seg._location.coordinates[1], lng: seg._location.coordinates[0] }
+                  : { lat: seg._location.lat, lng: seg._location.lng },
+                source: "restaurant"
+              });
+            }
+          });
+        }
+        
+        setChatPlaces(places as any);
+      });
+    } else {
+      setChatPlaces([]);
+    }
+  }, [messages, structuredData, setChatPlaces]);
 
   useEffect(() => {
     if (isInitialLoadRef.current && messages.length > 0) {

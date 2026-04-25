@@ -11,13 +11,12 @@ import { AxiosError } from "axios";
 import toast from "react-hot-toast";
 import { APIProvider } from "@vis.gl/react-google-maps";
 import { ItineraryItem } from "@/types/itineraryItem";
-import { ItineraryProvider, useItineraryContext } from "../../../../contexts/ItineraryContext";
+import { ItineraryProvider } from "../../../../contexts/ItineraryContext";
 import {
   MessageCircle,
   Map as MapIcon,
   ClipboardList,
   BotMessageSquare,
-  MapPinned,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,8 +33,6 @@ const RightPanelControls = ({
   rightPanelView: "map" | "planner";
   setRightPanelView: (v: "map" | "planner") => void;
 }) => {
-  const { mapMode, setMapMode } = useItineraryContext();
-
   return (
     <div className="absolute top-2 right-2 z-10 flex flex-col gap-2 items-end">
       <TooltipProvider delayDuration={100}>
@@ -79,37 +76,6 @@ const RightPanelControls = ({
           </Tooltip>
         </div>
       </TooltipProvider>
-
-      {/* Map Mode Sub-Toggle (Plan vs Chatbot) */}
-      {rightPanelView === "map" && (
-        <TooltipProvider delayDuration={100}>
-          <div className="flex items-center rounded-lg border border-gray-300 bg-white/90 backdrop-blur-sm shadow-md overflow-hidden animate-in fade-in slide-in-from-top-2">
-            <button
-              onClick={() => setMapMode("plan")}
-              className={`flex items-center justify-center px-3 py-1.5 transition-all duration-200 text-xs font-medium ${
-                mapMode === "plan"
-                  ? "bg-blue-600 text-white shadow-inner"
-                  : "text-gray-600 hover:text-blue-600 hover:bg-blue-50"
-              }`}
-            >
-              <MapPinned className="w-3 h-3 mr-1.5" />
-              My Plan
-            </button>
-            <div className="w-[1px] h-4 bg-gray-200" />
-            <button
-              onClick={() => setMapMode("aiExplore")}
-              className={`flex items-center justify-center px-3 py-1.5 transition-all duration-200 text-xs font-medium ${
-                mapMode === "aiExplore"
-                  ? "bg-blue-600 text-white shadow-inner"
-                  : "text-gray-600 hover:text-blue-600 hover:bg-blue-50"
-              }`}
-            >
-              <BotMessageSquare className="w-3 h-3 mr-1.5" />
-              Chatbot
-            </button>
-          </div>
-        </TooltipProvider>
-      )}
     </div>
   );
 };

@@ -1,5 +1,6 @@
 import React from "react";
 import { UtensilsCrossed, Star, ExternalLink, MapPin } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { PlaceCarouselWidget } from "./PlaceCarouselWidget";
 import { useItineraryContext } from "@/contexts/ItineraryContext";
 
@@ -12,7 +13,26 @@ export function RestaurantWidget({ data }: RestaurantWidgetProps) {
     return null;
   }
 
-  const { selectPlaceFromMap, clearPlaceSelection } = useItineraryContext();
+  const { setFocusLocation, clearPlaceSelection, setSelectedChatPlace } = useItineraryContext();
+
+  // Extract lat/lng from db_data (GeoJSON: [lng, lat])
+  const _focusOnMap = (item: any) => {
+    const coords = item.db_data?.location?.coordinates;
+    const location = coords && coords.length === 2 
+      ? { lat: coords[1], lng: coords[0] }
+      : (item._location?.lat && item._location?.lng ? { lat: item._location.lat, lng: item._location.lng } : null);
+
+    if (location) {
+      setFocusLocation(location);
+      setSelectedChatPlace({
+        id: item.id || item.name || item.recommend_restaurant_name,
+        placeId: item.place_id || item.placeId,
+        name: item.name || item.recommend_restaurant_name,
+        location,
+        source: "restaurant"
+      });
+    }
+  };
 
   const handleOpenMap = (placeName: string, placeId?: string) => {
     let url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(placeName)}`;
@@ -87,9 +107,7 @@ export function RestaurantWidget({ data }: RestaurantWidgetProps) {
           key={rest.id}
           onClick={() => {
             onClick();
-            if (rest.place_id || rest.db_data?.placeId) {
-              selectPlaceFromMap(rest.place_id || rest.db_data?.placeId);
-            }
+            _focusOnMap(rest);
           }}
           className="relative flex-[0_0_160px] sm:flex-[0_0_180px] md:flex-[0_0_200px] cursor-pointer group rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-300 border border-slate-200/50"
         >

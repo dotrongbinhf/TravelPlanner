@@ -4,8 +4,6 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using dotnet.Dtos.AgentEvent;
-using dotnet.Dtos.Message;
-using dotnet.Enums;
 using dotnet.Interfaces;
 
 namespace dotnet.Services
@@ -14,6 +12,8 @@ namespace dotnet.Services
     /// WebSocket client that connects to FastAPI LangGraph agent system.
     /// Proxies messages from .NET to FastAPI and streams back agent events.
     /// Uses Channel<T> to bridge async WebSocket reads with IAsyncEnumerable yield.
+    /// 
+    /// This service only handles streaming — message persistence is managed by AgentHub.
     /// </summary>
     public class AgentWebSocketService : IAgentWebSocketService
     {
@@ -37,7 +37,6 @@ namespace dotnet.Services
         public async IAsyncEnumerable<AgentEventDto> StreamAgentResponseAsync(
             string conversationId,
             string message,
-            IEnumerable<MessageDto>? history = null,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             var channel = Channel.CreateUnbounded<AgentEventDto>();
@@ -45,7 +44,7 @@ namespace dotnet.Services
             // Start the WebSocket reader as a background task
             _ = Task.Run(async () =>
             {
-                await ReadFromWebSocketAsync(conversationId, message, history, channel.Writer, cancellationToken);
+                await ReadFromWebSocketAsync(conversationId, message, channel.Writer, cancellationToken);
             }, cancellationToken);
 
             // Yield events from the channel
@@ -58,7 +57,6 @@ namespace dotnet.Services
         private async Task ReadFromWebSocketAsync(
             string conversationId,
             string message,
-            IEnumerable<MessageDto>? history,
             ChannelWriter<AgentEventDto> writer,
             CancellationToken cancellationToken)
         {
@@ -77,16 +75,8 @@ namespace dotnet.Services
                 await ws.ConnectAsync(new Uri(wsUrl), cancellationToken);
                 _logger.LogInformation("Connected to FastAPI WebSocket for conversation {ConversationId}", conversationId);
 
-                // Build payload with message and optional history
+                // Build payload — just the message
                 var payloadObj = new Dictionary<string, object> { ["message"] = message };
-                if (history != null && history.Any())
-                {
-                    payloadObj["history"] = history.Select(m => new
-                    {
-                        role = m.MessageRole == MessageRole.User ? "user" : "assistant",
-                        content = m.Content
-                    }).ToList();
-                }
                 var payload = JsonSerializer.Serialize(payloadObj, _jsonOptions);
                 var sendBuffer = Encoding.UTF8.GetBytes(payload);
                 await ws.SendAsync(
@@ -127,6 +117,7 @@ namespace dotnet.Services
                             {
                                 _logger.LogDebug("Received event: {EventType} from {AgentName}",
                                     agentEvent.EventType, agentEvent.AgentName);
+
                                 await writer.WriteAsync(agentEvent, cancellationToken);
 
                                 // Stop after workflow_complete or error

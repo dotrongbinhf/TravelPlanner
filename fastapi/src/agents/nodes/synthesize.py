@@ -63,16 +63,17 @@ One compact, welcoming paragraph highlighting destination, dates, travelers, and
 ### Flights
 - CRITICAL: If there is no `--- FLIGHTS ---` data provided in the Agent Data block, you MUST NOT create a Flights section at all, and DO NOT output the `[FLIGHT_UI_WIDGET]` tag.
 - If data exists, create a dedicated **Flights** section.
-- Introduce the flights with a natural, engaging sentence.
+- Briefly explain WHY you recommend this flight (timing advantages, price, airline quality, etc.).
+- Mention that alternatives are available in the interactive cards below and the user can ask you to switch.
 - CRITICAL: Do NOT generate Markdown tables or bulleted lists for flight details.
 - Instead, you MUST output exactly this placeholder tag on a new line: `[FLIGHT_UI_WIDGET]`
 - The system will automatically inject beautiful Interactive Flight Cards in place of that tag.
-- After the widget tag, you may add a brief note about booking links or next steps.
 
 ### Accommodation
 - CRITICAL: If there is no `--- HOTELS ---` data provided in the Agent Data block, you MUST NOT create an Accommodation section at all, and DO NOT output the `[HOTEL_UI_WIDGET]` tag.
 - If data exists, create a dedicated **Accommodation** section.
-- Introduce the hotels with a natural, engaging sentence.
+- Briefly explain WHY you recommend this hotel (location, price, rating, proximity to attractions, etc.).
+- Mention that alternatives are available in the interactive cards below and the user can ask you to switch.
 - CRITICAL: Do NOT generate Markdown tables or bulleted lists for hotel details.
 - Instead, you MUST output exactly this placeholder tag on a new line: `[HOTEL_UI_WIDGET]`
 - The system will automatically inject beautiful Interactive Hotel Cards in place of that tag.
@@ -102,9 +103,23 @@ One compact, welcoming paragraph highlighting destination, dates, travelers, and
 - Practical tips, cultural advice, and useful reminders as a separate bullet list.
 
 ### Closing & Next Steps
-- End your response by asking if they want to modify the current result, or if they want to proceed with building the missing parts of their trip.
+- End your response by asking if they want to modify the current result.
 - Currently, the user has built: {built_sections_text}.
-- Mention what is still missing (e.g. Accommodations, Attraction details, Budget analysis) and ask if they want you to work on those next.
+- Mention what is still missing and ask if they want you to work on those next.
+- **CRITICAL**: ONLY suggest actions from this list of what the system can do:
+  - Modify the itinerary (add/remove/rearrange places, change times)
+  - Search for flights
+  - Search for hotels/accommodations
+  - Search for restaurants
+  - Search for attractions/sightseeing
+  - Adjust budget/packing/travel notes
+- Do NOT suggest actions like "book a hotel", "reserve a table", "buy tickets", "set up notifications", or any feature not listed above.
+
+### Full Plan — Hotel & Flight Recommendations
+- If this is a Full Plan (flights + hotels + itinerary generated together), include a brief paragraph explaining WHY you chose the recommended hotel and flight.
+  - For hotel: mention why it's suitable (location, price, rating, proximity to attractions).
+  - For flight: mention timing advantage (e.g., early arrival maximizes sightseeing time).
+  - Remind the user they can view alternatives in the interactive cards below and ask you to switch.
 
 ## Section Order (skip missing sections)
 1. Trip Overview → 2. Weather → 3. Budget → 4. Daily Itinerary → 5. Packing List → 6. Travel Notes → 7. Accommodation → 8. Flights
@@ -313,23 +328,43 @@ async def synthesize_agent_node(state: GraphState) -> dict[str, Any]:
     logger.info("=" * 60)
     logger.info("📝 [SYNTHESIZE] Node entered")
     agent_outputs = state.get("agent_outputs", {})
-    intent = state.get("routed_intent", "greeting")
+    intent_output = state.get("intent_output") or {}
+    intent = intent_output.get("intent", "general")
     plan = state.get("macro_plan", {})
     current_plan = state.get("current_plan") or {}
+
+    # RESTORE MISSING AGENT OUTPUTS FROM CURRENT_PLAN
+    # Because intent.py wipes agent_outputs on every turn, we must restore
+    # the outputs of agents that didn't run in this turn from the current_plan cache.
+    if "flight_agent" not in agent_outputs and "flight_search" in current_plan:
+        agent_outputs["flight_agent"] = current_plan["flight_search"]
+    if "hotel_agent" not in agent_outputs and "hotel_search" in current_plan:
+        agent_outputs["hotel_agent"] = current_plan["hotel_search"]
+    if "restaurant_agent" not in agent_outputs and "restaurant_search" in current_plan:
+        agent_outputs["restaurant_agent"] = current_plan["restaurant_search"]
+    if "attraction_agent" not in agent_outputs and "attraction_search" in current_plan:
+        agent_outputs["attraction_agent"] = current_plan["attraction_search"]
+    if "preparation_agent" not in agent_outputs and ("budget" in current_plan or "packing" in current_plan):
+        agent_outputs["preparation_agent"] = {
+            "budget": current_plan.get("budget", {}),
+            "packing_lists": current_plan.get("packing", []),
+            "notes": current_plan.get("notes", []),
+        }
+    if "itinerary_agent" not in agent_outputs and "itinerary" in current_plan:
+        agent_outputs["itinerary_agent"] = current_plan["itinerary"]
 
     # Determine mode
     STANDALONE_INTENTS = ("search_flights", "search_hotels", "suggest_attractions", "search_restaurants", "preparation_inquiry")
     SELECT_INTENTS = ("select_flight", "select_hotel", "select_restaurant")
     is_standalone = intent in STANDALONE_INTENTS
     is_select = intent in SELECT_INTENTS
-    is_simple = intent in ("greeting", "clarification_needed", "general_question")
+    is_simple = intent in ("general", "clarification_needed")
 
     plan_context = current_plan.get("plan_context", {})
     mobility_plan = plan.get("mobility_plan", {})
     
     # We prioritize user_request_rewrite to focus Synthesize on the actionable intent
-    last_intent_info = state.get("last_intent") or {}
-    user_request_rewrite = last_intent_info.get("user_request_rewrite", "")
+    user_request_rewrite = intent_output.get("user_request_rewrite", "")
     
     # Determine what sections are already built to prompt next-step suggestions
     built_sections = []
@@ -438,7 +473,7 @@ This is a DRAFT plan. The following agents did NOT run: Flight, Hotel, Restauran
 
         # 1. Aggregate Costs
         logger.info("   Aggregating costs...")
-        aggregated_costs = aggregate_all_costs(agent_outputs, plan_context, mobility_plan)
+        aggregated_costs = aggregate_all_costs(agent_outputs, plan_context)
 
         # 2. Build curated context — only fields Synthesize actually needs
         context_str = _build_curated_context(agent_outputs, plan_context, aggregated_costs, mobility_plan)
@@ -461,36 +496,38 @@ This is a DRAFT plan. The following agents did NOT run: Flight, Hotel, Restauran
 You are presenting an UPDATED itinerary after the user requested changes.
 
 **CRITICAL RULES:**
-- Present the schedule EXACTLY as provided in the data. Do NOT re-arrange, re-time, or adjust any stops to try and "please" the user. The data you receive is the final validated result.
-- Present the full updated Daily Itinerary
+- Do NOT present the full Daily Itinerary. The user already has the schedule.
+- Instead, briefly confirm the changes were applied and summarize ONLY what CHANGED:
+  - Which days/time slots were affected
+  - What was added, removed, or moved
+  - Any timing adjustments
+- Keep it concise: 3-5 sentences maximum describing the changes.
 - Do NOT include sections for Flights, Accommodation, Budget, Packing List, or Travel Notes — they haven't changed
 - Do NOT output any UI widget tags (`[FLIGHT_UI_WIDGET]`, `[HOTEL_UI_WIDGET]`, `[ATTRACTION_UI_WIDGET]`, `[RESTAURANT_UI_WIDGET]`). This is a modification action, not a search action.
-- Keep the response focused on the itinerary changes
 """
             if not fulfilled and mod_notes:
                 modify_instructions += f"""
 ## CONSTRAINT COMPROMISE (MUST EXPLAIN TO USER)
 The Itinerary Agent could NOT fulfill the user's exact request due to real-world constraints.
-You MUST apologize, explain exactly why their original request failed, and present the compromise schedule.
+You MUST apologize, explain exactly why their original request failed, and present the compromise.
 
 Notes from Itinerary Agent:
 {mod_notes}
 
-Example response tone: "I've updated the schedule, but unfortunately, I couldn't put [attraction] in the morning because it is closed at that time. I've scheduled it for [new time] instead. Is this alternative acceptable to you?"
-Do NOT hide these adjustments. The user MUST understand why you didn't do exactly what they asked.
+Example tone: "I've updated the schedule, but unfortunately [attraction] is closed at that time. I've scheduled it for [new time] instead."
 """
             elif fulfilled:
                 modify_instructions += """
 ## SUCCESSFUL MODIFICATION
-The schedule was updated successfully without constraint conflicts.
-At the end, suggest next steps in the user's language based on what they might want to do next (e.g., "Bạn muốn chỉnh sửa thêm gì nữa không? Hay chuyển sang tìm khách sạn?").
+The schedule was updated successfully.
+At the end, suggest 1-2 next steps briefly.
 """
             system_content += modify_instructions
 
         # 5. Add selection-triggered rerange instructions
         if is_select:
-            selection_update = state.get("selection_update", {})
-            sel_type = selection_update.get("type", "")
+            constraint_overrides = state.get("constraint_overrides", {})
+            sel_type = constraint_overrides.get("type", "")
             
             selection_instructions = """
 
@@ -510,7 +547,7 @@ The user selected a new {sel_type} from previous search results.
 """.format(sel_type=sel_type)
 
             if sel_type == "hotel":
-                hotel_name = selection_update.get("hotel_name", "")
+                hotel_name = constraint_overrides.get("hotel_name", "")
                 selection_instructions += f"\nUser selected hotel: **{hotel_name}**. Confirm the selection and note any schedule impacts.\n"
             elif sel_type == "flight":
                 selection_instructions += "\nUser selected a new flight. Briefly note how Day 1 and/or the last day were adjusted.\n"
@@ -527,17 +564,12 @@ The user selected a new {sel_type} from previous search results.
     llm_messages = [SystemMessage(content=system_content)]
 
     # Find the original user request: prioritize the rewritten, clear version from Intent Agent
-    last_intent = state.get("last_intent", {})
-    user_request = last_intent.get("user_request_rewrite")
+    user_request = intent_output.get("user_request_rewrite")
     
     if not user_request:
-        messages = state.get("messages", [])
-        for msg in reversed(messages):
-            if isinstance(msg, HumanMessage):
-                content = msg.content if hasattr(msg, "content") else str(msg)
-                if not content.startswith("["):
-                    user_request = content
-                    break
+        user_request = state.get("user_message", "")
+        if user_request and user_request.startswith("["):
+            user_request = ""
     llm_messages.append(HumanMessage(content=user_request or "Please provide my travel plan."))
 
     try:
@@ -628,10 +660,10 @@ The user selected a new {sel_type} from previous search results.
                     changed_sections={"itinerary"},
                 )
             elif intent in ["select_hotel", "select_flight"]:
-                # Select flow: only itinerary changed, budget managed by user
+                # Select flow: itinerary AND budget changed
                 apply_data = build_sectioned_apply_data(
                     agent_outputs, plan_context, aggregated_costs,
-                    changed_sections={"itinerary"},
+                    changed_sections={"itinerary", "budget"},
                 )
             else:
                 # Full format: apply all sections
@@ -698,7 +730,7 @@ The user selected a new {sel_type} from previous search results.
         "final_response": final_response,
         "structured_output": structured_output,
         "current_plan": current_plan,
-        "messages": [AIMessage(content=final_response)],
+
     }
 
 

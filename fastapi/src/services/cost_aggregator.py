@@ -42,7 +42,6 @@ def _find_attraction_data(
 def aggregate_all_costs(
     agent_outputs: dict[str, Any],
     plan_context: dict[str, Any],
-    mobility_plan: dict[str, Any] = None,
 ) -> dict[str, Any]:
     """Aggregate costs from all agent outputs into a unified breakdown.
     Args:
@@ -168,9 +167,11 @@ def aggregate_all_costs(
             "subtotal": restaurant_subtotal,
         }
     # ── 5. Other costs (from Preparation Agent) ───────────────────────
-    # In draft mode, Preparation may also estimate Flight/Accommodation/Meals costs
+    # Preparation handles: departure transport, meals (when no Restaurant Agent),
+    # accommodation (when no Hotel Agent), attractions (when no Attraction Agent)
     PREP_TYPE_TO_CATEGORY = {
         "Flight": "flights",
+        "Departure Transport": "transport",
         "Accommodation": "accommodation",
         "Meals": "restaurants",
         "Attractions": "attractions",
@@ -194,6 +195,17 @@ def aggregate_all_costs(
 
             # Route to correct category
             target_category = PREP_TYPE_TO_CATEGORY.get(item_type, "other")
+
+            # Check if we have real data for this category
+            has_real_flight = bool(flight_items) and target_category == "flights"
+            has_real_hotel = bool(hotel_items) and target_category == "accommodation"
+            has_real_meals = bool(restaurant_subtotal > 0) and target_category == "restaurants"
+            has_real_attr = bool(attraction_subtotal > 0) and target_category == "attractions"
+
+            if has_real_flight or has_real_hotel or has_real_meals or has_real_attr:
+                logger.info(f"💰 [COST_AGGREGATOR] Dropping preparation estimate for {item_type} because real data exists.")
+                continue
+
             entry = {
                 "name": f"[{item_type}] {name}" if target_category == "other" else name,
                 "amount": amount,
@@ -215,39 +227,6 @@ def aggregate_all_costs(
         result["categories"]["other"] = {
             "items": other_items,
             "subtotal": other_subtotal,
-        }
-    # ── 6. Transport costs (from mobility_plan) ──────────────────────
-    if not mobility_plan:
-        mobility_plan = plan_context.get("mobility_plan") or {}
-    dep_log = mobility_plan.get("departure_logistics") or {}
-    ret_log = mobility_plan.get("return_logistics") or {}
-    transport_items = []
-    transport_subtotal = 0
-
-    dep_mode = dep_log.get("mode", "")
-    if dep_mode and dep_mode != "flight":
-        dep_cost = dep_log.get("estimated_cost", 0)
-        if isinstance(dep_cost, (int, float)) and dep_cost > 0:
-            transport_items.append({
-                "name": f"Di chuyển đi ({dep_mode})",
-                "amount": dep_cost,
-                "note": dep_log.get("estimated_cost_note", ""),
-            })
-            transport_subtotal += dep_cost
-
-        ret_cost = ret_log.get("estimated_cost", 0)
-        if isinstance(ret_cost, (int, float)) and ret_cost > 0:
-            transport_items.append({
-                "name": f"Di chuyển về ({ret_log.get('mode', dep_mode)})",
-                "amount": ret_cost,
-                "note": ret_log.get("estimated_cost_note", ""),
-            })
-            transport_subtotal += ret_cost
-
-    if transport_items:
-        result["categories"]["transport"] = {
-            "items": transport_items,
-            "subtotal": transport_subtotal,
         }
     # ── Grand total ──────────────────────────────────────────────────
     result["grand_total"] = sum(

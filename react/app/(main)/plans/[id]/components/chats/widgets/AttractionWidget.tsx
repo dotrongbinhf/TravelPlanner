@@ -1,5 +1,6 @@
 import React from "react";
 import { Map, Star, ExternalLink, ArrowRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { PlaceCarouselWidget } from "./PlaceCarouselWidget";
 import { useItineraryContext } from "@/contexts/ItineraryContext";
 
@@ -12,7 +13,26 @@ export function AttractionWidget({ data }: AttractionWidgetProps) {
     return null;
   }
 
-  const { selectPlaceFromMap, clearPlaceSelection } = useItineraryContext();
+  const { setFocusLocation, clearPlaceSelection, setSelectedChatPlace } = useItineraryContext();
+
+  // Extract lat/lng from db_data (GeoJSON: [lng, lat])
+  const _focusOnMap = (item: any) => {
+    const coords = item.db_data?.location?.coordinates;
+    const location = coords && coords.length === 2 
+      ? { lat: coords[1], lng: coords[0] }
+      : (item._location?.lat && item._location?.lng ? { lat: item._location.lat, lng: item._location.lng } : null);
+
+    if (location) {
+      setFocusLocation(location);
+      setSelectedChatPlace({
+        id: item.id || item.name || item.recommend_attraction_name,
+        placeId: item.place_id || item.placeId,
+        name: item.name || item.recommend_attraction_name,
+        location,
+        source: "attraction"
+      });
+    }
+  };
 
   // Flatten all attractions across segments
   const allAttractions = data.segments.flatMap((s: any) =>
@@ -57,9 +77,7 @@ export function AttractionWidget({ data }: AttractionWidgetProps) {
             key={attr.id}
             onClick={() => {
               onClick();
-              if (attr.place_id || attr.db_data?.placeId) {
-                selectPlaceFromMap(attr.place_id || attr.db_data?.placeId);
-              }
+              _focusOnMap(attr);
             }}
             className="relative flex-[0_0_160px] sm:flex-[0_0_180px] md:flex-[0_0_200px] cursor-pointer group rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-300 border border-slate-200/50"
           >

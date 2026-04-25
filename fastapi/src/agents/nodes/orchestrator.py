@@ -4,8 +4,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from src.agents.state import GraphState
-from src.agents.nodes.utils import _extract_json, _get_latest_user_message, _run_agent_with_tools
-from src.tools.search_tools import tavily_search
+from src.agents.nodes.utils import _extract_json, _run_agent_with_tools
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from src.config import settings
@@ -39,11 +38,6 @@ Your ONLY job is to:
 1. Create a DETAILED mobility plan that covers the entire trip
 2. Create a structured plan with SPECIFIC CONTEXT for each specialist agent
 
-Note: Intent detection and clarification are handled BEFORE you. You will ONLY be called when the user wants to create or modify a plan. The user's request has already been validated to have sufficient information.
-
-## Web Search
-You have access to the `tavily_search` tool. BEFORE building the `mobility_plan` for unfamiliar destinations, complex multi-region trips, or specific multi-day routes (like "x days Ha Giang loop"), use the `tavily_search` tool to gather high-level itinerary and routing ideas. Use this research ONLY to inform the `mobility_plan.segments` structure (which areas on which days) and logistics, not for fine-grained daily scheduling.
-
 ## Response Format
 
 CRITICAL: Your response must be one and ONLY one valid JSON object. No text before or after.
@@ -57,8 +51,6 @@ CRITICAL: Your response must be one and ONLY one valid JSON object. No text befo
       "hub_name": "Ha Giang Bus Station",
       "start_time": "22:00 -1",
       "arrival_time": "05:00",
-      "estimated_cost": 500000,
-      "estimated_cost_note": "250,000 VND/person × 2 people",
       "note": "Overnight coach from Hanoi 22:00, arrives HG 05:00. Rest until 07:00."
     },
     "return_logistics": {
@@ -66,8 +58,6 @@ CRITICAL: Your response must be one and ONLY one valid JSON object. No text befo
       "hub_name": "Ha Giang Bus Station",
       "start_time": "14:00",
       "arrival_time": "21:00",
-      "estimated_cost": 500000,
-      "estimated_cost_note": "250,000 VND/person × 2 people",
       "note": "Coach back to Hanoi, departs 14:00, arrives 21:00."
     },
     "segments": [
@@ -191,16 +181,13 @@ When intent is "draft_plan", you MUST estimate flight timing yourself:
   "hub_name": "Ha Giang Bus Station",
   "start_time": "22:00 -1",
   "arrival_time": "05:00",
-  "estimated_cost": 500000,
-  "estimated_cost_note":  "250,000 VND/person × 2 people",
   "note": "Context about arrival"
 }
 ```
 hub_name = the DESTINATION-SIDE hub (where traveler arrives/departs at destination).
 `start_time`: Time of departure from origin (append " -1" if it departs the previous day).
 `arrival_time`: Time of arrival at destination hub.
-You MUST provide estimated_cost.
-estimated_cost MUST be a numeric total (integer) for ALL travelers, with estimated_cost_note explaining the breakdown (e.g., "250,000 VND/person × 2").
+Do NOT estimate costs — the Preparation Agent handles all cost estimation.
 
 **When mode is "car", "motorbike":**
 ```json
@@ -209,12 +196,11 @@ estimated_cost MUST be a numeric total (integer) for ALL travelers, with estimat
   "hub_name": null,
   "start_time": "06:30",
   "arrival_time": "08:00",
-  "estimated_cost": 150000,
-  "estimated_cost_note": "tolls + fuel ~150,000 VND",
   "note": "Self-drive from Bac Ninh"
 }
 ```
 hub_name is null for self-drive (no fixed hub). Itinerary starts at first attraction or hotel.
+Do NOT estimate costs — the Preparation Agent handles all cost estimation.
 
 **When local (departure == destination):**
 ```json
@@ -329,26 +315,26 @@ async def _resolve_non_flight_hubs(plan: dict, state_plan_context: dict = None) 
     return plan
 
 
-async def orchestrator_nonVRP_node(state: GraphState) -> dict[str, Any]:
+async def orchestrator_node(state: GraphState) -> dict[str, Any]:
     """Orchestrator (Macro Planning) — Parses user request into structured per-agent JSON.
     Phase 1: LLM generates plan with mobility_plan.
     Phase 2: Resolve non-flight transport hubs (LLM-verified).
 
     Reads intent from Intent Agent to determine draft vs full mode."""
     logger.info("=" * 60)
-    logger.info("🧠 [ORCHESTRATOR_nonVRP] Node entered")
+    logger.info("🧠 [ORCHESTRATOR] Node entered")
 
-    user_message = _get_latest_user_message(state)
-    user_context = state.get("user_context", {})
-    routed_intent = state.get("routed_intent", "draft_plan")
+    user_message = state.get("user_message", "")
+    intent_output = state.get("intent_output") or {}
+    user_intent = intent_output.get("intent", "draft_plan")
 
     logger.info(f"   User message: {user_message[:100]}")
-    logger.info(f"   Routed intent from Intent Agent: {routed_intent}")
+    logger.info(f"   Routed intent from Intent Agent: {user_intent}")
 
     try:
         # Build LLM messages with draft/full/modify hint
         system_content = ORCHESTRATOR_SYSTEM
-        if routed_intent == "draft_plan":
+        if user_intent == "draft_plan":
             system_content += """
 
 ## DRAFT MODE ACTIVE
@@ -359,7 +345,7 @@ You are creating a DRAFT plan. For departure_logistics/return_logistics:
 - For tasks: you MUST still provide attraction and restaurant context.
   Flight and hotel task sections can be null (agents won't run).
 """
-        elif routed_intent == "modify_plan":
+        elif user_intent == "modify_plan":
             system_content += """
 
 ## MODIFY MODE ACTIVE
@@ -370,18 +356,19 @@ You are MODIFYING an existing plan. The existing plan context is provided below.
 - Re-generate the full plan structure with the modifications applied.
 """
 
-        # ── Context from Intent Agent (replaces conversation history) ──
+        # ── Context from Intent Agent ──
         current_plan = state.get("current_plan", {})
         existing_plan_ctx = current_plan.get("plan_context", {})
-        last_intent = current_plan.get("last_intent_info", state.get("last_intent", {}))
-        user_request_rewrite = last_intent.get("user_request_rewrite", "")
+        user_request_rewrite = intent_output.get("user_request_rewrite", "")
         
+        # fallback to raw message
+        effective_user_message = user_request_rewrite or user_message
+
         # Build prompt messages
         llm_messages = [SystemMessage(content=system_content)]
-        if user_request_rewrite:
-            llm_messages.append(HumanMessage(
-                content=f"Current user request: {user_request_rewrite}"
-            ))
+        llm_messages.append(HumanMessage(
+            content=f"Current user request: {effective_user_message}"
+        ))
 
         # Inject existing plan context if available
         if existing_plan_ctx:
@@ -405,16 +392,13 @@ You are MODIFYING an existing plan. The existing plan context is provided below.
             llm_messages.append(SystemMessage(content=override_msg))
             logger.info(f"   🔧 Injected constraint_overrides into Orchestrator: {constraint_overrides}")
 
-        # Only latest user message (not full history)
-        llm_messages.append(HumanMessage(content=user_message))
-
-        # Phase 1: LLM generates plan, potentially using tavily_search
+        # LLM generates plan
         result, tool_logs = await _run_agent_with_tools(
             llm=llm_orchestrator,
             messages=llm_messages,
-            tools=[tavily_search],
-            max_iterations=4,
-            agent_name="ORCHESTRATOR_nonVRP"
+            tools=[],
+            max_iterations=1,
+            agent_name="ORCHESTRATOR"
         )
         
         output = _extract_json(result.content)
@@ -437,7 +421,7 @@ You are MODIFYING an existing plan. The existing plan context is provided below.
                 plan_ctx[key] = value
         current_plan["plan_context"] = plan_ctx
 
-        logger.info(f"   Routed intent: {routed_intent}, Tasks: {task_list}")
+        logger.info(f"   Routed intent: {user_intent}, Tasks: {task_list}")
         logger.info(f"   Agent requests: {list(agent_requests.keys())}")
 
         macro_plan = {
@@ -456,11 +440,10 @@ You are MODIFYING an existing plan. The existing plan context is provided below.
         return {
             "pending_tasks": task_list,
             "completed_tasks": [],
-            "user_context": user_context,
             "macro_plan": macro_plan,
             "current_plan": current_plan,
-            "agent_outputs": {"orchestrator": {"intent": routed_intent, "tasks": task_list}},
-            "messages": [AIMessage(content=f"[Orchestrator] Plan created: {', '.join(task_list)} agents will execute...")],
+            "agent_outputs": {"orchestrator": {"intent": user_intent, "tasks": task_list}},
+
         }
 
     except Exception as e:
@@ -472,10 +455,9 @@ You are MODIFYING an existing plan. The existing plan context is provided below.
         return {
             "pending_tasks": [],
             "completed_tasks": [],
-            "user_context": user_context,
             "macro_plan": {"task_list": []},
             "agent_outputs": {"orchestrator": {"error": str(e)}},
-            "messages": [AIMessage(content=fallback)],
+
             "final_response": fallback,
         }
 

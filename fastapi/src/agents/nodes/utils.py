@@ -61,29 +61,29 @@ def _extract_json(text_or_list: Any) -> dict:
 
     raise ValueError(f"No valid JSON found in LLM response: {text[:200]}...")
 
+# Messages List -> Only Latest user message
+# def _get_latest_user_message(state: GraphState) -> str:
+#     """Extract the most recent user message from state."""
+#     messages = state.get("messages", [])
+#     for msg in reversed(messages):
+#         if isinstance(msg, HumanMessage):
+#             return msg.content
+#     return ""
 
-def _get_latest_user_message(state: GraphState) -> str:
-    """Extract the most recent user message from state."""
-    messages = state.get("messages", [])
-    for msg in reversed(messages):
-        if isinstance(msg, HumanMessage):
-            return msg.content
-    return ""
 
-
-def _get_conversation_context(state: GraphState, max_messages: int = 10) -> list:
-    """Build conversation context from message history."""
-    messages = state.get("messages", [])
-    context = []
-    for msg in messages[-max_messages:]:
-        content = msg.content if hasattr(msg, "content") else str(msg)
-        if content.startswith("["):
-            continue
-        if isinstance(msg, HumanMessage):
-            context.append(msg)
-        elif isinstance(msg, AIMessage):
-            context.append(msg)
-    return context
+# def _get_conversation_context(state: GraphState, max_messages: int = 10) -> list:
+#     """Build conversation context from message history."""
+#     messages = state.get("messages", [])
+#     context = []
+#     for msg in messages[-max_messages:]:
+#         content = msg.content if hasattr(msg, "content") else str(msg)
+#         if content.startswith("["):
+#             continue
+#         if isinstance(msg, HumanMessage):
+#             context.append(msg)
+#         elif isinstance(msg, AIMessage):
+#             context.append(msg)
+#     return context
 
 
 

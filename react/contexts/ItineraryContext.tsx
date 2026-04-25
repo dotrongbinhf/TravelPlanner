@@ -19,6 +19,14 @@ interface SelectedPlaceState {
   triggerSource?: "map" | "list";
 }
 
+export interface ChatPlace {
+  id: string; // unique widget item id
+  placeId?: string; // google place id if available
+  name: string;
+  location: { lat: number; lng: number };
+  source: "hotel" | "attraction" | "restaurant";
+}
+
 interface ItineraryContextValue {
   // Selected place state
   selectedPlace: SelectedPlaceState;
@@ -31,6 +39,12 @@ interface ItineraryContextValue {
   selectPlaceFromMap: (placeId: string) => void;
   clearPlaceSelection: () => void;
 
+  // Chat place state
+  chatPlaces: ChatPlace[];
+  setChatPlaces: (places: ChatPlace[]) => void;
+  selectedChatPlace: ChatPlace | null;
+  setSelectedChatPlace: (place: ChatPlace | null) => void;
+
   // Map display options
   showMarkers: boolean;
   setShowMarkers: (show: boolean) => void;
@@ -39,6 +53,11 @@ interface ItineraryContextValue {
   filterMode: "all" | "byDay";
   setFilterMode: (mode: "all" | "byDay") => void;
   selectedDayIndex: number;
+  setSelectedDayIndex: (dayIndex: number) => void;
+
+  // Widget → Map focus (direct coordinates)
+  focusLocation: { lat: number; lng: number } | null;
+  setFocusLocation: (loc: { lat: number; lng: number } | null) => void;
 }
 
 const ItineraryContext = createContext<ItineraryContextValue | null>(null);
@@ -71,10 +90,18 @@ export function ItineraryProvider({
     isFromItinerary: false,
   });
 
+  // Chat place state
+  const [chatPlaces, setChatPlaces] = useState<ChatPlace[]>([]);
+  const [selectedChatPlace, setSelectedChatPlace] = useState<ChatPlace | null>(null);
+
   // Map display options
+  const [filterMode, setFilterMode] = useState<"all" | "byDay">("byDay");
   const [showMarkers, setShowMarkers] = useState(true);
   const [showDirections, setShowDirections] = useState(false);
   const [selectedDayIndex, setSelectedDayIndex] = useState(0);
+
+  // Widget → Map focus location
+  const [focusLocation, setFocusLocation] = useState<{ lat: number; lng: number } | null>(null);
 
   const handleSetShowMarkers = useCallback((show: boolean) => {
     setShowMarkers(show);
@@ -109,6 +136,7 @@ export function ItineraryProvider({
         triggerSource: source,
       });
       setSelectedDayIndex(dayIndex);
+      setSelectedChatPlace(null);
 
       if (!showMarkers) {
         setShowMarkers(true);
@@ -126,6 +154,7 @@ export function ItineraryProvider({
       itemIndex: null,
       isFromItinerary: false,
     });
+    setSelectedChatPlace(null);
   }, []);
 
   const clearPlaceSelection = useCallback(() => {
@@ -136,6 +165,7 @@ export function ItineraryProvider({
       itemIndex: null,
       isFromItinerary: false,
     });
+    setSelectedChatPlace(null);
   }, []);
 
   const value: ItineraryContextValue = {
@@ -143,6 +173,10 @@ export function ItineraryProvider({
     selectPlaceFromItinerary,
     selectPlaceFromMap,
     clearPlaceSelection,
+    chatPlaces,
+    setChatPlaces,
+    selectedChatPlace,
+    setSelectedChatPlace,
     showMarkers,
     setShowMarkers: handleSetShowMarkers,
     showDirections,
@@ -151,6 +185,8 @@ export function ItineraryProvider({
     setFilterMode: handleSetFilterMode,
     selectedDayIndex,
     setSelectedDayIndex,
+    focusLocation,
+    setFocusLocation,
   };
 
   return (

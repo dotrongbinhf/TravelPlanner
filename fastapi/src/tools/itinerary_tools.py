@@ -16,10 +16,7 @@ logger = logging.getLogger(__name__)
 # UTILITIES
 # ============================================================================
 
-def minutes_to_time(minutes: int) -> str:
-    hours = int(minutes // 60)
-    mins = int(minutes % 60)
-    return f"{hours:02d}:{mins:02d}"
+
 
 # ============================================================================
 # DISTANCE MATRIX (uses maps_tools.compute_route_matrix)

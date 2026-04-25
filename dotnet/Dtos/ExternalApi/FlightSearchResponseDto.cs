@@ -87,6 +87,9 @@ namespace dotnet.Dtos.ExternalApi
         /// <summary>Airline name (e.g., "British Airways", "American")</summary>
         public string? Airline { get; set; }
 
+        /// <summary>Airline logo URL from SerpAPI</summary>
+        public string? AirlineLogo { get; set; }
+
         /// <summary>Travel class (e.g., "Economy", "Business", "First")</summary>
         public string? TravelClass { get; set; }
 

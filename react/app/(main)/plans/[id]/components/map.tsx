@@ -5,6 +5,7 @@ import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import PlaceDetailDialog from "./maps/place-detail-dialog";
 import ItineraryMarker from "./maps/itinerary-marker";
 import GroupedItineraryMarker from "./maps/grouped-itinerary-marker";
+import ChatPlaceMarker from "./maps/chat-place-marker";
 import UnplacedItemsPanel, { UnplacedItem } from "./maps/unplaced-items-panel";
 import MapMenu from "./maps/map-menu";
 import ItineraryDayNavigator from "./maps/itineraryDay-navigator";
@@ -57,6 +58,9 @@ export default function GoogleMapIntegration({
     selectPlaceFromItinerary,
     selectPlaceFromMap,
     clearPlaceSelection,
+    chatPlaces,
+    selectedChatPlace,
+    setSelectedChatPlace,
     showMarkers,
     setShowMarkers,
     showDirections,
@@ -64,8 +68,9 @@ export default function GoogleMapIntegration({
     filterMode,
     setFilterMode,
     selectedDayIndex,
-    selectedDayIndex,
     setSelectedDayIndex,
+    focusLocation,
+    setFocusLocation,
   } = useItineraryContext();
 
   const itineraryDays = plan?.itineraryDays ?? [];
@@ -262,7 +267,8 @@ export default function GoogleMapIntegration({
     }
 
     const singles: typeof visibleMarkers = [...noPlace];
-    const grouped: Array<{ placeId: string; markers: typeof visibleMarkers }> = [];
+    const grouped: Array<{ placeId: string; markers: typeof visibleMarkers }> =
+      [];
 
     for (const [placeId, markers] of groups) {
       if (markers.length === 1) {
@@ -344,7 +350,8 @@ export default function GoogleMapIntegration({
             firstItemOfNextDay &&
             lastItemOfCurrentDay.place?.placeId &&
             firstItemOfNextDay.place?.placeId &&
-            lastItemOfCurrentDay.place.placeId !== firstItemOfNextDay.place.placeId
+            lastItemOfCurrentDay.place.placeId !==
+              firstItemOfNextDay.place.placeId
           ) {
             const connectionRoute = await getRouteBetweenTwoItems(
               lastItemOfCurrentDay.id,
@@ -430,6 +437,16 @@ export default function GoogleMapIntegration({
     });
   }, [markersData]);
 
+  // Widget → Map: pan and zoom when a chat widget item is clicked
+  useEffect(() => {
+    if (focusLocation && map) {
+      map.panTo({ lat: focusLocation.lat, lng: focusLocation.lng });
+      map.setZoom(15);
+      // Clear after panning so re-clicking the same item works
+      setFocusLocation(null);
+    }
+  }, [focusLocation, map, setFocusLocation]);
+
   const handleMapClick = (e: any) => {
     if (e.detail?.placeId) {
       console.log("Clicked POI:", e.detail.placeId);
@@ -464,6 +481,35 @@ export default function GoogleMapIntegration({
             clickedPos &&
             !selectedPlace.isFromItinerary && <Marker position={clickedPos} />}
 
+          {/* Chat Place Markers */}
+          {chatPlaces.map((place) => (
+            <ChatPlaceMarker
+              key={place.id}
+              position={place.location}
+              name={place.name}
+              source={place.source}
+              isActive={selectedChatPlace?.id === place.id}
+              onClick={() => {
+                setSelectedChatPlace(place);
+                setFocusLocation(place.location);
+              }}
+            />
+          ))}
+
+          {/* Render selectedChatPlace if it's from an older message (not in chatPlaces) */}
+          {selectedChatPlace && !chatPlaces.some(p => p.id === selectedChatPlace.id) && (
+            <ChatPlaceMarker
+              key={selectedChatPlace.id}
+              position={selectedChatPlace.location}
+              name={selectedChatPlace.name}
+              source={selectedChatPlace.source}
+              isActive={true}
+              onClick={() => {
+                setFocusLocation(selectedChatPlace.location);
+              }}
+            />
+          )}
+
           {/* Single Itinerary Markers */}
           {singleMarkers.map((marker) => {
             const {
@@ -493,6 +539,7 @@ export default function GoogleMapIntegration({
                 isFirst={isOverallFirst}
                 isLast={isOverallLast}
                 isBed={isBed}
+                title={place.title || item.note}
                 isActive={
                   !!selectedPlace.placeId &&
                   !!place?.placeId &&
@@ -541,8 +588,7 @@ export default function GoogleMapIntegration({
                 }))}
                 primaryColor={getDayColor(firstMarker.dayIndex)}
                 isActive={
-                  !!selectedPlace.placeId &&
-                  selectedPlace.placeId === placeId
+                  !!selectedPlace.placeId && selectedPlace.placeId === placeId
                 }
                 onItemSelect={(item, dayIndex, itemIndex) => {
                   selectPlaceFromItinerary(item, dayIndex, itemIndex, "map");
@@ -692,16 +738,18 @@ export default function GoogleMapIntegration({
                 const newDayIndex = Math.max(0, selectedDayIndex - 1);
                 clearPlaceSelection();
                 setSelectedDayIndex(newDayIndex);
-                // Center on first item of new day
+                // Center on first item of new day that has coordinates
                 const dayMarkers = markersData.filter(
                   (m) => m.dayIndex === newDayIndex,
                 );
                 if (dayMarkers.length > 0 && map) {
-                  const firstItem = dayMarkers[0].item;
-                  if (firstItem.place?.location?.coordinates) {
+                  const firstItemWithLocation = dayMarkers.find(
+                    (m) => m.item.place?.location?.coordinates
+                  )?.item;
+                  if (firstItemWithLocation?.place?.location?.coordinates) {
                     map.panTo({
-                      lat: firstItem.place.location.coordinates[1] - 0.0025,
-                      lng: firstItem.place.location.coordinates[0],
+                      lat: firstItemWithLocation.place.location.coordinates[1] - 0.0025,
+                      lng: firstItemWithLocation.place.location.coordinates[0],
                     });
                   }
                 }
@@ -713,16 +761,18 @@ export default function GoogleMapIntegration({
                 );
                 clearPlaceSelection();
                 setSelectedDayIndex(newDayIndex);
-                // Center on first item of new day
+                // Center on first item of new day that has coordinates
                 const dayMarkers = markersData.filter(
                   (m) => m.dayIndex === newDayIndex,
                 );
                 if (dayMarkers.length > 0 && map) {
-                  const firstItem = dayMarkers[0].item;
-                  if (firstItem.place?.location?.coordinates) {
+                  const firstItemWithLocation = dayMarkers.find(
+                    (m) => m.item.place?.location?.coordinates
+                  )?.item;
+                  if (firstItemWithLocation?.place?.location?.coordinates) {
                     map.panTo({
-                      lat: firstItem.place.location.coordinates[1] - 0.0025,
-                      lng: firstItem.place.location.coordinates[0],
+                      lat: firstItemWithLocation.place.location.coordinates[1] - 0.0025,
+                      lng: firstItemWithLocation.place.location.coordinates[0],
                     });
                   }
                 }
@@ -781,12 +831,15 @@ export default function GoogleMapIntegration({
       </div>
 
       {/* Place Detail Dialog */}
-      {selectedPlace.placeId && (
+      {(selectedPlace.placeId || selectedChatPlace?.placeId) && (
         <PlaceDetailDialog
-          placeId={selectedPlace.placeId}
+          placeId={(selectedPlace.placeId || selectedChatPlace?.placeId)!}
           existingPlace={selectedPlace.place}
           hideAddButton={selectedPlace.isFromItinerary}
-          onClose={handlePlaceDialogClose}
+          onClose={() => {
+            handlePlaceDialogClose();
+            setSelectedChatPlace(null);
+          }}
           plan={plan}
           onAddItem={onItineraryUpdate}
           onReplaceItem={onItineraryUpdate}

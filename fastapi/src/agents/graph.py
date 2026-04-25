@@ -27,8 +27,8 @@ from src.agents.state import GraphState
 
 # Node imports
 from src.agents.nodes import intent_agent_node
-from src.agents.nodes import orchestrator_nonVRP_node as orchestrator_node
-from src.agents.nodes import itinerary_nonVRP_agent_node as itinerary_agent_node
+from src.agents.nodes import orchestrator_node
+from src.agents.nodes import itinerary_agent_node
 from src.agents.nodes import (
     hotel_agent_node,
     flight_agent_node,
@@ -52,9 +52,9 @@ def route_from_intent(state: GraphState) -> str | list[str]:
         logger.info("🔀 [ROUTER] Intent → END (has final_response)")
         return END
 
-    intent = state.get("routed_intent", "greeting")
+    intent = (state.get("intent_output") or {}).get("intent", "general")
 
-    if intent in ("greeting", "clarification_needed", "general_question"):
+    if intent in ("general", "clarification_needed"):
         logger.info(f"🔀 [ROUTER] Intent → END ({intent})")
         return END
 
@@ -98,7 +98,7 @@ def route_from_orchestrator(state: GraphState) -> str | list[str]:
         logger.info("🔀 [ROUTER] Orchestrator → END (has final_response)")
         return END
 
-    intent = state.get("routed_intent", "")
+    intent = (state.get("intent_output") or {}).get("intent", "")
     plan = state.get("macro_plan", {})
     tasks = plan.get("task_list", [])
 
@@ -123,7 +123,7 @@ def route_from_orchestrator(state: GraphState) -> str | list[str]:
 
 def route_from_itinerary(state: GraphState) -> list[str]:
     """Route from Itinerary: fan-out to Phase 2 agents or synthesize."""
-    intent = state.get("routed_intent", "")
+    intent = (state.get("intent_output") or {}).get("intent", "")
 
     if intent in ("modify_itinerary", "select_hotel", "select_flight"):
         # Modify or selection-triggered rerange: skip Phase 2, go directly to synthesize
@@ -146,8 +146,8 @@ def route_from_select_apply(state: GraphState) -> str:
         logger.info("🔀 [ROUTER] Select Apply → END (direct response, no itinerary)")
         return END
 
-    selection_update = state.get("selection_update", {})
-    if selection_update.get("needs_rerange"):
+    constraint_overrides = state.get("constraint_overrides", {})
+    if constraint_overrides.get("needs_rerange"):
         logger.info("🔀 [ROUTER] Select Apply → itinerary (rerange needed)")
         return "itinerary"
 

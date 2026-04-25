@@ -37,7 +37,6 @@ import {
   createConversation,
   updateConversationTitle,
   getMessagesByConversationId,
-  addMessage,
   deleteConversation,
   markMessageApplied,
 } from "@/api/aiChat";
@@ -233,67 +232,47 @@ export default function AIChat({
     applyGeneratedPlanAt: m.applyGeneratedPlanAt || null,
   }));
 
-  // When streaming is done but the message hasn't been saved to backend yet,
-  // show the streamed content as a temporary message to avoid flicker
-  if (
-    !isStreaming &&
-    streamState.isComplete &&
-    streamState.streamedContent &&
-    streamingConversationIdRef.current === activeConversationId &&
-    !messages.some((m) => m.content === streamState.streamedContent)
-  ) {
-    messages.push({
-      id: "streaming-complete",
-      role: "assistant",
-      content: streamState.streamedContent,
-    });
-  }
-
   const hasMessages = messages.length > 0;
 
-  // When streaming completes, save the AI response to backend
+  // When streaming completes, construct the AI message locally from streamState.
+  // The .NET Hub saves the AI response to DB in the background — no race condition.
+  // On page reload or conversation switch, messages load from DB normally.
   useEffect(() => {
-    const targetConversationId = streamingConversationIdRef.current;
     if (
       streamState.isComplete &&
       streamState.streamedContent &&
-      targetConversationId
+      streamingConversationIdRef.current
     ) {
-      const saveAIResponse = async () => {
+      // Build minimal generatedPlanData from structured data (for Apply Plan feature)
+      let generatedPlanData: string | null = null;
+      if (streamState.structuredData) {
         try {
-          let minimalDataToSave: string | undefined;
-          if (streamState.structuredData) {
-            const minimal: Record<string, unknown> = {};
-            const sd = streamState.structuredData as Record<string, unknown>;
-            if (sd.hotel_agent) minimal.hotel_agent = sd.hotel_agent;
-            if (sd.flight_agent) minimal.flight_agent = sd.flight_agent;
-            if (sd.preparation_agent) minimal.preparation_agent = sd.preparation_agent;
-            if (sd.attraction_agent) minimal.attraction_agent = sd.attraction_agent;
-            if (sd.restaurant_agent) minimal.restaurant_agent = sd.restaurant_agent;
-
-            if (sd.apply_data) {
-              minimal.apply_data = sd.apply_data;
-            }
-            if (Object.keys(minimal).length > 0) {
-              minimalDataToSave = JSON.stringify(minimal);
-            }
+          const sd = streamState.structuredData as Record<string, unknown>;
+          const minimal: Record<string, unknown> = {};
+          if (sd.hotel_agent) minimal.hotel_agent = sd.hotel_agent;
+          if (sd.flight_agent) minimal.flight_agent = sd.flight_agent;
+          if (sd.preparation_agent) minimal.preparation_agent = sd.preparation_agent;
+          if (sd.attraction_agent) minimal.attraction_agent = sd.attraction_agent;
+          if (sd.restaurant_agent) minimal.restaurant_agent = sd.restaurant_agent;
+          if (sd.apply_data) minimal.apply_data = sd.apply_data;
+          if (Object.keys(minimal).length > 0) {
+            generatedPlanData = JSON.stringify(minimal);
           }
+        } catch { /* best-effort */ }
+      }
 
-          const newMsg = await addMessage(targetConversationId, {
-            conversationId: targetConversationId,
-            content: streamState.streamedContent,
-            messageRole: MessageRole.Assistant,
-            generatedPlanData: minimalDataToSave,
-          });
-          // Only update messages list if still viewing the same conversation
-          if (streamingConversationIdRef.current === activeConversationId) {
-            setBackendMessages((prev) => [...prev, newMsg]);
-          }
-        } catch (e) {
-          console.error("Failed to save AI response:", e);
-        }
+      const aiMessage = {
+        id: `ai-${Date.now()}`,
+        conversationId: streamingConversationIdRef.current,
+        content: streamState.streamedContent,
+        messageRole: MessageRole.Assistant,
+        createdAt: new Date().toISOString(),
+        generatedPlanData,
       };
-      saveAIResponse();
+
+      if (streamingConversationIdRef.current === activeConversationId) {
+        setBackendMessages((prev) => [...prev, aiMessage]);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamState.isComplete]);
@@ -320,14 +299,8 @@ export default function AIChat({
       setActivePopup(null);
 
       try {
-        // Save user message to backend
-        await addMessage(activeConversationId, {
-          conversationId: activeConversationId,
-          content: userContent,
-          messageRole: MessageRole.User,
-        });
-
         // Send to AI agent system via SignalR
+        // .NET Hub saves user message to DB before forwarding to FastAPI
         streamingConversationIdRef.current = activeConversationId;
         await sendAgentMessage(activeConversationId, userContent);
       } catch (error) {

@@ -2,13 +2,11 @@
 GraphState definition for the Multi AI Agent travel planner.
 
 Defines the shared state that flows through all agent nodes in the LangGraph workflow.
-Uses `add_messages` reducer for automatic message history management and
-`merge_agent_outputs` reducer so parallel agents can write concurrently.
+Uses `merge_agent_outputs` reducer so parallel agents can write concurrently.
 """
 
 from typing import Any, Annotated
 from typing_extensions import TypedDict
-from langgraph.graph.message import add_messages
 
 
 def merge_agent_outputs(
@@ -37,12 +35,10 @@ class GraphState(TypedDict):
 
     Fields:
         conversation_id: Unique ID of the conversation (maps to MemorySaver thread_id).
-        plan_id: ID of the plan being discussed/modified.
-        messages: LangChain message history, auto-appended via add_messages reducer.
+        user_message: The latest message from the user for the current turn.
         
         # Intent + Macro Planning
-        routed_intent: Intent classification from Intent Agent (e.g. "draft_plan").
-        user_context: Extracted user preferences/requirements from conversation.
+        intent_output: Full output dict from Intent Agent.
         macro_plan: Structured plan from Macro Planning — plan_context, tasks, per-agent contexts.
         
         # Agent results (uses merge reducer for safe parallel writes)
@@ -53,6 +49,12 @@ class GraphState(TypedDict):
                       packing, notes, plan_context, last_suggestions. Updated every
                       turn by Intent Agent (context changes) and pipeline outputs.
         
+        constraint_overrides: Unified constraint dict. Carries:
+            - User-provided flight/hotel times (from Intent Agent)
+            - Selection metadata from select_and_apply (type, needs_rerange,
+              auto_user_message, hotel_name, etc.) merged alongside timing keys.
+            This avoids splitting one logical "what changed" signal across two state fields.
+        
         # Final output
         final_response: The final response text to send back to the user.
         structured_output: Structured JSON data for UI updates (plan sections).
@@ -61,13 +63,10 @@ class GraphState(TypedDict):
     """
 
     conversation_id: str
-    plan_id: str
-    messages: Annotated[list, add_messages]
+    user_message: str
 
     # Intent + Macro Planning
-    routed_intent: str
-    last_intent: dict[str, Any]  # Full output dict from Intent Agent (contains user_request_rewrite, etc.)
-    user_context: dict[str, Any]
+    intent_output: dict[str, Any]  # Full output dict from Intent Agent (includes "intent" key)
     macro_plan: dict[str, Any]
 
     # Agent results (merge reducer for parallel safety)
@@ -75,12 +74,10 @@ class GraphState(TypedDict):
 
     # Conversational state
     current_plan: dict[str, Any]
-    constraint_overrides: dict[str, Any]  # User-provided flight/hotel time overrides for modify mode
-    selection_update: dict[str, Any]  # Hotel/flight selection from select_and_apply node (for itinerary rerange)
+    constraint_overrides: dict[str, Any]  # Unified: user time constraints + selection metadata
 
     # Final output
     final_response: str
     structured_output: dict[str, Any]
 
     metadata: dict[str, Any]
-

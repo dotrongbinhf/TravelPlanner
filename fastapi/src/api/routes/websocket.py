@@ -11,7 +11,6 @@ Endpoint: ws://localhost:8000/ws/agent/{conversation_id}
 import json
 import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from langchain_core.messages import AIMessage, HumanMessage
 
 from src.agents import graph as agent_graph
 from src.models.events import AgentEvent, EventType
@@ -69,12 +68,8 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
             try:
                 data = json.loads(raw_data)
                 user_message = data.get("message", "")
-                history = data.get("history", [])
-                plan_id = data.get("plan_id", "")
             except json.JSONDecodeError:
                 user_message = raw_data
-                history = []
-                plan_id = ""
 
             if not user_message.strip():
                 await send_event(websocket, AgentEvent(
@@ -92,43 +87,25 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
 
             # Check if PostgresSaver has state for this thread
             # With PostgresSaver, state persists across server restarts
-            history_messages = []
             try:
                 existing_state = await agent_graph.compiled_graph.aget_state(config)
-                has_existing = existing_state and existing_state.values and existing_state.values.get("messages")
+                has_existing = existing_state and existing_state.values and "conversation_id" in existing_state.values
             except Exception:
                 has_existing = False
 
-            if not has_existing and history:
-                logger.info(f"📚 No existing state for thread {conversation_id}, injecting {len(history)} history messages")
-                for msg in history:
-                    role = msg.get("role", "user")
-                    content = msg.get("content", "")
-                    if not content:
-                        continue
-                    if role == "user":
-                        history_messages.append(HumanMessage(content=content))
-                    else:
-                        history_messages.append(AIMessage(content=content))
-            elif has_existing:
+            if has_existing:
                 logger.info(f"✅ Checkpoint has existing state for thread {conversation_id}")
-
-
-            # Deduplicate: if history already ends with same user message, don't add again
-            if history_messages and isinstance(history_messages[-1], HumanMessage) and history_messages[-1].content.strip() == user_message.strip():
-                logger.info(f"\u26a0\ufe0f Deduplicating: last history message matches current user message")
-                input_messages = history_messages
             else:
-                input_messages = history_messages + [HumanMessage(content=user_message)]
+                logger.info(f"📚 No existing state for thread {conversation_id}")
 
             # Prepare graph input
             # IMPORTANT: Only include fields that need to be SET or RESET each turn.
-            # Persistent fields (current_plan, user_context, macro_plan, metadata)
+            # Persistent fields (current_plan, macro_plan, metadata)
             # are preserved from the PostgresSaver checkpoint automatically.
             if has_existing:
                 # Checkpoint exists → minimal input, preserve persistent state
                 graph_input = {
-                    "messages": input_messages,
+                    "user_message": user_message,
                     # Reset per-turn output fields (clear_all flag triggers reducer to wipe)
                     "agent_outputs": {"clear_all": True},
                     "final_response": "",
@@ -139,9 +116,7 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                 # First message → provide all fields with defaults
                 graph_input = {
                     "conversation_id": conversation_id,
-                    "plan_id": plan_id,
-                    "messages": input_messages,
-                    "user_context": {},
+                    "user_message": user_message,
                     "agent_outputs": {},
                     "current_plan": {},
                     "constraint_overrides": {},
@@ -160,7 +135,7 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
             streamed_chunks: list[str] = []
             structured_output: dict = {}
             current_plan_snapshot: dict = {}
-            routed_intent: str = ""
+            user_intent: str = ""
 
             try:
                 async for event in agent_graph.compiled_graph.astream_events(
@@ -220,10 +195,12 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                             if cp:
                                 current_plan_snapshot = cp
 
-                            # Capture routed_intent
-                            ri = output.get("routed_intent")
-                            if ri:
-                                routed_intent = ri
+                            # Capture intent from intent_output
+                            intent_out = output.get("intent_output")
+                            if intent_out and isinstance(intent_out, dict):
+                                ri = intent_out.get("intent")
+                                if ri:
+                                    user_intent = ri
 
                             # Get output summary
                             agent_outputs = output.get("agent_outputs", {})
@@ -303,9 +280,9 @@ async def agent_websocket(websocket: WebSocket, conversation_id: str):
                     event_type=EventType.WORKFLOW_COMPLETE,
                     final_response=final_response,
                     structured_data={
-                        "intent": routed_intent,
+                        "intent": user_intent,
                         "suggestions": suggestions,
-                    } if (routed_intent or suggestions) else None,
+                    } if (user_intent or suggestions) else None,
                 ))
 
             except Exception as e:

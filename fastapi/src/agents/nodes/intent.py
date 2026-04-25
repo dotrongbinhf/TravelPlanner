@@ -18,7 +18,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 
 from src.agents.state import GraphState
-from src.agents.nodes.utils import _extract_json, _get_latest_user_message
+from src.agents.nodes.utils import _extract_json, _run_agent_with_tools
 from src.config import settings
 
 logger = logging.getLogger(__name__)
@@ -53,9 +53,8 @@ Your job:
 ## Available Intents
 
 ### Direct response (no agent needed)
-- `greeting` — User says hi, thanks, bye
+- `general` — User says hi, thanks, bye, or asks a general question not related to building/modifying a plan (e.g. "What's the weather like in December?", "Do I need a visa?")
 - `clarification_needed` — User's message is ambiguous or missing critical info
-- `general_question` — General travel question (not about a specific plan)
 
 ### Planning (needs Macro Planning → full pipeline)
 - `draft_plan` — User wants a NEW travel plan (or destination changed → rebuild from scratch)
@@ -148,7 +147,7 @@ Only use `modify_plan` for STRUCTURAL changes that affect the trip skeleton: "ad
    - Ask the user for the children's ages in the `direct_response` (in their language).
    - Example: "Please provide the ages of the children so I can find accurate flights and hotels."
 
-7. For `greeting`, `clarification_needed`, `general_question`: provide `direct_response`.
+7. For `general` and `clarification_needed`: provide `direct_response`.
    IMPORTANT: `direct_response` MUST be written in the SAME language the user used.
 
 7. If user requests MULTIPLE searches (e.g. "find flights and hotels"), pick the FIRST/primary one as intent.
@@ -261,11 +260,11 @@ async def intent_agent_node(state: GraphState) -> dict[str, Any]:
     logger.info("=" * 60)
     logger.info("🎯 [INTENT] Node entered")
 
-    messages = state.get("messages", [])
+
     current_plan = state.get("current_plan") or {}
 
     # Get latest user message
-    user_message = _get_latest_user_message(state)
+    user_message = state.get("user_message", "")
     logger.info(f"   User message: {user_message[:100]}")
 
     # Build context for LLM
@@ -298,7 +297,7 @@ async def intent_agent_node(state: GraphState) -> dict[str, Any]:
         ])
 
         output = _extract_json(result.content)
-        intent = output.get("intent", "greeting")
+        intent = output.get("intent", "general")
         context_updates = output.get("context_updates", {})
         direct_response = output.get("direct_response")
         constraint_overrides = output.get("constraint_overrides") or {}
@@ -334,14 +333,13 @@ async def intent_agent_node(state: GraphState) -> dict[str, Any]:
                 logger.warning(f"   ⚠️ Failed to auto-compute end_date: {e}")
 
         # Direct response intents — return immediately
-        if intent in ("greeting", "clarification_needed", "general_question") and direct_response:
+        if intent in ("general", "clarification_needed") and direct_response:
             logger.info(f"   💬 Direct response: {direct_response[:80]}...")
             return {
                 "current_plan": current_plan,
-                "routed_intent": intent,
+                "intent_output": output,
                 "final_response": direct_response,
                 "agent_outputs": {"clear_all": True, "intent": {"intent": intent, "response": direct_response}},
-                "messages": [AIMessage(content=direct_response)],
             }
 
         # Routing intents — pass to next node
@@ -349,7 +347,7 @@ async def intent_agent_node(state: GraphState) -> dict[str, Any]:
 
         state_update = {
             "current_plan": current_plan,
-            "routed_intent": intent,
+            "intent_output": output,
             "agent_outputs": {"clear_all": True, "intent": {"intent": intent, "context_updates": context_updates}},
         }
 
@@ -368,7 +366,7 @@ async def intent_agent_node(state: GraphState) -> dict[str, Any]:
             }
             logger.info(f"   📋 User request rewrite [{agent_key}]: {user_request_rewrite[:100]}")
 
-        state_update["last_intent"] = output # Expose the full intent output dict to downstream nodes
+
 
         if constraint_overrides:
             state_update["constraint_overrides"] = constraint_overrides
@@ -386,8 +384,7 @@ async def intent_agent_node(state: GraphState) -> dict[str, Any]:
 
         return {
             "current_plan": current_plan,
-            "routed_intent": "greeting",
+            "intent_output": {"intent": "general"},
             "final_response": fallback,
             "agent_outputs": {"clear_all": True, "intent": {"error": str(e), "code": error_code}},
-            "messages": [AIMessage(content=fallback)],
         }

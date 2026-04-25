@@ -75,7 +75,11 @@ export default function ItineraryItemCard({
     if (displayType === "cross-day-end") {
       return { start: "moon", end: displayEndTime || calculatedEndTime };
     }
-    // Normal
+    // Normal — detect midnight start as overnight arrival (🌙 → endTime)
+    const isMidnightStart = startTime === "00:00:00" || startTime === "00:00";
+    if (isMidnightStart && calculatedEndTime) {
+      return { start: "moon", end: calculatedEndTime };
+    }
     return { start: startTime, end: calculatedEndTime };
   }, [
     displayType,

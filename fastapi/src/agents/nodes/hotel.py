@@ -157,7 +157,7 @@ async def hotel_agent_node(state: GraphState) -> dict[str, Any]:
     current_plan = state.get("current_plan", {})
     plan_context = current_plan.get("plan_context", {})
     mobility_plan = plan.get("mobility_plan", {})
-    routed_intent = state.get("routed_intent", "")
+    user_intent = (state.get("intent_output") or {}).get("intent", "")
 
     # Unified task request — from Orchestrator (pipeline) or Intent (standalone)
     agent_requests = plan.get("agent_requests", {})
@@ -167,11 +167,11 @@ async def hotel_agent_node(state: GraphState) -> dict[str, Any]:
         logger.info("   No agent_request for hotel → skip")
         return {
             "agent_outputs": {"hotel_agent": {"hotels_found": False, "skipped": True}},
-            "messages": [AIMessage(content="[Hotel Agent] No hotel search needed")],
+
         }
 
-    is_pipeline = routed_intent in ["full_plan", "draft_plan"]
-    logger.info(f"   Mode: {'PIPELINE' if is_pipeline else 'STANDALONE'} (Intent: {routed_intent})")
+    is_pipeline = user_intent in ["full_plan", "draft_plan"]
+    logger.info(f"   Mode: {'PIPELINE' if is_pipeline else 'STANDALONE'} (Intent: {user_intent})")
 
     hotel_result = {}
 
@@ -325,5 +325,5 @@ Task:
 
     return {
         "agent_outputs": {"hotel_agent": hotel_result},
-        "messages": [AIMessage(content=f"[Hotel Agent] Hotel search completed")],
+
     }

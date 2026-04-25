@@ -1,5 +1,6 @@
 import React from "react";
 import { Star, ExternalLink, MapPin } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { PlaceCarouselWidget } from "./PlaceCarouselWidget";
 import { useItineraryContext } from "@/contexts/ItineraryContext";
 
@@ -19,7 +20,28 @@ export function HotelWidget({ data }: HotelWidgetProps) {
     );
   }
 
-  const { selectPlaceFromMap, clearPlaceSelection } = useItineraryContext();
+  const { setFocusLocation, clearPlaceSelection, setSelectedChatPlace } = useItineraryContext();
+
+  // Hotels: _location from resolve is GeoJSON {type: "Point", coordinates: [lng, lat]}
+  const _focusOnMap = (item: any) => {
+    const loc = item._location;
+    if (!loc) return;
+    
+    const location = loc.coordinates && loc.coordinates.length === 2
+      ? { lat: loc.coordinates[1], lng: loc.coordinates[0] }
+      : (loc.lat && loc.lng ? { lat: loc.lat, lng: loc.lng } : null);
+
+    if (location) {
+      setFocusLocation(location);
+      setSelectedChatPlace({
+        id: item.id || item.name || item.recommend_hotel_name,
+        placeId: item.place_id || item.placeId,
+        name: item.name || item.recommend_hotel_name,
+        location,
+        source: "hotel"
+      });
+    }
+  };
 
   const segment = data.segments[0];
 
@@ -35,6 +57,7 @@ export function HotelWidget({ data }: HotelWidgetProps) {
     checkInTime: segment.checkInTime,
     checkOutTime: segment.checkOutTime,
     _isRecommended: true,
+    _location: segment._location, // Pass coordinates for map focus
   };
 
   const allHotels = [
@@ -66,9 +89,7 @@ export function HotelWidget({ data }: HotelWidgetProps) {
           key={hotel.id}
           onClick={() => {
             onClick();
-            if (hotel.place_id || hotel.db_data?.placeId) {
-              selectPlaceFromMap(hotel.place_id || hotel.db_data?.placeId);
-            }
+            _focusOnMap(hotel);
           }}
           className="relative flex-[0_0_160px] sm:flex-[0_0_180px] md:flex-[0_0_200px] cursor-pointer group rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-300 border border-slate-200/50"
         >

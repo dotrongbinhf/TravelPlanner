@@ -236,7 +236,7 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
         logger.info("   No agent_request for restaurant → skip")
         return {
             "agent_outputs": {"restaurant_agent": {"meals": [], "skipped": True}},
-            "messages": [AIMessage(content="[Restaurant Agent] No restaurant search needed")],
+
         }
 
     is_pipeline = bool(plan.get("task_list"))
@@ -252,7 +252,7 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
             logger.info("   No valid itinerary data → skip (pipeline)")
             return {
                 "agent_outputs": {"restaurant_agent": {"meals": [], "skipped": True, "reason": "no_itinerary"}},
-                "messages": [AIMessage(content="[Restaurant Agent] No itinerary available, skipping")],
+
             }
         else:
             logger.info("   No itinerary data → Standalone Area Search mode")
@@ -273,7 +273,7 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
             logger.info("   No meal slots found → skip")
             return {
                 "agent_outputs": {"restaurant_agent": {"meals": [], "skipped": True, "reason": "no_meals"}},
-                "messages": [AIMessage(content="[Restaurant Agent] No meal slots in itinerary")],
+
             }
 
     restaurant_result = {}
@@ -572,5 +572,5 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
 
     return {
         "agent_outputs": {"restaurant_agent": restaurant_result},
-        "messages": [AIMessage(content=f"[Restaurant Agent] Found restaurants for {num_meals} meals")],
+
     }

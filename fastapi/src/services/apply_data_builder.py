@@ -77,13 +77,19 @@ AGGREGATED_CATEGORY_MAP = {
     "accommodation": "Accomodation",
     "attractions": "Activities",
     "restaurants": "FoodAndDrink",
+    "transport": "Transport",
 }
 
 PREP_BUDGET_TYPE_MAP = {
     "Food & Drinks": "FoodAndDrink",
     "Transport": "Transport",
+    "Departure Transport": "Transport",
+    "Flight": "Transport",
     "Activities": "Activities",
     "Shopping": "Shopping",
+    "Accommodation": "Accomodation",
+    "Meals": "FoodAndDrink",
+    "Attractions": "Activities",
     "Other": "Other",
 }
 
@@ -92,11 +98,17 @@ SKIP_ROLES = {"outbound_departure", "return_arrival"}
 
 
 def _parse_time_minutes(time_str: str) -> int:
-    """Parse "HH:MM" to total minutes since midnight."""
+    """Parse "HH:MM" or "HH:MM -1"/"HH:MM +1" to total minutes since midnight.
+    
+    Strips day offset suffixes (-1, +1) before parsing.
+    For overnight outbound (arrival "00:00"): returns 0.
+    """
     if not time_str:
         return 0
     try:
-        parts = time_str.split(":")
+        # Strip day offset suffix: "22:00 -1" → "22:00", "21:00 +1" → "21:00"
+        clean = re.sub(r'\s*[+-]\d+\s*$', '', time_str.strip())
+        parts = clean.split(":")
         return int(parts[0]) * 60 + int(parts[1])
     except (ValueError, IndexError):
         return 0
@@ -303,19 +315,34 @@ def _build_itinerary_days(
                 # When no flight data (draft): use itinerary arrival/departure times
                 flight_dep = outbound_flight.get("departure_time", "") if outbound_flight else ""
                 flight_arr = outbound_flight.get("arrival_time", "") if outbound_flight else ""
+                is_overnight = False
 
                 if flight_dep and flight_arr:
                     # Full flight data: startTime = origin departure, duration = flight time
                     effective_start = flight_dep
                     start_min = _parse_time_minutes(flight_dep)
                     end_min = _parse_time_minutes(flight_arr)
-                    duration_minutes = max(0, end_min - start_min) if end_min > start_min else 120
+                    if end_min > start_min:
+                        duration_minutes = end_min - start_min
+                    else:
+                        # Overnight flight or cross-midnight: wrap around
+                        duration_minutes = (24 * 60 - start_min) + end_min
                 else:
-                    # Draft mode: use itinerary's arrival/departure directly
-                    effective_start = arrival
+                    # Draft mode or non-flight: use itinerary's arrival/departure directly
                     start_min = _parse_time_minutes(arrival)
                     end_min = _parse_time_minutes(departure)
-                    duration_minutes = max(0, end_min - start_min) if end_min > start_min else 60
+                    has_day_suffix = bool(re.search(r'[+-]\d+', arrival or ''))
+                    is_overnight = has_day_suffix or (end_min < start_min)
+                    
+                    if is_overnight:
+                        # Overnight travel (e.g. arrival="20:00 -1", departure="07:30")
+                        # Journey started previous evening → Day 1 starts from 00:00
+                        effective_start = "00:00"
+                        duration_minutes = end_min  # minutes from midnight to departure
+                    else:
+                        # Same-day travel
+                        effective_start = arrival
+                        duration_minutes = end_min - start_min
 
                 place_id = _lookup_place_id(name, name_to_place_id)
                 items.append({
@@ -326,6 +353,7 @@ def _build_itinerary_days(
                     "startTime": effective_start,
                     "duration": duration_minutes if duration_minutes > 0 else 60,
                     "note": _generate_note(stop),
+                    "overnight": is_overnight,
                 })
                 continue
 
@@ -341,7 +369,13 @@ def _build_itinerary_days(
                     end_min = _parse_time_minutes(flight_dep)
                 else:
                     end_min = _parse_time_minutes(departure)
-                duration_minutes = max(0, end_min - start_min) if end_min > start_min else 60
+                
+                # Auto-detect overnight: end_min < start_min means cross-midnight
+                if end_min > start_min:
+                    duration_minutes = end_min - start_min
+                else:
+                    # Overnight return (e.g. depart 20:00, arrive 05:00 next day)
+                    duration_minutes = (24 * 60 - start_min) + end_min
 
                 place_id = _lookup_place_id(name, name_to_place_id)
                 items.append({

@@ -45,7 +45,7 @@ llm_preparation = (
 
 PREPARATION_AGENT_SYSTEM = """You are the Preparation Agent for a travel planning system.
 
-You handle: OTHER budget estimation, packing suggestions, and practical travel notes.
+You handle: budget estimation, packing suggestions, and practical travel notes.
 
 ## Input
 You receive:
@@ -53,20 +53,7 @@ You receive:
 2. Daily weather forecast (pre-fetched, per-day temperature and conditions)
 3. Itinerary summary (which places are visited each day — use this for transport cost estimation, place-specific packing advice, and practical notes)
 
-## Budget — ONLY "Other" costs
-You estimate NON-ITINERARY costs only. Do NOT include:
-- ❌ Flight costs (handled by Flight Agent)
-- ❌ Hotel/accommodation costs (handled by Hotel Agent)
-- ❌ Attraction entry fees (handled by Attraction Agent)
-- ❌ Restaurant/main meal costs (handled by Restaurant Agent)
-
-## Budget Categories — MUST use these exact "type" values:
-- "Food & Drinks" — snacks, coffee, drinks, street food BETWEEN main meals
-- "Transport" — LOCAL transportation only (taxi/Grab, bus, metro between attractions). Do NOT include departure-to-destination transport costs — these are already estimated in mobility_plan.departure_logistics.estimated_cost and return_logistics.estimated_cost
-- "Activities" — minor entry fees, parking, bike rentals, boat rides, or activities not covered by Attraction Agent
-- "Shopping" — souvenirs, gifts, local products
-- "Other" — SIM card, internet, tips, contingency, any miscellaneous expenses
-NOTE: Do NOT use "Accommodation" type — hotel costs are handled separately.
+{budget_section}
 
 ## Process
 1. Review the weather data and itinerary summary provided
@@ -88,17 +75,21 @@ NOTE: Do NOT use "Accommodation" type — hotel costs are handled separately.
 CRITICAL: If your next step is to use a tool, return your response to call the tool. If you don't need to use tools anymore, your response must be one and ONLY one valid JSON object. No text before or after. Just the raw JSON starting with { and ending with }.
 Respond in the language specified in the `language` field of the trip context (e.g., "vi" → Vietnamese, "en" → English). ALL text content (labels, details, titles, notes, weather_summary) MUST be in this language.
 
+The example below shows ALL possible budget type values. You MUST ONLY use the types listed in the Budget Categories section above. Include entries for EVERY category listed there.
+
 {
   "budget": {
     "currency": "VND",
     "breakdown": [
-      {"type": "Transport", "name": "Grab/taxi between attractions", "amount": 600000, "details": "~100k/trip × 6 trips between spread-out sites"},
-      {"type": "Food & Drinks", "name": "Street snacks & coffee", "amount": 300000, "details": "Egg coffee, street food between meals ~75k/day × 4 days"},
-      {"type": "Food & Drinks", "name": "Bottled water", "amount": 100000, "details": "Water for hot outdoor days visiting temples"},
-      {"type": "Shopping", "name": "Souvenirs & gifts", "amount": 500000, "details": "Local products, small gifts for entire trip"},
-      {"type": "Activities", "name": "Bike rental at West Lake", "amount": 100000, "details": "2-hour rental"},
-      {"type": "Other", "name": "Tourist SIM card", "amount": 100000, "details": "4G data SIM"},
-      {"type": "Other", "name": "Contingency fund", "amount": 400000, "details": "Emergency/unexpected expenses over 4 days"}
+      {"type": "Transport", "name": "describe item", "amount": 0, "details": "cost × quantity breakdown"},
+      {"type": "Food & Drinks", "name": "describe item", "amount": 0, "details": "cost × quantity breakdown"},
+      {"type": "Shopping", "name": "describe item", "amount": 0, "details": "cost × quantity breakdown"},
+      {"type": "Activities", "name": "describe item", "amount": 0, "details": "cost × quantity breakdown"},
+      {"type": "Other", "name": "describe item", "amount": 0, "details": "cost × quantity breakdown"},
+      {"type": "Flight", "name": "describe item", "amount": 0, "details": "cost/person × num_travelers"},
+      {"type": "Departure Transport", "name": "describe item", "amount": 0, "details": "cost/person × num_travelers"},
+      {"type": "Accommodation", "name": "describe item", "amount": 0, "details": "cost/night × num_nights"},
+      {"type": "Meals", "name": "describe item", "amount": 0, "details": "cost/meal × meals/day × num_days × num_travelers"}
     ]
   },
   "packing_lists": [
@@ -120,10 +111,10 @@ Respond in the language specified in the `language` field of the trip context (e
 }
 
 ## Rules
-- Budget is ONLY for "other" costs — DO NOT include flight/hotel/restaurant/attraction
+- Budget: use ONLY the budget categories listed in the Budget Categories section above. Do NOT invent new type values.
 - Budget amounts are for the ENTIRE trip duration (all days combined), NOT per-day
-- Budget "type" MUST be one of: "Food & Drinks", "Transport", "Activities", "Shopping", "Other"
-- Multiple entries CAN share the same "type" — split by specific cost item (e.g., 2 separate "Transport" entries for taxi vs airport transfer)
+- Budget amounts MUST account for ALL travelers (multiply by number of people). The "details" field MUST show the full calculation: unit cost × quantity × num_travelers × num_days (where applicable). Example: "~200k/meal × 2 meals/day × 4 days × 2 people = 3,200,000"
+- Multiple entries CAN share the same "type" — split by specific cost item (e.g., 2 separate "Transport" entries for taxi vs metro)
 - Use the itinerary to reason about transport costs (more stops/farther apart → higher cost)
 - Use the itinerary to give place-specific packing and note advice
 - Packing list should reflect ACTUAL weather forecast + specific places being visited
@@ -188,7 +179,7 @@ async def preparation_agent_node(state: GraphState) -> dict[str, Any]:
         logger.info("   No destination → skip")
         return {
             "agent_outputs": {"preparation_agent": {"skipped": True}},
-            "messages": [AIMessage(content="[Preparation Agent] No destination, skipping")],
+
         }
 
     preparation_result = {}
@@ -202,14 +193,9 @@ async def preparation_agent_node(state: GraphState) -> dict[str, Any]:
         is_modify = bool(existing_budget or existing_packing or existing_notes)
 
         # Get the user's latest message for context
-        messages = state.get("messages", [])
-        user_message = ""
-        for msg in reversed(messages):
-            if isinstance(msg, HumanMessage):
-                content = msg.content if hasattr(msg, "content") else str(msg)
-                if not content.startswith("["):
-                    user_message = content
-                    break
+        user_message = state.get("user_message", "")
+        if user_message and user_message.startswith("["):
+            user_message = ""
 
         if is_modify and user_message:
             # ═══ MODIFY MODE — adjust previous output ═══
@@ -280,36 +266,81 @@ The user has a correction or adjustment to make:
             itinerary_summary = _extract_itinerary_summary(itinerary_data)
             logger.info(f"🎒 [PREPARATION_AGENT] Itinerary: {len(itinerary_summary)} days extracted")
 
-            # ── Step 3: Build dynamic system prompt ─────────────────────
-            # Detect which agents ran — check data exists AND not explicitly skipped
+            # ── Step 3: Build FULLY DYNAMIC budget prompt ────────────────
+            # Determine which costs OTHER agents handle (or will handle)
+            # Check 3 sources: intent_output, current_plan data, agent_outputs
+            user_intent = (state.get("intent_output") or {}).get("intent", "")
+
             flight_data = agent_outputs.get("flight_agent", {})
             hotel_data = agent_outputs.get("hotel_agent", {})
-            restaurant_data = agent_outputs.get("restaurant_agent", {})
             attraction_data = agent_outputs.get("attraction_agent", {})
 
-            flight_ran = bool(flight_data) and not flight_data.get("skipped", False)
-            hotel_ran = bool(hotel_data) and not hotel_data.get("skipped", False)
-            restaurant_ran = bool(restaurant_data) and not restaurant_data.get("skipped", False)
-            attraction_ran = bool(attraction_data) and not attraction_data.get("skipped", False)
+            # Departure transport: Preparation ALWAYS handles this EXCEPT when Flight Agent ran.
+            # Flight Agent = air travel specifically. All other transport (bus, train, car) = Preparation.
+            # mobility_plan provides context (route, estimated cost) but doesn't "handle" the budget.
+            flight_ran = (
+                (bool(flight_data) and not flight_data.get("skipped", False))
+                or bool(current_plan.get("flight_search"))
+            )
+            hotel_handled = (bool(hotel_data) and not hotel_data.get("skipped", False)) or bool(current_plan.get("selected_hotel"))
+            attraction_handled = (bool(attraction_data) and not attraction_data.get("skipped", False))
+            # Restaurant: check BOTH parallel execution (full_plan intent) AND existing data
+            restaurant_handled = (
+                user_intent == "full_plan"  # Restaurant runs in parallel with us
+                or bool(current_plan.get("restaurant_search"))  # Already has restaurant data
+                or (bool(agent_outputs.get("restaurant_agent", {})) and not agent_outputs.get("restaurant_agent", {}).get("skipped", False))
+            )
 
-            extra_cost_types = []
-            if not flight_ran:
-                extra_cost_types.append('"Flight" — estimate departure/return flight cost for all travelers')
-            if not hotel_ran:
-                extra_cost_types.append('"Accommodation" — estimate hotel/accommodation cost per night')
-            if not restaurant_ran:
-                extra_cost_types.append('"Meals" — estimate main meal costs (lunch, dinner) for all travelers')
-            if not attraction_ran:
-                extra_cost_types.append('"Attractions" — estimate entrance fees for attractions')
+            logger.info(f"🎒 [PREPARATION_AGENT] Agent coverage: flight_ran={flight_ran}, hotel={hotel_handled}, attraction={attraction_handled}, restaurant={restaurant_handled} (intent={user_intent})")
 
-            if extra_cost_types:
-                dynamic_addition = "\n\n## ADDITIONAL Budget Categories (agents skipped)\nIn ADDITION to the standard categories, you MUST also estimate:\n"
-                dynamic_addition += "\n".join(f"- {t}" for t in extra_cost_types)
-                dynamic_addition += "\nThese are rough estimates — label them clearly."
-                system_content = PREPARATION_AGENT_SYSTEM + dynamic_addition
-                logger.info(f"🎒 [PREPARATION_AGENT] Dynamic budget: +{len(extra_cost_types)} cost types")
+            # Build exclusion list (what to skip)
+            excluded = []
+            if flight_ran:
+                excluded.append("Flight costs (handled by Flight Agent)")
+            if hotel_handled:
+                excluded.append("Hotel/accommodation costs (handled by Hotel Agent)")
+            if attraction_handled:
+                excluded.append("Attraction entry fees (handled by Attraction Agent)")
+            if restaurant_handled:
+                excluded.append("Restaurant/main meal costs (handled by Restaurant Agent)")
+
+            # Build standard categories
+            categories = []
+            if restaurant_handled:
+                categories.append('- "Food & Drinks" — ONLY small incidental expenses: coffee, bottled water, street snacks eaten BETWEEN main meals. Keep amounts LOW. Main meal costs are handled by the Restaurant Agent.')
             else:
-                system_content = PREPARATION_AGENT_SYSTEM
+                categories.append('- "Meals" — estimate main meal costs (breakfast, lunch, dinner) for all travelers per day')
+                categories.append('- "Food & Drinks" — coffee, bottled water, street snacks eaten between main meals')
+            if not flight_ran:
+                # Preparation handles departure/return costs when Flight Agent didn't run
+                # Check mobility_plan to determine if user is flying or using ground transport
+                plan = state.get("macro_plan", {})
+                dep_mode = plan.get("mobility_plan", {}).get("departure_logistics", {}).get("mode", "")
+                if dep_mode == "flight":
+                    categories.append('- "Flight" — estimate round-trip or one-way flight cost for all travelers')
+                else:
+                    categories.append('- "Departure Transport" — estimate departure/return transport cost for all travelers (bus, train, car, tolls, fuel, etc.)')
+            categories.append('- "Transport" — LOCAL transportation only (taxi/Grab, bus, metro between attractions)')
+            if not attraction_handled:
+                categories.append('- "Attractions" — estimate entrance fees for attractions')
+            categories.append('- "Activities" — minor entry fees, parking, bike rentals, boat rides, or activities not covered by Attraction Agent')
+            categories.append('- "Shopping" — souvenirs, gifts, local products')
+            categories.append('- "Other" — SIM card, internet, tips, contingency, any miscellaneous expenses')
+            if not hotel_handled:
+                categories.append('- "Accommodation" — estimate hotel/accommodation cost per night')
+
+            # Build the budget section
+            budget_section = "## Budget Estimation\n"
+            if excluded:
+                budget_section += "Do NOT include:\n"
+                budget_section += "\n".join(f"- ❌ {e}" for e in excluded)
+                budget_section += "\n\n"
+            budget_section += "## Budget Categories — MUST use these exact \"type\" values:\n"
+            budget_section += "\n".join(categories)
+            budget_section += "\nNOTE: Do NOT use type values other than those listed above."
+
+            system_content = PREPARATION_AGENT_SYSTEM.replace("{budget_section}", budget_section)
+            logger.info(f"🎒 [PREPARATION_AGENT] Dynamic budget: excluded={len(excluded)}, categories={len(categories)}")
 
             # ── Step 4: Build context for LLM ────────────────────────────
             human_content = f"""## Trip Context
@@ -322,7 +353,7 @@ The user has a correction or adjustment to make:
 {json.dumps(itinerary_summary, indent=2, ensure_ascii=False)}
 
 Based on ALL the context above:
-1. Estimate OTHER budget items (NOT flight/hotel/restaurant/attraction costs) — use exact type values: "Food & Drinks", "Transport", "Activities", "Shopping", "Other"
+1. Estimate budget items using ONLY the budget categories specified in your instructions
 2. Create a packing list based on weather + specific places visited (e.g., temple dress codes, outdoor sun protection)
 3. Write practical travel notes with place-specific advice for {destination}
 
@@ -354,5 +385,5 @@ You may use tavily_search if you need specific local tips or customs info."""
 
     return {
         "agent_outputs": {"preparation_agent": preparation_result},
-        "messages": [AIMessage(content="[Preparation Agent] Budget, packing, and notes prepared")],
+
     }

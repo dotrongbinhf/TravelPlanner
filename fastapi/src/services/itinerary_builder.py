@@ -1,5 +1,5 @@
 """
-Itinerary Builder Service (Non-VRP version).
+Itinerary Builder Service.
 
 LLM-based pipeline that transforms agent outputs into LLM scheduling input:
 1. Extract place names from flight/hotel/attraction agent outputs (reused)
@@ -332,110 +332,7 @@ async def resolve_all_places(
     return resolved
 
 
-def _parse_time_str(time_str: str) -> int:
-    """Parse a time string to minutes since midnight. Handles 12h and 24h formats."""
-    s = time_str.strip()
-    s = s.replace('\u202f', ' ').replace('\u00a0', ' ').strip()
 
-    is_pm = False
-    is_am = False
-    upper = s.upper()
-    if 'PM' in upper:
-        is_pm = True
-        s = re.sub(r'[APap][Mm]', '', s).strip()
-    elif 'AM' in upper:
-        is_am = True
-        s = re.sub(r'[APap][Mm]', '', s).strip()
-
-    parts = s.split(':')
-    hours = int(parts[0].strip())
-    minutes = int(parts[1].strip()) if len(parts) > 1 else 0
-
-    if is_pm and hours != 12:
-        hours += 12
-    elif is_am and hours == 12:
-        hours = 0
-
-    return hours * 60 + minutes
-
-
-def _parse_time_range(range_str: str) -> Optional[tuple[int, int]]:
-    """Parse a single time range string."""
-    s = range_str.strip()
-    s_lower = s.lower()
-
-    if s_lower in ('closed', ''):
-        return None
-    if 'open 24' in s_lower or '24 hours' in s_lower:
-        return (0, 1440)
-
-    s = s.replace('–', '-').replace('—', '-')
-    parts = s.split('-')
-    if len(parts) != 2:
-        return None
-
-    open_str = parts[0].strip()
-    close_str = parts[1].strip()
-
-    close_upper = close_str.upper().replace('\u202f', ' ').replace('\u00a0', ' ')
-    open_upper = open_str.upper().replace('\u202f', ' ').replace('\u00a0', ' ')
-
-    has_period_in_open = 'AM' in open_upper or 'PM' in open_upper
-    has_period_in_close = 'AM' in close_upper or 'PM' in close_upper
-
-    if not has_period_in_open and has_period_in_close:
-        period = 'AM' if 'AM' in close_upper else 'PM'
-        open_str = open_str + ' ' + period
-
-    try:
-        open_min = _parse_time_str(open_str)
-        close_min = _parse_time_str(close_str)
-        if close_min > open_min:
-            return (open_min, close_min)
-    except (ValueError, IndexError):
-        pass
-
-    return None
-
-
-def parse_open_hours_to_time_window(
-    open_hours: dict[str, list[str]],
-    day_name: str,
-) -> Optional[tuple[int, int]]:
-    """Convert openHours for a specific day to a time window (minutes since midnight)."""
-    if not open_hours:
-        return (480, 1320)  # Default: 08:00-22:00
-
-    hours_list = open_hours.get(day_name, [])
-
-    if not hours_list:
-        all_empty = all(len(v) == 0 for v in open_hours.values())
-        if all_empty:
-            return (480, 1320)
-        return None
-
-    if len(hours_list) == 1:
-        single = hours_list[0].strip().lower()
-        if single == 'closed':
-            return None
-        if 'open 24' in single or '24 hours' in single:
-            return (0, 1440)
-
-    earliest = 1440
-    latest = 0
-    any_parsed = False
-
-    for time_range in hours_list:
-        result = _parse_time_range(time_range)
-        if result is not None:
-            earliest = min(earliest, result[0])
-            latest = max(latest, result[1])
-            any_parsed = True
-
-    if not any_parsed or earliest >= latest:
-        return (480, 1080)
-
-    return (earliest, latest)
 
 
 def _get_location_coords(place_data: Optional[dict]) -> Optional[dict[str, float]]:
@@ -449,17 +346,7 @@ def _get_location_coords(place_data: Optional[dict]) -> Optional[dict[str, float
     return None
 
 
-def _parse_hub_time(time_str: str) -> int:
-    """Parse transport hub time like '09:00' to minutes since midnight."""
-    s = time_str.strip().split()[0]
-    parts = s.split(":")
-    return int(parts[0]) * 60 + int(parts[1])
 
-
-def _flight_time_to_minutes(time_str: str) -> int:
-    """Convert flight time like '09:00' to minutes since midnight."""
-    parts = time_str.split(":")
-    return int(parts[0]) * 60 + int(parts[1])
 
 
 def _parse_hotel_time(time_str: str) -> str:
@@ -705,8 +592,14 @@ def build_schedule_constraints(
             "note": dep_log.get("note", "Estimated flight arrival"),
         }
     elif dep_mode in ("coach", "train") and dep_log.get("hub_name"):
+        # Use resolved title from resolved_places (matches distance matrix name)
+        hub_resolved_name = dep_log.get("hub_name", "")
+        for ap in resolved_places.get("airports", []):
+            if ap.get("role") == "outbound_arrival" and ap.get("resolved"):
+                hub_resolved_name = ap["resolved"].get("title", hub_resolved_name)
+                break
         constraints["day_0_arrival"] = {
-            "location": dep_log.get("hub_name", ""),
+            "location": hub_resolved_name,
             "start_time": dep_log.get("start_time", ""),
             "arrival_time": dep_log.get("arrival_time", ""),
             "note": dep_log.get("note", f"Arrive by {dep_mode}"),
@@ -761,6 +654,12 @@ def build_schedule_constraints(
                 "note": f"Estimated return flight. Arrive at airport by {deadline_time}.",
             }
     elif ret_mode in ("coach", "train") and ret_log.get("hub_name"):
+        # Use resolved title from resolved_places (matches distance matrix name)
+        ret_hub_resolved_name = ret_log.get("hub_name", "")
+        for ap in resolved_places.get("airports", []):
+            if ap.get("role") == "return_departure" and ap.get("resolved"):
+                ret_hub_resolved_name = ap["resolved"].get("title", ret_hub_resolved_name)
+                break
         ret_start = ret_log.get("start_time", "")
         # 30-min buffer: arrive at hub 30 min before departure for boarding/tickets
         if ret_start:
@@ -772,11 +671,11 @@ def build_schedule_constraints(
             dl_time = ""
         constraints["last_day_deadline"] = {
             "mode": ret_mode,
-            "location": ret_log.get("hub_name", ""),
+            "location": ret_hub_resolved_name,
             "deadline_time": dl_time,
             "start_time": ret_start,
             "arrival_time": ret_log.get("arrival_time", ""),
-            "note": ret_log.get("note", f"Must arrive at {ret_log.get('hub_name', '')} by {dl_time} (~30 min before {ret_start} {ret_mode})."),
+            "note": ret_log.get("note", f"Must arrive at {ret_hub_resolved_name} by {dl_time} (~30 min before {ret_start} {ret_mode})."),
         }
     elif ret_mode in ("car", "motorbike"):
         ret_start = ret_log.get("start_time", "")
@@ -881,14 +780,14 @@ def build_schedule_constraints(
 # MAIN PIPELINE
 # ============================================================================
 
-async def run_itinerary_pipeline_nonVRP(
+async def run_itinerary_pipeline(
     agent_outputs: dict[str, Any],
     macro_plan: dict[str, Any],
     plan_context: dict[str, Any] = None,
     useAPI_RouteMatrix: bool = False,
 ) -> dict[str, Any]:
     """
-    Run the non-VRP itinerary pipeline:
+    Run the itinerary pipeline:
     1. Extract place names
     2. Resolve all places
     3. Build location list & distance matrix
@@ -905,7 +804,7 @@ async def run_itinerary_pipeline_nonVRP(
     flight_data = agent_outputs.get("flight_agent", {})
 
     logger.info("=" * 60)
-    logger.info("🔧 [ITINERARY_BUILDER_nonVRP] Starting pipeline")
+    logger.info("🔧 [ITINERARY_BUILDER] Starting pipeline")
 
     # Step 1: Extract place names
     place_names = extract_place_names(agent_outputs, plan_context)
@@ -967,7 +866,7 @@ async def run_itinerary_pipeline_nonVRP(
         "total_places_count": total_count,
     }
 
-    logger.info("🔧 [ITINERARY_BUILDER_nonVRP] Pipeline completed")
+    logger.info("🔧 [ITINERARY_BUILDER] Pipeline completed")
     logger.info("=" * 60)
 
     return result

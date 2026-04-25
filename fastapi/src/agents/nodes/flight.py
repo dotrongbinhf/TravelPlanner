@@ -256,11 +256,11 @@ For return_only → set outbound_flights_found/recommend_outbound_flight/recomme
 
 
 def _find_flight_data(flight_number: str, tool_logs: list[dict]) -> dict:
-    """Find the price of a specific flight from search_flights tool results.
-    Returns: {"price": int}
+    """Find the price and airline_logo of a specific flight from search_flights tool results.
+    Returns: {"price": int, "airline_logo": str}
     """
     if not flight_number:
-        return {"price": 0}
+        return {"price": 0, "airline_logo": ""}
 
     normalized_target = flight_number.replace(" ", "").lower()
     
@@ -286,11 +286,12 @@ def _find_flight_data(flight_number: str, tool_logs: list[dict]) -> dict:
                 for segment in (flights_list or []):
                     seg_fn = (segment.get("FlightNumber", segment.get("flightNumber", "")) or "").replace(" ", "").lower()
                     if seg_fn == normalized_target:
-                        logger.info(f"   [FLIGHT_DATA] Matched '{flight_number}': price={price}")
-                        return {"price": price}
+                        logo = segment.get("AirlineLogo", segment.get("airlineLogo", segment.get("airline_logo", "")))
+                        logger.info(f"   [FLIGHT_DATA] Matched '{flight_number}': price={price}, logo={'yes' if logo else 'no'}")
+                        return {"price": price, "airline_logo": logo or ""}
 
     logger.warning(f"   [FLIGHT_DATA] Could not find data for '{flight_number}'")
-    return {"price": 0}
+    return {"price": 0, "airline_logo": ""}
 
 
 def _get_google_flights_url(tool_logs: list[dict], search_index_from_end: int = 0) -> str:
@@ -358,11 +359,13 @@ def _extract_alternatives_from_search(
             arr_id = arr_airport.get("Id", arr_airport.get("id", "")) if isinstance(arr_airport, dict) else ""
             arr_time = arr_airport.get("Time", arr_airport.get("time", "")) if isinstance(arr_airport, dict) else ""
             airline = first_seg.get("Airline", first_seg.get("airline", ""))
+            airline_logo = first_seg.get("AirlineLogo", first_seg.get("airlineLogo", first_seg.get("airline_logo", "")))
             stops = len(flights_list) - 1
             
             alt = {
                 "flight_number": fn,
                 "airline": airline,
+                "airline_logo": airline_logo,
                 "departure_time": dep_time,
                 "departure_airport_id": dep_id,
                 "arrival_time": arr_time,
@@ -395,11 +398,17 @@ def _extract_total_price_and_enrich(flight_result: dict, tool_logs: list[dict]) 
         outbound_fn = outbound_flight.get("flight_number", "")
         data = _find_flight_data(outbound_fn, tool_logs)
         outbound_price = data["price"]
+        outbound_flight["price"] = outbound_price
+        if data.get("airline_logo"):
+            outbound_flight["airline_logo"] = data["airline_logo"]
     
     if return_flight:
         return_fn = return_flight.get("flight_number", "")
         data = _find_flight_data(return_fn, tool_logs)
         return_price = data["price"]
+        return_flight["price"] = return_price
+        if data.get("airline_logo"):
+            return_flight["airline_logo"] = data["airline_logo"]
     
     if flight_type == "round_trip":
         total = return_price if return_price else outbound_price
@@ -470,7 +479,7 @@ async def flight_agent_node(state: GraphState) -> dict[str, Any]:
         logger.info("   No agent_request for flight → skip")
         return {
             "agent_outputs": {"flight_agent": {"flights_found": False, "skipped": True}},
-            "messages": [AIMessage(content="[Flight Agent] No flight search needed")],
+
         }
 
     is_pipeline = bool(plan.get("task_list"))
@@ -568,7 +577,18 @@ Task:
     if "tools" in flight_result:
         flight_result.pop("tools", None)
 
+    # Enrich with passenger and date info for UI display
+    group = plan_context.get("group_composition", {})
+    flight_result["passengers"] = {
+        "adults": group.get("adults", 1),
+        "children": group.get("children", 0),
+        "infants_in_seat": group.get("infants_in_seat", 0),
+        "infants_on_lap": group.get("infants_on_lap", 0),
+    }
+    flight_result["outbound_date"] = plan_context.get("start_date", "")
+    flight_result["return_date"] = plan_context.get("end_date", "")
+
     return {
         "agent_outputs": {"flight_agent": flight_result},
-        "messages": [AIMessage(content=f"[Flight Agent] {flight_result.get('search_summary', 'Flight search completed')}")],
+
     }

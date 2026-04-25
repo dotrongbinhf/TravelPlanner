@@ -86,7 +86,7 @@ export function PlaceCarouselWidget<T extends PlaceCarouselItem>({
 
       <div className="p-5 bg-white rounded-b-xl">
         {/* Always mount carousel to preserve scroll position */}
-        <div className={selected ? "hidden" : ""}>
+        <div className={selected ? "h-0 opacity-0 overflow-hidden pointer-events-none" : ""}>
           <div className="overflow-hidden" ref={emblaRef}>
             <div className="flex gap-4">
               {items.map((item, index) =>
