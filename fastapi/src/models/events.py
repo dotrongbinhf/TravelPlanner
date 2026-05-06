@@ -1,7 +1,7 @@
 """
-WebSocket streaming event models.
+SSE streaming event models.
 
-Defines the structured JSON events sent through WebSocket during LangGraph workflow execution.
+Defines the structured JSON events sent via Server-Sent Events (SSE) during LangGraph workflow execution.
 These events allow the frontend to display realtime agent status, tool usage, text streaming,
 and structured plan data.
 """
@@ -13,7 +13,7 @@ from enum import Enum
 
 
 class EventType(str, Enum):
-    """Types of streaming events sent via WebSocket."""
+    """Types of streaming events sent via SSE."""
 
     AGENT_START = "agent_start"
     AGENT_END = "agent_end"
@@ -27,7 +27,7 @@ class EventType(str, Enum):
 
 class AgentEvent(BaseModel):
     """
-    Structured WebSocket event for realtime streaming.
+    Structured SSE event for realtime streaming.
 
     Sent to the client during LangGraph workflow execution to provide
     live updates on agent activity, tool usage, text generation,
@@ -46,8 +46,8 @@ class AgentEvent(BaseModel):
     error_message: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.now)
 
-    def to_ws_dict(self) -> dict[str, Any]:
-        """Convert to a JSON-serializable dict for WebSocket transmission."""
+    def to_sse_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-serializable dict for SSE transmission."""
         data = {
             "event_type": self.event_type.value,
             "timestamp": self.timestamp.isoformat(),

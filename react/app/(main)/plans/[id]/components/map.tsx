@@ -21,7 +21,12 @@ import { Plan } from "@/types/plan";
 import { useItineraryContext } from "@/contexts/ItineraryContext";
 import { getDayColor } from "@/constants/day-colors";
 import { isCrossDayEvent } from "./sections/cross-day-utils";
-import { generateGoogleMapsLink } from "@/utils/map";
+import {
+  generateGoogleMapsLink,
+  splitIntoPlacedSegments,
+  hasMiddleUnplacedItems,
+  hasEnoughPlacedItems,
+} from "@/utils/map";
 import { Button } from "@/components/ui/button";
 import Image from "next/image";
 import {
@@ -497,18 +502,19 @@ export default function GoogleMapIntegration({
           ))}
 
           {/* Render selectedChatPlace if it's from an older message (not in chatPlaces) */}
-          {selectedChatPlace && !chatPlaces.some(p => p.id === selectedChatPlace.id) && (
-            <ChatPlaceMarker
-              key={selectedChatPlace.id}
-              position={selectedChatPlace.location}
-              name={selectedChatPlace.name}
-              source={selectedChatPlace.source}
-              isActive={true}
-              onClick={() => {
-                setFocusLocation(selectedChatPlace.location);
-              }}
-            />
-          )}
+          {selectedChatPlace &&
+            !chatPlaces.some((p) => p.id === selectedChatPlace.id) && (
+              <ChatPlaceMarker
+                key={selectedChatPlace.id}
+                position={selectedChatPlace.location}
+                name={selectedChatPlace.name}
+                source={selectedChatPlace.source}
+                isActive={true}
+                onClick={() => {
+                  setFocusLocation(selectedChatPlace.location);
+                }}
+              />
+            )}
 
           {/* Single Itinerary Markers */}
           {singleMarkers.map((marker) => {
@@ -539,7 +545,7 @@ export default function GoogleMapIntegration({
                 isFirst={isOverallFirst}
                 isLast={isOverallLast}
                 isBed={isBed}
-                title={place.title || item.note}
+                title={place.title || item.note || ""}
                 isActive={
                   !!selectedPlace.placeId &&
                   !!place?.placeId &&
@@ -601,12 +607,19 @@ export default function GoogleMapIntegration({
           {showDirections &&
             filterMode === "byDay" &&
             visibleItems.length >= 2 && (
-              <DirectionsRenderer
-                items={visibleItems}
-                existingRoutes={routes}
-                onRoutesChange={fetchRoutes}
-                routeColor={getDayColor(selectedDayIndex)}
-              />
+              <>
+                {splitIntoPlacedSegments(visibleItems).map(
+                  (segment, segIdx) => (
+                    <DirectionsRenderer
+                      key={`segment-${selectedDayIndex}-${segIdx}`}
+                      items={segment}
+                      existingRoutes={routes}
+                      onRoutesChange={fetchRoutes}
+                      routeColor={getDayColor(selectedDayIndex)}
+                    />
+                  ),
+                )}
+              </>
             )}
 
           {/* Multi-Day Directions */}
@@ -635,13 +648,22 @@ export default function GoogleMapIntegration({
                     );
 
                     return (
-                      <DirectionsRenderer
-                        key={`day-${day.id}`}
-                        items={dayItems}
-                        existingRoutes={dayRoutes}
-                        onRoutesChange={fetchRoutes}
-                        routeColor={getDayColor(dayIndex)}
-                      />
+                      <div key={`day-routes-${day.id}`}>
+                        {splitIntoPlacedSegments(dayItems).map(
+                          (segment, segIdx) => {
+                            if (segment.length < 2) return null;
+                            return (
+                              <DirectionsRenderer
+                                key={`day-${day.id}-segment-${segIdx}`}
+                                items={segment}
+                                existingRoutes={dayRoutes}
+                                onRoutesChange={fetchRoutes}
+                                routeColor={getDayColor(dayIndex)}
+                              />
+                            );
+                          },
+                        )}
+                      </div>
                     );
                   })}
 
@@ -744,11 +766,13 @@ export default function GoogleMapIntegration({
                 );
                 if (dayMarkers.length > 0 && map) {
                   const firstItemWithLocation = dayMarkers.find(
-                    (m) => m.item.place?.location?.coordinates
+                    (m) => m.item.place?.location?.coordinates,
                   )?.item;
                   if (firstItemWithLocation?.place?.location?.coordinates) {
                     map.panTo({
-                      lat: firstItemWithLocation.place.location.coordinates[1] - 0.0025,
+                      lat:
+                        firstItemWithLocation.place.location.coordinates[1] -
+                        0.0025,
                       lng: firstItemWithLocation.place.location.coordinates[0],
                     });
                   }
@@ -767,11 +791,13 @@ export default function GoogleMapIntegration({
                 );
                 if (dayMarkers.length > 0 && map) {
                   const firstItemWithLocation = dayMarkers.find(
-                    (m) => m.item.place?.location?.coordinates
+                    (m) => m.item.place?.location?.coordinates,
                   )?.item;
                   if (firstItemWithLocation?.place?.location?.coordinates) {
                     map.panTo({
-                      lat: firstItemWithLocation.place.location.coordinates[1] - 0.0025,
+                      lat:
+                        firstItemWithLocation.place.location.coordinates[1] -
+                        0.0025,
                       lng: firstItemWithLocation.place.location.coordinates[0],
                     });
                   }
@@ -787,8 +813,10 @@ export default function GoogleMapIntegration({
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-9 px-0 w-9 bg-white/95 backdrop-blur-sm rounded-full shadow-lg border border-gray-200 hover:bg-gray-100 flex items-center gap-1 text-sm font-semibold text-gray-700"
+                        disabled={hasMiddleUnplacedItems(visibleItems) || !hasEnoughPlacedItems(visibleItems)}
+                        className="h-9 px-0 w-9 bg-white/95 backdrop-blur-sm rounded-full shadow-lg border border-gray-200 hover:bg-gray-100 flex items-center gap-1 text-sm font-semibold text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
                         onClick={() => {
+                          if (hasMiddleUnplacedItems(visibleItems) || !hasEnoughPlacedItems(visibleItems)) return;
                           const link = generateGoogleMapsLink(
                             visibleItems,
                             routes,
@@ -804,12 +832,18 @@ export default function GoogleMapIntegration({
                           alt="Google Maps"
                           width={16}
                           height={16}
-                          className="object-contain"
+                          className={`object-contain ${hasMiddleUnplacedItems(visibleItems) || !hasEnoughPlacedItems(visibleItems) ? "grayscale opacity-60" : ""}`}
                         />
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>
-                      <p>Open in Google Maps</p>
+                      <p>
+                        {!hasEnoughPlacedItems(visibleItems)
+                          ? "Need at least 2 places to draw a route"
+                          : hasMiddleUnplacedItems(visibleItems)
+                            ? "Cannot open: some items in the middle have no location"
+                            : "Open in Google Maps"}
+                      </p>
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>

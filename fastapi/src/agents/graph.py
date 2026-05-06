@@ -8,12 +8,11 @@ Graph topology (v8):
     ├─ (full_plan)  → orchestrator → [flight, hotel, attraction, weather] → itinerary → [restaurant, preparation] → synthesize → END
     ├─ (search_flights/hotels/attractions/restaurants) → agent → synthesize → END
     ├─ (preparation_inquiry) → preparation → synthesize → END
+    ├─ (modify_preparation) → preparation → synthesize → END
     ├─ (modify_itinerary) → itinerary → synthesize → END
     ├─ (select_flight/select_hotel) → select_apply → [itinerary → synthesize] or END
-    └─ (modify_plan) → orchestrator → ... → synthesize → END  [Phase 2]
 
-Phase 1: Intent-based routing with draft/full pipeline + itinerary modification.
-Phase 2 (future): Full plan modifications.
+Intent-based routing with draft/full pipeline + itinerary modification.
 
 Checkpointer: AsyncPostgresSaver for state persistence across server restarts.
 """
@@ -58,12 +57,16 @@ def route_from_intent(state: GraphState) -> str | list[str]:
         logger.info(f"🔀 [ROUTER] Intent → END ({intent})")
         return END
 
-    if intent in ("draft_plan", "full_plan", "modify_plan"):
+    if intent in ("draft_plan", "full_plan"):
         logger.info(f"🔀 [ROUTER] Intent → orchestrator ({intent})")
         return ["orchestrator"]
 
     if intent == "preparation_inquiry":
         logger.info("🔀 [ROUTER] Intent → preparation (standalone inquiry)")
+        return ["preparation"]
+
+    if intent == "modify_preparation":
+        logger.info("🔀 [ROUTER] Intent → preparation (modify existing)")
         return ["preparation"]
 
     if intent == "modify_itinerary":

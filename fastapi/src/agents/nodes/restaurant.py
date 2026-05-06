@@ -1,11 +1,13 @@
 """
-Restaurant Agent — 3-Phase Pipeline.
+Restaurant Agent — Hybrid Architecture.
 
-Phase 1: LLM generates a diverse meal plan with search queries per meal
-Phase 2: Code runs Text Search programmatically (concurrent, with fallback chain)
-Phase 3: LLM selects the best restaurant per meal from search results
+PIPELINE mode (full_plan): 3-Phase code-controlled pipeline
+  Phase 1: LLM generates meal plan with search queries
+  Phase 2: Code runs Nearby Search concurrently
+  Phase 3: LLM selects best restaurant per meal
 
-All API calls are code-controlled — the LLM NEVER calls tools directly.
+STANDALONE mode (search_restaurants): LLM + Tool (ReAct)
+  Single LLM call with search_restaurants tool, user's request drives the query.
 """
 
 import json
@@ -17,8 +19,10 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 
+from langchain_core.tools import tool
+
 from src.agents.state import GraphState
-from src.agents.nodes.utils import _extract_json
+from src.agents.nodes.utils import _extract_json, _run_agent_with_tools
 from src.tools.maps_tools import search_restaurants_for_meal, places_text_search_full
 from src.config import settings
 
@@ -62,7 +66,6 @@ For each meal slot, generate a suitable Text Search query to find restaurants on
 - Some meals can simply use "restaurant" if no strong preference applies
 - Consider the user's stated preferences, but add variety beyond just those
 - The query language should be in the local language of the destination or English — whichever is more likely to return good Google Maps results
-- Respond in the language specified in the `language` field (e.g., "vi" → Vietnamese, "en" → English)
 
 ## Response Format
 Return ONLY a JSON array of meal plan entries. No text before or after.
@@ -111,6 +114,65 @@ Return ONLY a JSON array. No text before or after.
   }
 ]
 """
+
+# ============================================================================
+# STANDALONE MODE: LLM + Tool (ReAct pattern — like Hotel/Flight)
+# ============================================================================
+
+RESTAURANT_STANDALONE_SYSTEM = """You are the Restaurant Agent for a travel planning system.
+
+You find restaurants using the search_restaurants tool.
+
+## Input
+You receive:
+1. **plan_context**: Shared trip info (destination, dates, budget, currency, group)
+2. **task**: The user's specific restaurant search request
+
+## Process
+1. Read the user's request carefully
+2. Generate an appropriate search query based on:
+   - User's cuisine preferences (pho, seafood, hotpot, bun cha, etc.)
+   - If no specific cuisine, use "restaurant"
+   - Always append the destination (e.g., "Pho restaurant in Hà Nội")
+3. Call search_restaurants ONCE with your query
+4. From results, select the BEST restaurant
+
+## Tool: search_restaurants
+- query: Search text (e.g., "Pho restaurant in Hà Nội") (REQUIRED)
+- page_size: Max results (default 5)
+
+## Response Format
+Return ONLY valid JSON. No text before or after.
+
+{
+  "meals": [
+    {
+      "name": "Phở Thìn Bờ Hồ",
+      "place_id": "ChIJ...",
+      "estimated_cost_total": 180000,
+      "note": "Famous Pho restaurant in the Old Quarter..."
+    }
+  ]
+}
+
+## Rules
+- Always call search_restaurants — do NOT make up restaurant data
+- Do NOT include an `alternatives` field. The system will auto-fill alternatives from remaining search results.
+- Select the BEST option and explain why in `note`
+- estimated_cost_total = total cost for entire group (all adults + children)
+- `note` must be in the language specified by plan_context.language
+- Respond in the language specified in plan_context.language
+"""
+
+@tool
+async def search_restaurants(query: str, page_size: int = 5) -> list[dict]:
+    """Search for restaurants by text query. Returns restaurant details including name, rating, address."""
+    return await places_text_search_full.ainvoke({
+        "query": query,
+        "USE_ENTERPRISE_FIELDS": USE_ENTERPRISE_FIELDS,
+        "page_size": page_size,
+    })
+
 
 # ============================================================================
 # MEAL SLOT PARSER
@@ -242,322 +304,21 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
     is_pipeline = bool(plan.get("task_list"))
     logger.info(f"   Mode: {'PIPELINE' if is_pipeline else 'STANDALONE'}")
 
-    # Get itinerary data — from pipeline agent_outputs or current_plan (standalone)
-    itinerary_data = agent_outputs.get("itinerary_agent", {})
-    if not itinerary_data or itinerary_data.get("error"):
-        itinerary_data = current_plan.get("itinerary", {})
-
-    if not itinerary_data or itinerary_data.get("error"):
-        if is_pipeline:
-            logger.info("   No valid itinerary data → skip (pipeline)")
-            return {
-                "agent_outputs": {"restaurant_agent": {"meals": [], "skipped": True, "reason": "no_itinerary"}},
-
-            }
-        else:
-            logger.info("   No itinerary data → Standalone Area Search mode")
-            meal_slots = [{
-                "day": 1,
-                "meal_type": "standalone",
-                "near_attraction": "",
-                "lat": 0.0,
-                "lng": 0.0,
-            }]
-    else:
-        # ── Parse meal slots from itinerary ──────────────────────────
-        resolved_places = itinerary_data.get("resolved_places", {})
-        meal_slots = _parse_meal_slots(itinerary_data, resolved_places)
-        logger.info(f"   Parsed {len(meal_slots)} meal slots from itinerary")
-
-        if not meal_slots:
-            logger.info("   No meal slots found → skip")
-            return {
-                "agent_outputs": {"restaurant_agent": {"meals": [], "skipped": True, "reason": "no_meals"}},
-
-            }
-
     restaurant_result = {}
 
     try:
-        # ══════════════════════════════════════════════════════════════
-        # PHASE 1: LLM Meal Planning
-        # ══════════════════════════════════════════════════════════════
-        logger.info("🍽️ [RESTAURANT_AGENT] Phase 1: LLM Meal Planning...")
-
-        meal_slots_summary = [
-            {"day": m["day"], "meal_type": m["meal_type"], "near_attraction": m["near_attraction"]}
-            for m in meal_slots
-        ]
-
-        language = plan_context.get("language", "en")
-
-        phase1_input = {
-            "destination": plan_context.get("destination", ""),
-            "num_days": plan_context.get("num_days", 1),
-            "language": language,
-            "budget_level": plan_context.get("budget_level", "moderate"),
-            "task": agent_request,
-            "meal_slots": meal_slots_summary,
-        }
-
-        phase1_messages = [
-            SystemMessage(content=MEAL_PLAN_SYSTEM),
-            HumanMessage(content=json.dumps(phase1_input, indent=2, ensure_ascii=False)),
-        ]
-
-        phase1_result = await llm_restaurant.ainvoke(phase1_messages)
-        meal_plan = _extract_json(phase1_result.content)
-
-        if not isinstance(meal_plan, list):
-            meal_plan = meal_plan.get("meal_plan", []) if isinstance(meal_plan, dict) else []
-
-        logger.info(f"   Phase 1: Generated {len(meal_plan)} meal queries")
-        for mp in meal_plan:
-            logger.info(f"     Day {mp.get('day')} {mp.get('meal_type')}: query='{mp.get('query')}'")
-
-        # ══════════════════════════════════════════════════════════════
-        # PHASE 2: Programmatic Search (concurrent)
-        # ══════════════════════════════════════════════════════════════
-        logger.info("🍽️ [RESTAURANT_AGENT] Phase 2: Programmatic Search...")
-
-        # Map meal_plan queries to meal_slots (with lat/lng)
-        search_tasks = []
-        search_meal_info = []
-
-        # Check if we're in standalone mode (no itinerary coordinates)
-        is_standalone_search = any(s.get("meal_type") == "standalone" for s in meal_slots)
-
-        for planned_meal in meal_plan:
-            day = planned_meal.get("day", 1)
-            meal_type = planned_meal.get("meal_type", "")
-            query = planned_meal.get("query", "restaurant")
-
-            if is_standalone_search:
-                # Standalone Area Search — no coordinates available, use text search
-                search_query = f"{query} in {plan_context.get('destination', '')}"
-                search_tasks.append(
-                    places_text_search_full.ainvoke({
-                        "query": search_query,
-                        "USE_ENTERPRISE_FIELDS": USE_ENTERPRISE_FIELDS,
-                        "page_size": 5,
-                    })
-                )
-                search_meal_info.append({
-                    "day": day,
-                    "meal_type": meal_type,
-                    "query": query,
-                    "near_attraction": "",
-                })
-            else:
-                # Pipeline/Normal — match meal_plan to itinerary slots with lat/lng
-                matching_slot = None
-                for slot in meal_slots:
-                    if slot["day"] == day and slot["meal_type"] == meal_type:
-                        matching_slot = slot
-                        break
-
-                if not matching_slot:
-                    logger.warning(f"   No slot for Day {day} {meal_type}, skipping search")
-                    continue
-
-                if matching_slot["lat"] == 0 and matching_slot["lng"] == 0:
-                    # Slot exists but no coords — fallback to area search
-                    search_query = f"{query} in {plan_context.get('destination', '')}"
-                    search_tasks.append(
-                        places_text_search_full.ainvoke({
-                            "query": search_query,
-                            "USE_ENTERPRISE_FIELDS": USE_ENTERPRISE_FIELDS,
-                            "page_size": 5,
-                        })
-                    )
-                else:
-                    # Normal Nearby Search with coordinates
-                    search_tasks.append(
-                        search_restaurants_for_meal.ainvoke({
-                            "query": query,
-                            "lat": matching_slot["lat"],
-                            "lng": matching_slot["lng"],
-                            "USE_ENTERPRISE_FIELDS": USE_ENTERPRISE_FIELDS,
-                            "page_size": 5,
-                        })
-                    )
-                search_meal_info.append({
-                    "day": day,
-                    "meal_type": meal_type,
-                    "query": query,
-                    "near_attraction": matching_slot.get("near_attraction", ""),
-                })
-
-        # Run all searches concurrently
-        search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
-
-        # Pair results with meal info
-        meal_search_results = []
-        for info, results in zip(search_meal_info, search_results):
-            if isinstance(results, Exception):
-                logger.error(f"   Search error for Day {info['day']} {info['meal_type']}: {results}")
-                results = []
-
-            meal_search_results.append({
-                **info,
-                "search_results": results,
-            })
-            logger.info(
-                f"   Day {info['day']} {info['meal_type']}: "
-                f"{len(results)} results for '{info['query']}'"
+        if is_pipeline:
+            # ══════════════════════════════════════════════════════════
+            # PIPELINE MODE (full_plan) — 3-Phase Pipeline
+            # ══════════════════════════════════════════════════════════
+            restaurant_result = await _run_pipeline_mode(
+                state, plan, plan_context, agent_request, agent_outputs, current_plan
             )
-
-        # ══════════════════════════════════════════════════════════════
-        # PHASE 3: LLM Selection
-        # ══════════════════════════════════════════════════════════════
-        logger.info("🍽️ [RESTAURANT_AGENT] Phase 3: LLM Selection...")
-
-        # Filter out meals with no results and trim search data for LLM
-        # Compute date ↔ day_of_week mapping so LLM can check opening hours
-        from datetime import datetime as dt, timedelta
-        start_date_str = plan_context.get("start_date", "")
-        try:
-            trip_start = dt.strptime(start_date_str, "%Y-%m-%d").date()
-        except (ValueError, TypeError):
-            trip_start = None
-
-        meals_with_results = []
-        for m in meal_search_results:
-            # Trim each restaurant to only fields LLM needs for selection
-            trimmed_results = []
-            for r in m["search_results"]:
-                trimmed = {
-                    "name": r.get("name", ""),
-                    "place_id": r.get("place_id", ""),
-                    "address": r.get("address", ""),
-                }
-                if "rating" in r:
-                    trimmed["rating"] = r["rating"]
-                if "user_ratings_total" in r:
-                    trimmed["user_ratings_total"] = r["user_ratings_total"]
-                if "price_level" in r:
-                    trimmed["price_level"] = r["price_level"]
-                if "opening_hours" in r:
-                    trimmed["opening_hours"] = r["opening_hours"]
-                trimmed_results.append(trimmed)
-
-            # Compute actual date and day of week for this meal's day index
-            meal_entry = {
-                "day": m["day"],
-                "meal_type": m["meal_type"],
-                "query": m["query"],
-                "near_attraction": m.get("near_attraction", ""),
-                "search_results": trimmed_results,
-            }
-            if trip_start:
-                meal_date = trip_start + timedelta(days=m["day"] - 1)
-                meal_entry["date"] = meal_date.isoformat()
-                meal_entry["day_of_week"] = meal_date.strftime("%A")
-
-            meals_with_results.append(meal_entry)
-
-        if not meals_with_results:
-            logger.warning("   No search results for any meal")
-            restaurant_result = {"meals": [], "note": "No restaurants found near any meal locations"}
         else:
-            phase3_input = {
-                "destination": plan_context.get("destination", ""),
-                "start_date": start_date_str,
-                "language": language,
-                "budget_level": plan_context.get("budget_level", "moderate"),
-                "currency": plan_context.get("currency", "VND"),
-                "adults": plan_context.get("adults", 2),
-                "children": plan_context.get("children", 0),
-                "task": agent_request,
-                "meals": meals_with_results,
-            }
-
-            phase3_messages = [
-                SystemMessage(content=SELECTION_SYSTEM),
-                HumanMessage(content=json.dumps(phase3_input, indent=2, ensure_ascii=False)),
-            ]
-
-            phase3_result = await llm_restaurant.ainvoke(phase3_messages)
-            selected_meals = _extract_json(phase3_result.content)
-
-            if not isinstance(selected_meals, list):
-                selected_meals = selected_meals.get("meals", []) if isinstance(selected_meals, dict) else []
-
-            # Re-inject coordinates from original search results for map rendering
-            placeid_to_location = {}
-            placeid_to_result = {}  # full search result lookup for auto-filling alternatives
-            for m in meal_search_results:
-                for r in m.get("search_results", []):
-                    pid = r.get("place_id")
-                    if pid:
-                        placeid_to_location[pid] = {"lat": r.get("lat", 0), "lng": r.get("lng", 0)}
-                        placeid_to_result[pid] = r
-            
-            # Auto-fill alternatives from remaining search results + inject location
-            for meal in selected_meals:
-                pid = meal.get("place_id")
-                if pid and pid in placeid_to_location:
-                    loc = placeid_to_location[pid]
-                    meal["_location"] = {"coordinates": [loc["lng"], loc["lat"]]}
-                
-                # Auto-fill alternatives from remaining search results for this meal
-                if not meal.get("alternatives"):
-                    meal_day = meal.get("day")
-                    meal_type = meal.get("meal_type")
-                    meal_sr = next(
-                        (m for m in meal_search_results
-                         if m["day"] == meal_day and m["meal_type"] == meal_type),
-                        None
-                    )
-                    if meal_sr:
-                        alts = []
-                        for r in meal_sr.get("search_results", []):
-                            r_pid = r.get("place_id")
-                            if r_pid and r_pid != pid:
-                                alts.append({
-                                    "name": r.get("name", ""),
-                                    "place_id": r_pid,
-                                    "rating": r.get("rating"),
-                                    "user_ratings_total": r.get("user_ratings_total"),
-                                    "price_level": r.get("price_level"),
-                                })
-                            if len(alts) >= 4:
-                                break
-                        meal["alternatives"] = alts
-
-            # --- Phase 3.5: Fetch Rich Data (Images, etc) from DB ---
-            logger.info("🍽️ [RESTAURANT_AGENT] Phase 3.5: Fetching rich DB data...")
-            from src.tools.dotnet_tools import get_place_from_db
-
-            async def _enrich_w_db(item: dict):
-                pid = item.get("place_id")
-                if not pid:
-                    return
-                try:
-                    result = await get_place_from_db.ainvoke({"place_id": pid})
-                    if isinstance(result, dict) and result.get("success"):
-                        item["db_data"] = result.get("data", {})
-                except Exception as e:
-                    logger.error(f"Failed to fetch db_data for restaurant {item.get('name')} (place_id: {pid}): {e}")
-
-            enrich_tasks = []
-            for meal in selected_meals:
-                enrich_tasks.append(_enrich_w_db(meal))  # Always enrich recommended
-                if is_standalone_search:
-                    # Standalone: enrich alternatives too (for rich UI)
-                    for alt in meal.get("alternatives", []):
-                        if isinstance(alt, dict):
-                            enrich_tasks.append(_enrich_w_db(alt))
-
-            if enrich_tasks:
-                await asyncio.gather(*enrich_tasks, return_exceptions=True)
-
-            if not selected_meals:
-                restaurant_result = {"meals": [], "note": "Failed to extract selection"}
-            else:
-                restaurant_result = {"meals": selected_meals}
-
-        logger.info(f"   Phase 3: Selected {len(restaurant_result.get('meals', []))} restaurants")
+            # ══════════════════════════════════════════════════════════
+            # STANDALONE MODE — LLM + Tool (ReAct)
+            # ══════════════════════════════════════════════════════════
+            restaurant_result = await _run_standalone_mode(plan_context, agent_request)
 
     except Exception as e:
         logger.error(f"   ❌ Restaurant Agent error: {e}", exc_info=True)
@@ -574,3 +335,339 @@ async def restaurant_agent_node(state: GraphState) -> dict[str, Any]:
         "agent_outputs": {"restaurant_agent": restaurant_result},
 
     }
+
+
+# ============================================================================
+# PIPELINE MODE — 3-Phase (for full_plan)
+# ============================================================================
+
+async def _run_pipeline_mode(
+    state: GraphState, plan: dict, plan_context: dict,
+    agent_request: str, agent_outputs: dict, current_plan: dict,
+) -> dict:
+    """Pipeline mode: Phase 1 (LLM meal plan) → Phase 2 (search) → Phase 3 (LLM select)."""
+
+    # Get itinerary data
+    itinerary_data = agent_outputs.get("itinerary_agent", {})
+    if not itinerary_data or itinerary_data.get("error"):
+        itinerary_data = current_plan.get("itinerary", {})
+
+    if not itinerary_data or itinerary_data.get("error"):
+        logger.info("   No valid itinerary data → skip (pipeline)")
+        return {"meals": [], "skipped": True, "reason": "no_itinerary"}
+
+    resolved_places = itinerary_data.get("resolved_places", {})
+    meal_slots = _parse_meal_slots(itinerary_data, resolved_places)
+    logger.info(f"   Parsed {len(meal_slots)} meal slots from itinerary")
+
+    if not meal_slots:
+        logger.info("   No meal slots found → skip")
+        return {"meals": [], "skipped": True, "reason": "no_meals"}
+
+
+    # ── Phase 1: LLM Meal Planning ──
+    logger.info("🍽️ [RESTAURANT_AGENT] Phase 1: LLM Meal Planning...")
+
+    meal_slots_summary = [
+        {"day": m["day"], "meal_type": m["meal_type"], "near_attraction": m["near_attraction"]}
+        for m in meal_slots
+    ]
+
+    phase1_input = {
+        "destination": plan_context.get("destination", ""),
+        "budget_level": plan_context.get("budget_level", "moderate"),
+        "task": agent_request,
+        "meal_slots": meal_slots_summary,
+    }
+
+    phase1_messages = [
+        SystemMessage(content=MEAL_PLAN_SYSTEM),
+        HumanMessage(content=json.dumps(phase1_input, indent=2, ensure_ascii=False)),
+    ]
+
+    phase1_result = await llm_restaurant.ainvoke(phase1_messages)
+    meal_plan = _extract_json(phase1_result.content)
+
+    if not isinstance(meal_plan, list):
+        meal_plan = meal_plan.get("meal_plan", []) if isinstance(meal_plan, dict) else []
+
+    logger.info(f"   Phase 1: Generated {len(meal_plan)} meal queries")
+    for mp in meal_plan:
+        logger.info(f"     Day {mp.get('day')} {mp.get('meal_type')}: query='{mp.get('query')}'")
+
+    # ── Phase 2: Programmatic Search (concurrent) ──
+    logger.info("🍽️ [RESTAURANT_AGENT] Phase 2: Programmatic Search...")
+
+    search_tasks = []
+    search_meal_info = []
+
+    for planned_meal in meal_plan:
+        day = planned_meal.get("day", 1)
+        meal_type = planned_meal.get("meal_type", "")
+        query = planned_meal.get("query", "restaurant")
+
+        matching_slot = next(
+            (s for s in meal_slots if s["day"] == day and s["meal_type"] == meal_type),
+            None
+        )
+
+        if not matching_slot:
+            logger.warning(f"   No slot for Day {day} {meal_type}, skipping search")
+            continue
+
+        if matching_slot["lat"] == 0 and matching_slot["lng"] == 0:
+            search_query = f"{query} in {plan_context.get('destination', '')}"
+            search_tasks.append(
+                places_text_search_full.ainvoke({
+                    "query": search_query,
+                    "USE_ENTERPRISE_FIELDS": USE_ENTERPRISE_FIELDS,
+                    "page_size": 5,
+                })
+            )
+        else:
+            search_tasks.append(
+                search_restaurants_for_meal.ainvoke({
+                    "query": query,
+                    "lat": matching_slot["lat"],
+                    "lng": matching_slot["lng"],
+                    "USE_ENTERPRISE_FIELDS": USE_ENTERPRISE_FIELDS,
+                    "page_size": 5,
+                })
+            )
+        search_meal_info.append({
+            "day": day,
+            "meal_type": meal_type,
+            "query": query,
+            "near_attraction": matching_slot.get("near_attraction", ""),
+        })
+
+    search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+
+    meal_search_results = []
+    for info, results in zip(search_meal_info, search_results):
+        if isinstance(results, Exception):
+            logger.error(f"   Search error for Day {info['day']} {info['meal_type']}: {results}")
+            results = []
+        meal_search_results.append({**info, "search_results": results})
+        logger.info(f"   Day {info['day']} {info['meal_type']}: {len(results)} results for '{info['query']}'")
+
+    # ── Phase 3: LLM Selection ──
+    logger.info("🍽️ [RESTAURANT_AGENT] Phase 3: LLM Selection...")
+
+    from datetime import datetime as dt, timedelta
+    start_date_str = plan_context.get("start_date", "")
+    try:
+        trip_start = dt.strptime(start_date_str, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        trip_start = None
+
+    meals_with_results = []
+    for m in meal_search_results:
+        trimmed_results = []
+        for r in m["search_results"]:
+            trimmed = {
+                "name": r.get("name", ""),
+                "place_id": r.get("place_id", ""),
+                "address": r.get("address", ""),
+            }
+            if "rating" in r:
+                trimmed["rating"] = r["rating"]
+            if "user_ratings_total" in r:
+                trimmed["user_ratings_total"] = r["user_ratings_total"]
+            if "price_level" in r:
+                trimmed["price_level"] = r["price_level"]
+            if "opening_hours" in r:
+                trimmed["opening_hours"] = r["opening_hours"]
+            trimmed_results.append(trimmed)
+
+        meal_entry = {
+            "day": m["day"],
+            "meal_type": m["meal_type"],
+            "query": m["query"],
+            "near_attraction": m.get("near_attraction", ""),
+            "search_results": trimmed_results,
+        }
+        if trip_start:
+            meal_date = trip_start + timedelta(days=m["day"] - 1)
+            meal_entry["date"] = meal_date.isoformat()
+            meal_entry["day_of_week"] = meal_date.strftime("%A")
+
+        meals_with_results.append(meal_entry)
+
+    if not meals_with_results:
+        logger.warning("   No search results for any meal")
+        return {"meals": [], "note": "No restaurants found near any meal locations"}
+
+    phase3_input = {
+        "destination": plan_context.get("destination", ""),
+        "start_date": start_date_str,
+        "language": plan_context.get("language", "en"),
+        "budget_level": plan_context.get("budget_level", "moderate"),
+        "currency": plan_context.get("currency", "VND"),
+        "adults": plan_context.get("adults", 2),
+        "children": plan_context.get("children", 0),
+        "task": agent_request,
+        "meals": meals_with_results,
+    }
+
+    phase3_messages = [
+        SystemMessage(content=SELECTION_SYSTEM),
+        HumanMessage(content=json.dumps(phase3_input, indent=2, ensure_ascii=False)),
+    ]
+
+    phase3_result = await llm_restaurant.ainvoke(phase3_messages)
+    selected_meals = _extract_json(phase3_result.content)
+
+    if not isinstance(selected_meals, list):
+        selected_meals = selected_meals.get("meals", []) if isinstance(selected_meals, dict) else []
+
+    # Post-process: inject locations + auto-fill alternatives
+    selected_meals = await _postprocess_meals(selected_meals, meal_search_results, enrich_alts=False)
+
+    if not selected_meals:
+        return {"meals": [], "note": "Failed to extract selection"}
+    return {"meals": selected_meals}
+
+
+# ============================================================================
+# STANDALONE MODE — LLM + Tool (ReAct)
+# ============================================================================
+
+async def _run_standalone_mode(plan_context: dict, agent_request: str) -> dict:
+    """Standalone mode: single LLM with search_restaurants tool."""
+    logger.info("🍽️ [RESTAURANT_AGENT] Standalone: LLM + Tool mode...")
+
+    human_content = f"""Plan context:
+{json.dumps(plan_context, indent=2, ensure_ascii=False)}
+
+Task:
+{agent_request}"""
+
+    llm_messages = [
+        SystemMessage(content=RESTAURANT_STANDALONE_SYSTEM),
+        HumanMessage(content=human_content),
+    ]
+
+    result, tool_logs = await _run_agent_with_tools(
+        llm=llm_restaurant,
+        messages=llm_messages,
+        tools=[search_restaurants],
+        max_iterations=3,
+        agent_name="RESTAURANT_AGENT",
+    )
+    restaurant_result = _extract_json(result.content)
+
+    if not isinstance(restaurant_result, dict):
+        restaurant_result = {"meals": []}
+
+    selected_meals = restaurant_result.get("meals", [])
+    if isinstance(restaurant_result, list):
+        selected_meals = restaurant_result
+
+    # Extract search results from tool_logs for auto-filling alternatives
+    all_search_results = []
+    for log in tool_logs:
+        output = log.get("output")
+        if isinstance(output, list):
+            all_search_results.extend(output)
+
+    # Post-process: inject locations + auto-fill alternatives + enrich from DB
+    selected_meals = await _postprocess_meals(
+        selected_meals, 
+        [{"search_results": all_search_results}],
+        enrich_alts=True,
+    )
+
+    if not selected_meals:
+        return {"meals": [], "note": "No restaurants found"}
+    return {"meals": selected_meals}
+
+
+# ============================================================================
+# SHARED POST-PROCESSING
+# ============================================================================
+
+async def _postprocess_meals(
+    selected_meals: list[dict],
+    search_result_groups: list[dict],
+    enrich_alts: bool = False,
+) -> list[dict]:
+    """Inject locations, auto-fill alternatives, and enrich from DB.
+
+    Args:
+        selected_meals: LLM-selected meals
+        search_result_groups: List of dicts with 'search_results' key
+        enrich_alts: If True, enrich alternatives with DB data (standalone)
+    """
+    # Build placeId → location lookup from all search results
+    placeid_to_location = {}
+    for group in search_result_groups:
+        for r in group.get("search_results", []):
+            pid = r.get("place_id")
+            if pid:
+                placeid_to_location[pid] = {"lat": r.get("lat", 0), "lng": r.get("lng", 0)}
+
+    for meal in selected_meals:
+        pid = meal.get("place_id")
+        if pid and pid in placeid_to_location:
+            loc = placeid_to_location[pid]
+            meal["_location"] = {"coordinates": [loc["lng"], loc["lat"]]}
+
+        # Auto-fill alternatives from remaining search results
+        if not meal.get("alternatives"):
+            meal_day = meal.get("day")
+            meal_type = meal.get("meal_type")
+            matching_group = None
+            if meal_day and meal_type:
+                matching_group = next(
+                    (g for g in search_result_groups
+                     if g.get("day") == meal_day and g.get("meal_type") == meal_type),
+                    None
+                )
+            if not matching_group:
+                matching_group = search_result_groups[0] if search_result_groups else None
+
+            if matching_group:
+                alts = []
+                for r in matching_group.get("search_results", []):
+                    r_pid = r.get("place_id")
+                    if r_pid and r_pid != pid:
+                        alts.append({
+                            "name": r.get("name", ""),
+                            "place_id": r_pid,
+                            "rating": r.get("rating"),
+                            "user_ratings_total": r.get("user_ratings_total"),
+                            "price_level": r.get("price_level"),
+                        })
+                    if len(alts) >= 4:
+                        break
+                meal["alternatives"] = alts
+
+    # ── DB Enrichment (images, details) ──
+    logger.info("🍽️ [RESTAURANT_AGENT] Fetching rich DB data...")
+    from src.tools.dotnet_tools import get_place_from_db
+
+    async def _enrich_w_db(item: dict):
+        pid = item.get("place_id")
+        if not pid:
+            return
+        try:
+            result = await get_place_from_db.ainvoke({"place_id": pid})
+            if isinstance(result, dict) and result.get("success"):
+                item["db_data"] = result.get("data", {})
+        except Exception as e:
+            logger.error(f"Failed to fetch db_data for restaurant {item.get('name')} (place_id: {pid}): {e}")
+
+    enrich_tasks = []
+    for meal in selected_meals:
+        enrich_tasks.append(_enrich_w_db(meal))
+        if enrich_alts:
+            for alt in meal.get("alternatives", []):
+                if isinstance(alt, dict):
+                    enrich_tasks.append(_enrich_w_db(alt))
+
+    if enrich_tasks:
+        await asyncio.gather(*enrich_tasks, return_exceptions=True)
+
+    return selected_meals
+

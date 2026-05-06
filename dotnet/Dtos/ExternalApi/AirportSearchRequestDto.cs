@@ -3,38 +3,26 @@ using System.ComponentModel.DataAnnotations;
 namespace dotnet.Dtos.ExternalApi
 {
     /// <summary>
-    /// Request DTO for searching airports by location via AeroDataBox (RapidAPI).
-    /// API Reference: https://rapidapi.com/aedbx-aedbx/api/aerodatabox
-    /// Endpoint: GET /airports/search/location
+    /// Request DTO for searching airports by location name via SerpApi Google Flights Autocomplete.
+    /// API Reference: https://serpapi.com/google-flights-autocomplete-api
+    /// Endpoint: GET /search?engine=google_flights_autocomplete
     /// </summary>
-    public class AirportSearchByLocationRequestDto
+    public class AirportAutocompleteRequestDto
     {
         /// <summary>
-        /// Latitude of the search center point. Decimal (-90; 90).
+        /// Search query — a location name (e.g., "Bắc Ninh", "Da Nang", "Tokyo").
         /// </summary>
         [Required]
-        public double Lat { get; set; }
+        public string Q { get; set; } = string.Empty;
 
         /// <summary>
-        /// Longitude of the search center point. Decimal (-180; 180).
+        /// Language for the search results (e.g., "en", "vi", "ja"). Default: "en".
         /// </summary>
-        [Required]
-        public double Lon { get; set; }
+        public string Hl { get; set; } = "en";
 
         /// <summary>
-        /// Search radius in kilometers. Default: 50.
+        /// Country code for the search (e.g., "us", "vn", "jp"). Default: "us".
         /// </summary>
-        public int RadiusKm { get; set; } = 50;
-
-        /// <summary>
-        /// Maximum number of results to return. Default: 10.
-        /// </summary>
-        public int Limit { get; set; } = 10;
-
-        /// <summary>
-        /// If true, only return airports with flight information. Default: true.
-        /// Set to false to include smaller airports without scheduled flights.
-        /// </summary>
-        public bool WithFlightInfoOnly { get; set; } = true;
+        public string Gl { get; set; } = "us";
     }
 }

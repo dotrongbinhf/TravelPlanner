@@ -60,12 +60,11 @@ RULES:
 Response format:
 {
     "selected_index": 0,
-    "confidence": "high",
     "target_day": 1, 
     "target_meal_type": "lunch",
     "clarification_response": "I'm not sure which one you mean, could you clarify?" 
 }
-Note: Day and meal_type are ONLY extracted if the user explicitly specifies them. If not, omit them. clarification_response is ONLY needed if selected_index is -1.
+Note: target_day and target_meal_type are ONLY extracted if the user explicitly specifies them. If not, omit them. clarification_response is ONLY needed if selected_index is -1.
 """
 
 
@@ -391,7 +390,8 @@ async def _handle_hotel_selection(
     
     constraint_overrides = {"hotels": []}
     auto_msgs = []
-    need_distance_recompute = False
+    changed_hotel_old_names = []  # Track old resolved titles for incremental update
+    changed_hotel_new_names = []  # Track new resolved titles for incremental update
     
     last_hotel_name = ""
     last_hotel_placeId = ""
@@ -502,36 +502,53 @@ async def _handle_hotel_selection(
             if hotel_location and hotel_placeId:
                 for h_info in resolved_places.get("hotels", []):
                     if h_info.get("segment_name") == segment.get("segment_name") or h_info.get("name") == old_hotel_name:
+                        # Capture old resolved title before overwriting
+                        old_resolved_title = (h_info.get("resolved") or {}).get("title", h_info.get("name", ""))
+                        if old_resolved_title and old_resolved_title != hotel_name:
+                            changed_hotel_old_names.append(old_resolved_title)
+                            changed_hotel_new_names.append(hotel_name)
                         h_info["name"] = hotel_name
                         h_info["resolved"] = {
                             "placeId": hotel_placeId,
                             "title": hotel_name,
                             "location": hotel_location,
                         }
-                need_distance_recompute = True
 
             auto_msgs.append(f"Segment '{segment.get('segment_name', '')}': changed to {hotel_name} (check-in {check_in_time}, check-out {check_out_time}).")
 
     if has_itinerary:
         logger.info("🏨 [SELECT_APPLY] Existing itinerary found — preparing rerange...")
 
-        if need_distance_recompute:
+        if changed_hotel_old_names:
             try:
-                logger.info("🏨 [SELECT_APPLY] Recomputing distance matrix with new hotels...")
-                from src.services.itinerary_builder import build_location_list, build_symmetric_distance_pairs
+                logger.info(f"🏨 [SELECT_APPLY] Incremental distance update for {len(changed_hotel_old_names)} changed hotel(s)...")
+                existing_pairs = cached_pipeline.get("distance_pairs", [])
+
+                # 1. Remove pairs involving old hotel names
+                old_names_set = set(changed_hotel_old_names)
+                remaining_pairs = [p for p in existing_pairs
+                                   if p["from"] not in old_names_set and p["to"] not in old_names_set]
+                logger.info(f"🏨 [SELECT_APPLY] Removed {len(existing_pairs) - len(remaining_pairs)} old pairs")
+
+                # 2. Build full location list (with new hotels already in resolved_places)
                 locations = build_location_list(resolved_places)
                 if len(locations) >= 2:
                     transport = plan_context.get("local_transportation", "car")
-                    from src.tools.maps_tools import LOCAL_TRANSPORT_MAP
                     travel_mode = LOCAL_TRANSPORT_MAP.get(transport, "DRIVE")
-                    from src.tools.itinerary_tools import _build_distance_matrix
-                    distance_matrix = await _build_distance_matrix(locations, travel_mode)
+                    distance_matrix = await _build_distance_matrix(
+                        locations, use_api=settings.USE_ROUTE_MATRIX, travel_mode=travel_mode
+                    )
                     if distance_matrix:
-                        new_distance_pairs = build_symmetric_distance_pairs(locations, distance_matrix)
-                        cached_pipeline["distance_pairs"] = new_distance_pairs
-                        logger.info(f"🏨 [SELECT_APPLY] Distance matrix updated: {len(new_distance_pairs)} pairs")
+                        all_pairs = build_symmetric_distance_pairs(locations, distance_matrix)
+                        # 3. Filter: only keep pairs involving the new hotel names
+                        new_names_set = set(changed_hotel_new_names)
+                        new_hotel_pairs = [p for p in all_pairs
+                                           if p["from"] in new_names_set or p["to"] in new_names_set]
+                        # 4. Merge: remaining old + new hotel pairs
+                        cached_pipeline["distance_pairs"] = remaining_pairs + new_hotel_pairs
+                        logger.info(f"🏨 [SELECT_APPLY] Distance matrix updated: {len(remaining_pairs)} kept + {len(new_hotel_pairs)} new = {len(cached_pipeline['distance_pairs'])} total")
             except Exception as e:
-                logger.error(f"🏨 [SELECT_APPLY] Distance matrix recompute failed: {e}")
+                logger.error(f"🏨 [SELECT_APPLY] Incremental distance update failed: {e}")
 
         cached_pipeline["schedule_constraints"] = schedule_constraints
         existing_itinerary["_cached_pipeline"] = cached_pipeline
@@ -544,7 +561,6 @@ async def _handle_hotel_selection(
         constraint_overrides.update({
             "type": "hotel",
             "hotel_name": last_hotel_name,
-            "hotel_placeId": last_hotel_placeId,
             "needs_rerange": True,
             "auto_user_message": auto_msg,
         })
@@ -633,12 +649,6 @@ async def _handle_flight_selection(
         f"(Total: {total_price})"
     )
 
-    # 2. Store selected flight
-    current_plan["selected_flight"] = {
-        "outbound": outbound,
-        "return": return_flight,
-        "totalPrice": total_price,
-    }
 
     flight_agent_data = {
         "recommend_outbound_flight": outbound,
@@ -671,6 +681,12 @@ async def _handle_flight_selection(
         logger.info("✈️ [SELECT_APPLY] Existing itinerary found — preparing rerange...")
 
         existing_days = existing_itinerary.get("days", [])
+        cached_pipeline = copy.deepcopy(existing_itinerary.get("_cached_pipeline", {}))
+        resolved_places = copy.deepcopy(existing_itinerary.get("resolved_places", {}))
+        changed_airport_old_names = []  # Track old resolved titles for incremental update
+        changed_airport_new_names = []  # Track new resolved titles for incremental update
+
+        # Update stop names in existing itinerary
         for day in existing_days:
             for stop in day.get("stops", []):
                 roles = stop.get("role", [])
@@ -681,6 +697,86 @@ async def _handle_flight_selection(
                 elif "return_departure" in roles and return_flight:
                     stop["name"] = return_flight.get("departure_airport_name", stop.get("name", ""))
 
+        # Resolve airports if changed — compare old vs new name
+        airport_updates = []
+        if outbound and outbound.get("arrival_airport_name"):
+            airport_updates.append({
+                "role": "outbound_arrival",
+                "name": outbound["arrival_airport_name"],
+            })
+        if return_flight and return_flight.get("departure_airport_name"):
+            airport_updates.append({
+                "role": "return_departure",
+                "name": return_flight["departure_airport_name"],
+            })
+
+        for update in airport_updates:
+            role = update["role"]
+            new_name = update["name"]
+            # Find existing airport with this role
+            old_entry = next(
+                (a for a in resolved_places.get("airports", []) if a.get("role") == role),
+                None
+            )
+            old_name = ""
+            if old_entry:
+                old_name = (old_entry.get("resolved") or {}).get("title", old_entry.get("name", ""))
+
+            if new_name and new_name != old_name:
+                # Airport changed — resolve new airport
+                logger.info(f"✈️ [SELECT_APPLY] Airport changed: '{old_name}' → '{new_name}', resolving...")
+                try:
+                    resolved_airport = await _resolve_single_place(new_name)
+                    if resolved_airport:
+                        new_resolved_title = resolved_airport.get("title", new_name)
+                        if old_entry:
+                            old_entry["name"] = new_name
+                            old_entry["resolved"] = resolved_airport
+                        else:
+                            resolved_places.setdefault("airports", []).append({
+                                "name": new_name, "role": role, "resolved": resolved_airport,
+                            })
+                        if old_name:
+                            changed_airport_old_names.append(old_name)
+                        changed_airport_new_names.append(new_resolved_title)
+                        logger.info(f"✈️ [SELECT_APPLY] Resolved airport: '{new_name}'")
+                except Exception as e:
+                    logger.error(f"✈️ [SELECT_APPLY] Airport resolve failed for '{new_name}': {e}")
+
+        if changed_airport_new_names:
+            try:
+                logger.info(f"✈️ [SELECT_APPLY] Incremental distance update for {len(changed_airport_new_names)} changed airport(s)...")
+                existing_pairs = cached_pipeline.get("distance_pairs", [])
+
+                # 1. Remove pairs involving old airport names
+                old_names_set = set(changed_airport_old_names)
+                remaining_pairs = [p for p in existing_pairs
+                                   if p["from"] not in old_names_set and p["to"] not in old_names_set]
+                logger.info(f"✈️ [SELECT_APPLY] Removed {len(existing_pairs) - len(remaining_pairs)} old pairs")
+
+                # 2. Build full location list (with new airports already in resolved_places)
+                locations = build_location_list(resolved_places)
+                if len(locations) >= 2:
+                    transport = plan_context.get("local_transportation", "car")
+                    travel_mode = LOCAL_TRANSPORT_MAP.get(transport, "DRIVE")
+                    distance_matrix = await _build_distance_matrix(
+                        locations, use_api=settings.USE_ROUTE_MATRIX, travel_mode=travel_mode
+                    )
+                    if distance_matrix:
+                        all_pairs = build_symmetric_distance_pairs(locations, distance_matrix)
+                        # 3. Filter: only keep pairs involving the new airport names
+                        new_names_set = set(changed_airport_new_names)
+                        new_airport_pairs = [p for p in all_pairs
+                                             if p["from"] in new_names_set or p["to"] in new_names_set]
+                        # 4. Merge: remaining old + new airport pairs
+                        cached_pipeline["distance_pairs"] = remaining_pairs + new_airport_pairs
+                        logger.info(f"✈️ [SELECT_APPLY] Distance matrix updated: {len(remaining_pairs)} kept + {len(new_airport_pairs)} new = {len(cached_pipeline['distance_pairs'])} total")
+            except Exception as e:
+                logger.error(f"✈️ [SELECT_APPLY] Incremental distance update failed: {e}")
+
+        existing_itinerary["_cached_pipeline"] = cached_pipeline
+        existing_itinerary["resolved_places"] = resolved_places
+        existing_itinerary["days"] = existing_days
         current_plan["itinerary"] = existing_itinerary
 
         # Build auto user message
@@ -708,7 +804,6 @@ async def _handle_flight_selection(
             "type": "flight",
             "needs_rerange": True,
             "auto_user_message": auto_msg,
-            "flight_agent_data": flight_agent_data,
         })
 
         return {

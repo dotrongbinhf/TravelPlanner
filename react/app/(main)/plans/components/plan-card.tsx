@@ -9,10 +9,12 @@ import {
   X,
   MoreHorizontal,
   Mail,
+  Copy,
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { getInitials, getResizedImageUrl } from "@/utils/image";
+import ActionMenu from "@/components/action-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,6 +37,7 @@ interface PlanCardProps {
   onDecline?: () => void;
   onDelete?: () => void;
   onLeave?: () => void;
+  onClone?: () => void;
 }
 
 export default function PlanCard({
@@ -44,14 +47,15 @@ export default function PlanCard({
   onDecline,
   onDelete,
   onLeave,
+  onClone,
 }: PlanCardProps) {
-  const owner = plan.participants?.find((p) => p.userId === plan.ownerId);
-  const others =
-    plan.participants?.filter((p) => p.userId !== plan.ownerId) || [];
-  const displayOthers = others.slice(0, 3);
-  const remainingCount = others.length - 3;
+  const acceptedCollaborators = (plan.collaborators || []).filter(
+    (c) => c.status === 1, // Accepted
+  );
+  const displayCollaborators = acceptedCollaborators.slice(0, 3);
+  const remainingCount = acceptedCollaborators.length - 3;
 
-  const invitedByName = variant === "pending" ? owner?.username : null;
+  const invitedByName = variant === "pending" ? plan.ownerUsername : null;
 
   const renderAvatar = (
     avatarUrl: string | undefined,
@@ -99,49 +103,51 @@ export default function PlanCard({
 
         {/* Action Menu */}
         {(variant === "owned" || variant === "shared") && (
-          <div className="absolute top-2 right-2 z-10">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 rounded-full bg-white/90 hover:bg-white text-gray-700 shadow-sm border border-gray-100"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
-                >
-                  <MoreHorizontal className="w-5 h-5" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {variant === "owned" ? (
-                  <DropdownMenuItem
-                    className="text-red-600 focus:text-red-600 cursor-pointer"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onDelete?.();
-                    }}
-                  >
-                    <Trash2 className="w-4 h-4 mr-2" />
-                    Delete Plan
-                  </DropdownMenuItem>
-                ) : (
-                  <DropdownMenuItem
-                    className="text-orange-600 focus:text-orange-600 cursor-pointer"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onLeave?.();
-                    }}
-                  >
-                    <LogOut className="w-4 h-4 mr-2" />
-                    Leave Plan
-                  </DropdownMenuItem>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+          <div className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 has-[[data-state=open]]:opacity-100 transition-opacity">
+            <ActionMenu
+              options={
+                variant === "owned"
+                  ? [
+                      {
+                        label: "Clone Plan",
+                        icon: Copy,
+                        onClick: () => {
+                          onClone?.();
+                        },
+                        variant: "clone",
+                      },
+                      {
+                        label: "Delete Plan",
+                        icon: Trash2,
+                        onClick: () => {
+                          onDelete?.();
+                        },
+                        variant: "delete",
+                      },
+                    ]
+                  : [
+                      {
+                        label: "Clone Plan",
+                        icon: Copy,
+                        onClick: () => {
+                          onClone?.();
+                        },
+                        variant: "clone",
+                      },
+                      {
+                        label: "Leave Plan",
+                        icon: LogOut,
+                        onClick: () => {
+                          onLeave?.();
+                        },
+                        variant: "delete", // using delete variant for red/orange styling
+                      },
+                    ]
+              }
+              triggerClassName="bg-white/60 hover:bg-white/90 backdrop-blur-sm border border-white/40 shadow-none rounded-md p-1.5 text-gray-700 transition-all"
+              iconSize={16}
+              ellipsisSize={16}
+            />
           </div>
         )}
       </div>
@@ -166,31 +172,29 @@ export default function PlanCard({
 
         {/* Bottom Section */}
         <div className="mt-auto">
-          {/* Participants */}
+          {/* Members */}
           <div className="flex items-center mb-3">
             {/* Owner */}
-            {owner && (
-              <div className="mr-3">
-                {renderAvatar(
-                  owner.avatarUrl,
-                  owner.name,
-                  owner.username,
-                  getInitials(owner.name, owner.username),
-                  10,
-                  true, // isOwner
-                )}
-              </div>
-            )}
+            <div className="mr-3">
+              {renderAvatar(
+                plan.ownerAvatarUrl,
+                plan.ownerName,
+                plan.ownerUsername,
+                getInitials(plan.ownerName, plan.ownerUsername),
+                10,
+                true, // isOwner
+              )}
+            </div>
 
-            {/* Others */}
+            {/* Collaborators */}
             <div className="flex -space-x-4">
-              {displayOthers.map((p, index) => (
-                <div key={p.id}>
+              {displayCollaborators.map((c, index) => (
+                <div key={c.id}>
                   {renderAvatar(
-                    p.avatarUrl,
-                    p.name,
-                    p.username,
-                    getInitials(p.name, p.username),
+                    c.avatarUrl,
+                    c.name,
+                    c.username,
+                    getInitials(c.name, c.username),
                     index,
                   )}
                 </div>
@@ -207,7 +211,7 @@ export default function PlanCard({
                       </div>
                     </TooltipTrigger>
                     <TooltipContent>
-                      <p>{remainingCount} more participants</p>
+                      <p>{remainingCount} more members</p>
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>

@@ -1,5 +1,9 @@
+using System.Text;
+using System.Text.Json;
+using dotnet.Dtos.AgentEvent;
 using dotnet.Dtos.Conversation;
 using dotnet.Dtos.Message;
+using dotnet.Enums;
 using dotnet.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -15,10 +19,21 @@ namespace dotnet.Controllers
     public class AIChatController : ControllerBase
     {
         private readonly IAIChatService _aiChatService;
+        private readonly IAgentStreamService _agentStreamService;
+        private readonly ILogger<AIChatController> _logger;
+        private static readonly JsonSerializerOptions _jsonOptions = new()
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
 
-        public AIChatController(IAIChatService aiChatService)
+        public AIChatController(
+            IAIChatService aiChatService,
+            IAgentStreamService agentStreamService,
+            ILogger<AIChatController> logger)
         {
             _aiChatService = aiChatService;
+            _agentStreamService = agentStreamService;
+            _logger = logger;
         }
 
         [HttpGet("plans/{planId}/conversations")]
@@ -94,6 +109,152 @@ namespace dotnet.Controllers
             }
         }
 
+        /// <summary>
+        /// Send a message to the AI agent system and stream back events via SSE.
+        /// 
+        /// Flow:
+        /// 1. Save user message to DB
+        /// 2. Forward to FastAPI via HTTP POST
+        /// 3. Stream SSE events back to the frontend (text chunks, agent status, structured data)
+        /// 4. Save AI response to DB after streaming completes
+        /// 
+        /// </summary>
+        [HttpPost("conversations/{id}/messages/stream")]
+        public async Task StreamMessage([FromRoute] Guid id, [FromBody] StreamMessageDto dto)
+        {
+            _logger.LogInformation(
+                "AIChatController.StreamMessage: conversationId={ConversationId}, message={Message}",
+                id,
+                dto.Content.Length > 100 ? dto.Content[..100] + "..." : dto.Content);
+
+            try
+            {
+                // ── Step 1: Save user message to DB ──
+                await _aiChatService.AddMessage(new CreateMessageDto
+                {
+                    ConversationId = id,
+                    Content = dto.Content,
+                    MessageRole = MessageRole.User
+                });
+
+                // ── Step 2: Set SSE response headers ──
+                Response.ContentType = "text/event-stream";
+                Response.Headers.CacheControl = "no-cache";
+                Response.Headers.Connection = "keep-alive";
+                Response.Headers["X-Accel-Buffering"] = "no";
+
+                // ── Step 3: Stream AI response + accumulate for DB persistence ──
+                var streamedContent = new StringBuilder();
+                string? finalResponse = null;
+
+                // Accumulate structured data from multiple events:
+                //   - Per-agent events: { agentName: "hotel_agent", structuredData: {...} }
+                //   - Global event: { structuredData: { apply_data: {...}, ... } }
+                var structuredDataAccumulator = new Dictionary<string, object>();
+
+                await foreach (var agentEvent in _agentStreamService.StreamFromFastApiAsync(
+                    id.ToString(), dto.Content, HttpContext.RequestAborted))
+                {
+                    // Forward event to frontend as SSE
+                    var eventJson = JsonSerializer.Serialize(agentEvent, _jsonOptions);
+                    await Response.WriteAsync($"data: {eventJson}\n\n", HttpContext.RequestAborted);
+                    await Response.Body.FlushAsync(HttpContext.RequestAborted);
+
+                    // Accumulate text chunks
+                    if (agentEvent.EventType == "text_chunk" && agentEvent.Content != null)
+                    {
+                        streamedContent.Append(agentEvent.Content);
+                    }
+
+                    // Accumulate structured data (per-agent keyed or global merge)
+                    if (agentEvent.EventType == "structured_data" && agentEvent.StructuredData != null)
+                    {
+                        if (!string.IsNullOrEmpty(agentEvent.AgentName))
+                        {
+                            // Per-agent structured data: key by agent name
+                            structuredDataAccumulator[agentEvent.AgentName] = agentEvent.StructuredData;
+                        }
+                        else
+                        {
+                            // Global structured data: merge keys (e.g. apply_data)
+                            try
+                            {
+                                var jsonStr = JsonSerializer.Serialize(agentEvent.StructuredData, _jsonOptions);
+                                var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(jsonStr, _jsonOptions);
+                                if (dict != null)
+                                {
+                                    foreach (var kv in dict)
+                                    {
+                                        structuredDataAccumulator[kv.Key] = kv.Value;
+                                    }
+                                }
+                            }
+                            catch
+                            {
+                                // if parsing fails, store as-is
+                                structuredDataAccumulator["_global"] = agentEvent.StructuredData;
+                            }
+                        }
+                    }
+
+                    // Track final response from workflow_complete
+                    if (agentEvent.EventType == "workflow_complete")
+                    {
+                        finalResponse = agentEvent.FinalResponse;
+                    }
+                }
+
+                // ── Step 4: Save AI response to DB ──
+                var aiContent = streamedContent.Length > 0
+                    ? streamedContent.ToString()
+                    : finalResponse;
+
+                if (!string.IsNullOrEmpty(aiContent))
+                {
+                    string? generatedPlanData = null;
+                    if (structuredDataAccumulator.Count > 0)
+                    {
+                        try
+                        {
+                            generatedPlanData = JsonSerializer.Serialize(structuredDataAccumulator, _jsonOptions);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to serialize structured data for DB");
+                        }
+                    }
+
+                    await _aiChatService.AddMessage(new CreateMessageDto
+                    {
+                        ConversationId = id,
+                        Content = aiContent,
+                        MessageRole = MessageRole.Chatbot,
+                        GeneratedPlanData = generatedPlanData
+                    });
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("Stream cancelled for conversation {ConversationId}", id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in AIChatController.StreamMessage");
+                try
+                {
+                    var errorEvent = new AgentEventDto
+                    {
+                        EventType = "error",
+                        ErrorMessage = $"Server error: {ex.Message}"
+                    };
+                    var errorJson = JsonSerializer.Serialize(errorEvent, _jsonOptions);
+                    await Response.WriteAsync($"data: {errorJson}\n\n");
+                    await Response.Body.FlushAsync();
+                }
+                catch { }
+            }
+        }
+
         [HttpDelete("conversations/{id}")]
         public async Task<IActionResult> DeleteConversation([FromRoute] Guid id)
         {
@@ -130,4 +291,13 @@ namespace dotnet.Controllers
             }
         }
     }
+
+    /// <summary>
+    /// Request body for the SSE stream endpoint.
+    /// </summary>
+    public class StreamMessageDto
+    {
+        public string Content { get; set; } = string.Empty;
+    }
 }
+

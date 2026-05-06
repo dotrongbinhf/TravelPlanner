@@ -5,6 +5,17 @@ import { PaginatedResult } from "@/types/paginated";
 
 const APP_CONFIG_URL = "/api/plan";
 
+export interface PlanQueryParams {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  dateFrom?: string; // ISO date string
+  dateTo?: string;
+  status?: "upcoming" | "past";
+  sortBy?: "startTime" | "createdAt" | "name";
+  sortOrder?: "asc" | "desc";
+}
+
 export const getAllPlans = async () => {
   const response = await API.get<Plan[]>(`${APP_CONFIG_URL}`);
   return response.data;
@@ -43,32 +54,26 @@ export const updatePlanCoverImage = async (planId: string, image: File) => {
   return response.data;
 };
 
-export const getMyPlans = async (page: number = 1, pageSize: number = 10) => {
+export const getMyPlans = async (params: PlanQueryParams = {}) => {
   const response = await API.get<PaginatedResult<Plan>>(
     `${APP_CONFIG_URL}/mine`,
-    { params: { page, pageSize } },
+    { params },
   );
   return response.data;
 };
 
-export const getSharedPlans = async (
-  page: number = 1,
-  pageSize: number = 10,
-) => {
+export const getSharedPlans = async (params: PlanQueryParams = {}) => {
   const response = await API.get<PaginatedResult<Plan>>(
     `${APP_CONFIG_URL}/shared`,
-    { params: { page, pageSize } },
+    { params },
   );
   return response.data;
 };
 
-export const getPendingInvitations = async (
-  page: number = 1,
-  pageSize: number = 10,
-) => {
+export const getPendingInvitations = async (params: PlanQueryParams = {}) => {
   const response = await API.get<PaginatedResult<Plan>>(
     `${APP_CONFIG_URL}/pending`,
-    { params: { page, pageSize } },
+    { params },
   );
   return response.data;
 };
@@ -80,5 +85,13 @@ export const deletePlan = async (planId: string) => {
 
 export const applyAIPlan = async (planId: string, applyData: Record<string, unknown>) => {
   const response = await API.post<Plan>(`${APP_CONFIG_URL}/${planId}/apply-ai`, applyData);
+  return response.data;
+};
+
+export const clonePlan = async (planId: string, name?: string) => {
+  const response = await API.post<{ id: string; name: string }>(
+    `${APP_CONFIG_URL}/${planId}/clone`,
+    { name },
+  );
   return response.data;
 };

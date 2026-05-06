@@ -7,7 +7,7 @@ namespace dotnet.Interfaces
     {
         Task<HotelSearchResponseDto> GetHotelsAsync(HotelSearchRequestDto request);
         Task<FlightSearchResponseDto> GetFlightsAsync(FlightSearchRequestDto request);
-        Task<AirportSearchResponseDto> SearchAirportsAsync(AirportSearchByLocationRequestDto request);
+        Task<AirportAutocompleteResponseDto> SearchAirportAutocompleteAsync(AirportAutocompleteRequestDto request);
         Task<WeatherResponseDto> GetDailyForecastAsync(WeatherRequestDto request);
         Task<Place?> GetPlaceDetailsAsync(string placeId);
     }

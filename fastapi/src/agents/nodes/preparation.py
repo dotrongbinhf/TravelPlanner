@@ -21,7 +21,7 @@ from langchain_openai import ChatOpenAI
 
 from src.agents.state import GraphState
 from src.agents.nodes.utils import _extract_json, _run_agent_with_tools
-from src.tools.search_tools import tavily_search
+
 from src.config import settings
 
 logger = logging.getLogger(__name__)
@@ -56,20 +56,10 @@ You receive:
 {budget_section}
 
 ## Process
-1. Review the weather data and itinerary summary provided
-2. Optionally use tavily_search if you need specific travel tips for the destination
-3. Based on itinerary places + weather → create practical packing list
+1. Based on itinerary places + weather → create practical packing list
    - Consider place-specific requirements (e.g., modest clothing for temples/mausoleums, sunscreen for outdoor attractions, water for long walks)
-4. Estimate budget items based on itinerary (more places/farther apart → higher transport costs, hot weather → more drinks)
-5. Write practical notes with place-specific advice
-
-## Tools
-### tavily_search
-- ONLY search if the destination is genuinely unfamiliar or niche (e.g., a small town, remote area). For well-known cities (Hanoi, Da Nang, Bangkok, Tokyo, Paris...),if you already have sufficient knowledge or user don't have any specific requirements — DO NOT search.
-- Queries must be short. You MAY append the current year for fresh results. Do NOT include trip details (ages, budget, dates) in queries.
-  ✅ "Vietnam tipping culture 2026", "Grab taxi Hanoi", "Ha Giang road conditions 2026"
-  ❌ "Hanoi travel tips for families with 8 year old", "best things to do in Hanoi April 2026 moderate budget"
-- One topic per search call. Multiple calls allowed if truly needed.
+2. Estimate budget items based on itinerary (more places/farther apart → higher transport costs, hot weather → more drinks)
+3. Write practical notes with place-specific advice
 
 ## Response Format
 CRITICAL: If your next step is to use a tool, return your response to call the tool. If you don't need to use tools anymore, your response must be one and ONLY one valid JSON object. No text before or after. Just the raw JSON starting with { and ending with }.
@@ -102,12 +92,7 @@ The example below shows ALL possible budget type values. You MUST ONLY use the t
     {"title": "Dress code", "content": "Ho Chi Minh Mausoleum requires modest clothing — no shorts, tank tops, or short skirts..."},
     {"title": "Weather tips", "content": "April in Hanoi is hot and humid — bring water when walking around Hoan Kiem Lake..."},
     {"title": "Safety", "content": "Be careful when crossing streets in the Old Quarter..."}
-  ],
-  "weather_details": [
-    {"day": 0, "date": "2026-04-03", "day_of_week": "Friday", "condition": "Partly cloudy", "temp_min": 24, "temp_max": 31, "humidity": 75, "rain_chance": 20},
-    {"day": 1, "date": "2026-04-04", "day_of_week": "Saturday", "condition": "Light rain", "temp_min": 23, "temp_max": 29, "humidity": 85, "rain_chance": 70}
-  ],
-  "weather_summary": "Overall weather expected during the trip..."
+  ]
 }
 
 ## Rules
@@ -158,8 +143,7 @@ async def preparation_agent_node(state: GraphState) -> dict[str, Any]:
     1. Fetches weather programmatically (code-controlled)
     2. Extracts simplified itinerary summary
     3. Passes weather + itinerary + plan_context to LLM
-    4. LLM may optionally use Tavily for research
-    5. Returns budget, packing, notes
+    4. Returns budget, packing, notes
     """
     logger.info("=" * 60)
     logger.info("🎒 [PREPARATION_AGENT] Node entered")
@@ -185,21 +169,26 @@ async def preparation_agent_node(state: GraphState) -> dict[str, Any]:
     preparation_result = {}
 
     try:
-        # ── Check for MODIFY mode ─────────────────────────────────────
-        # If current_plan already has preparation data, this is a modification
-        existing_budget = current_plan.get("budget")
-        existing_packing = current_plan.get("packing")
-        existing_notes = current_plan.get("notes")
-        is_modify = bool(existing_budget or existing_packing or existing_notes)
+        # ── Determine mode based on INTENT ───────────────────────────
+        # MODIFY only when user is directly correcting preparation output
+        intent = (state.get("intent_output") or {}).get("intent", "")
 
-        # Get the user's latest message for context
-        user_message = state.get("user_message", "")
+        intent_output = state.get("intent_output") or {}
+        user_message = intent_output.get("user_request_rewrite", "")
+        if not user_message:
+            user_message = state.get("user_message", "")
         if user_message and user_message.startswith("["):
             user_message = ""
+
+        is_modify = intent == "modify_preparation"
 
         if is_modify and user_message:
             # ═══ MODIFY MODE — adjust previous output ═══
             logger.info("🎒 [PREPARATION_AGENT] Mode: MODIFY (correcting previous output)")
+
+            existing_budget = current_plan.get("budget")
+            existing_packing = current_plan.get("packing")
+            existing_notes = current_plan.get("notes")
 
             previous_output = {}
             if existing_budget:
@@ -229,19 +218,21 @@ The user has a correction or adjustment to make:
 - Respond in the same language as the user.
 - Return ONLY valid JSON, no text before or after.
 """
+            # In modify mode, budget categories are already in the previous output
+            # — no dynamic budget_section needed. Replace placeholder with empty string.
+            modify_system = PREPARATION_AGENT_SYSTEM.replace("{budget_section}", "")
             llm_messages = [
-                SystemMessage(content=PREPARATION_AGENT_SYSTEM),
+                SystemMessage(content=modify_system),
                 HumanMessage(content=modify_prompt),
             ]
 
             result, tool_logs = await _run_agent_with_tools(
                 llm=llm_preparation, messages=llm_messages,
-                tools=[tavily_search], max_iterations=2,
+                tools=[], max_iterations=1,
                 agent_name="PREPARATION_AGENT_MODIFY",
             )
             preparation_result = _extract_json(result.content)
             preparation_result["tools"] = tool_logs
-            preparation_result["mode"] = "modify"
 
         else:
             # ═══ FRESH MODE — generate from scratch ═══
@@ -357,7 +348,7 @@ Based on ALL the context above:
 2. Create a packing list based on weather + specific places visited (e.g., temple dress codes, outdoor sun protection)
 3. Write practical travel notes with place-specific advice for {destination}
 
-You may use tavily_search if you need specific local tips or customs info."""
+Write practical travel notes with place-specific advice for {destination}."""
 
             llm_messages = [
                 SystemMessage(content=system_content),
@@ -366,12 +357,11 @@ You may use tavily_search if you need specific local tips or customs info."""
 
             result, tool_logs = await _run_agent_with_tools(
                 llm=llm_preparation, messages=llm_messages,
-                tools=[tavily_search], max_iterations=3,
+                tools=[], max_iterations=1,
                 agent_name="PREPARATION_AGENT",
             )
             preparation_result = _extract_json(result.content)
             preparation_result["tools"] = tool_logs
-            preparation_result["weather_raw"] = weather_data
 
     except Exception as e:
         logger.error(f"   ❌ Preparation Agent error: {e}", exc_info=True)

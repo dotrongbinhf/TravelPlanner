@@ -35,7 +35,7 @@ import ItineraryItemCardSkeleton from "./itinerary-item-card-skeleton";
 import { buildDisplayItems } from "./cross-day-utils";
 import { getRoutesByDayId } from "@/api/itineraryItemsRoute/itineraryItemsRoute";
 import { useEnsurePlace } from "@/hooks/use-ensure-place";
-import { generateGoogleMapsLink } from "@/utils/map";
+import { generateGoogleMapsLink, hasMiddleUnplacedItems, hasEnoughPlacedItems } from "@/utils/map";
 import {
   Tooltip,
   TooltipContent,
@@ -178,7 +178,7 @@ export default function ItineraryDayCard({
 
   const handleInlineSubmit = async () => {
     if (!newItemNote.trim() && !newItemPlaceId) return;
-    
+
     setIsAddingItem(true);
     try {
       if (newItemPlaceId) {
@@ -198,7 +198,7 @@ export default function ItineraryDayCard({
       // Select the newly added item if it's a place. (Selection doesn't do much for note-only).
       const itemsCount = itineraryDay.itineraryItems?.length ?? 0;
       selectPlaceFromItinerary(response, dayIndex, itemsCount, "list");
-      
+
       setIsOpenAddItem(false);
     } catch (error) {
       console.error("Error creating itinerary item:", error);
@@ -289,17 +289,24 @@ export default function ItineraryDayCard({
     setDayToDelete(null);
   };
 
-  const handleOpenGoogleMaps = async () => {
-    // 1. To make sure overnight places from yesterday connect to this day's
-    // itinerary properly, we reconstruct a list with cross-day items correctly identified
-    const mapItems: (typeof displayItems)[0]["item"][] = [];
+  // Check if Google Maps should be blocked due to middle unplaced items
+  const mapItems = useMemo(
+    () => displayItems.map((di) => di.item),
+    [displayItems],
+  );
+  
+  const notEnoughPlacedItems = useMemo(
+    () => !hasEnoughPlacedItems(mapItems),
+    [mapItems]
+  );
+  
+  const isGoogleMapsBlocked = useMemo(
+    () => hasMiddleUnplacedItems(mapItems) || notEnoughPlacedItems,
+    [mapItems, notEnoughPlacedItems],
+  );
 
-    // Check displayItems representing ghost items (cross-day-end) OR cross-day starts
-    displayItems.forEach((di) => {
-      // Only include ghost items (yesterday's overnight) and today's normal/cross-day items.
-      // It's just the items array, which already contains the right sequence
-      mapItems.push(di.item);
-    });
+  const handleOpenGoogleMaps = async () => {
+    if (isGoogleMapsBlocked) return;
 
     if (!mapItems || mapItems.length < 2) return;
 
@@ -392,8 +399,13 @@ export default function ItineraryDayCard({
                     <TooltipTrigger asChild>
                       <button
                         onClick={handleOpenGoogleMaps}
-                        disabled={isGeneratingLink}
-                        className="cursor-pointer py-1.5 px-2 text-gray-500 hover:bg-gray-200 rounded-md transition-colors flex items-center justify-center"
+                        disabled={isGeneratingLink || isGoogleMapsBlocked}
+                        className={cn(
+                          "py-1.5 px-2 rounded-md transition-colors flex items-center justify-center",
+                          isGoogleMapsBlocked
+                            ? "opacity-40 cursor-not-allowed"
+                            : "cursor-pointer text-gray-500 hover:bg-gray-200",
+                        )}
                       >
                         {isGeneratingLink ? (
                           <Loader2
@@ -406,13 +418,22 @@ export default function ItineraryDayCard({
                             alt="Google Maps"
                             width={14}
                             height={14}
-                            className="object-contain"
+                            className={cn(
+                              "object-contain",
+                              isGoogleMapsBlocked && "grayscale",
+                            )}
                           />
                         )}
                       </button>
                     </TooltipTrigger>
                     <TooltipContent>
-                      <p>Open in Google Maps</p>
+                      <p>
+                        {notEnoughPlacedItems
+                          ? "Need at least 2 places to draw a route"
+                          : isGoogleMapsBlocked
+                            ? "Cannot open: some items in the middle have no location"
+                            : "Open in Google Maps"}
+                      </p>
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
@@ -492,13 +513,20 @@ export default function ItineraryDayCard({
         {isOpenAddItem ? (
           <div className="relative z-10 bg-white border border-gray-200 rounded-xl p-4 shadow-sm space-y-3">
             <div className="flex justify-between items-center pb-2 border-b border-gray-100">
-              <h4 className="font-semibold text-sm text-gray-700">Add New Item</h4>
-              <button onClick={() => setIsOpenAddItem(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+              <h4 className="font-semibold text-sm text-gray-700">
+                Add New Item
+              </h4>
+              <button
+                onClick={() => setIsOpenAddItem(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
                 <X size={16} />
               </button>
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-500 mb-1.5 block uppercase tracking-wider">Note (Optional)</label>
+              <label className="text-xs font-medium text-gray-500 mb-1.5 block uppercase tracking-wider">
+                Note (Optional)
+              </label>
               <textarea
                 value={newItemNote}
                 onChange={(e) => setNewItemNote(e.target.value)}
@@ -507,14 +535,24 @@ export default function ItineraryDayCard({
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-500 mb-1.5 block uppercase tracking-wider">Place (Optional)</label>
+              <label className="text-xs font-medium text-gray-500 mb-1.5 block uppercase tracking-wider">
+                Place (Optional)
+              </label>
               {newItemPlaceId ? (
                 <div className="flex justify-between items-center p-3 bg-blue-50 border border-blue-100 rounded-lg">
                   <div className="flex items-center gap-2 overflow-hidden">
                     <Map size={16} className="text-blue-500 shrink-0" />
-                    <span className="text-sm font-medium text-blue-800 truncate">{newItemPlaceName}</span>
+                    <span className="text-sm font-medium text-blue-800 truncate">
+                      {newItemPlaceName}
+                    </span>
                   </div>
-                  <button onClick={() => { setNewItemPlaceId(null); setNewItemPlaceName(""); }} className="text-blue-400 hover:text-blue-600 transition-colors ml-2 shrink-0">
+                  <button
+                    onClick={() => {
+                      setNewItemPlaceId(null);
+                      setNewItemPlaceName("");
+                    }}
+                    className="text-blue-400 hover:text-blue-600 transition-colors ml-2 shrink-0"
+                  >
                     <X size={16} />
                   </button>
                 </div>
@@ -532,13 +570,18 @@ export default function ItineraryDayCard({
             </div>
             <div className="flex justify-end pt-2">
               <Button
-                disabled={isAddingItem || (!newItemNote.trim() && !newItemPlaceId)}
+                disabled={
+                  isAddingItem || (!newItemNote.trim() && !newItemPlaceId)
+                }
                 onClick={handleInlineSubmit}
                 size="sm"
                 className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4"
               >
                 {isAddingItem ? (
-                  <><Loader2 size={14} className="mr-2 animate-spin" /> Saving...</>
+                  <>
+                    <Loader2 size={14} className="mr-2 animate-spin" />{" "}
+                    Saving...
+                  </>
                 ) : (
                   "Save Item"
                 )}

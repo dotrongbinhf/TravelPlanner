@@ -293,6 +293,7 @@ export default function Header() {
                   setStartDate(start);
                   setEndDate(end);
                 }}
+                minDate={new Date()}
               />
             </div>
           </div>

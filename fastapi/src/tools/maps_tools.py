@@ -531,10 +531,29 @@ LOCAL_TRANSPORT_MAP = {
 }
 
 
+def _build_waypoint(coord: tuple[float, float], place_id: Optional[str] = None) -> dict:
+    """Build a Routes API waypoint, preferring placeId when available.
+
+    Using placeId routes to the venue's actual access point (entrance/gate)
+    instead of snapping to the nearest road from the center coordinate.
+    Falls back to latLng for locations without a placeId.
+    """
+    if place_id:
+        return {"waypoint": {"placeId": place_id}}
+    return {
+        "waypoint": {
+            "location": {
+                "latLng": {"latitude": coord[0], "longitude": coord[1]}
+            }
+        }
+    }
+
+
 async def compute_route_matrix(
     locations: list[tuple[float, float]],
     travel_mode: str = "DRIVE",
     chunk_size: int = 25,
+    place_ids: Optional[list[Optional[str]]] = None,
 ) -> list[list[int]]:
     """
     Internal function — compute NxN travel time matrix via Routes API.
@@ -545,6 +564,9 @@ async def compute_route_matrix(
         locations: List of (lat, lng) tuples.
         travel_mode: Routes API travel mode (DRIVE, TWO_WHEELER, WALK, TRANSIT).
         chunk_size: Max origins/destinations per API request (25 = 625 elements max).
+        place_ids: Optional parallel list of Google Place IDs. When a placeId is
+                   available, the API routes to the venue's access point instead of
+                   snapping to the nearest road from the center coordinate.
         
     Returns:
         NxN matrix of travel durations in minutes.
@@ -552,6 +574,8 @@ async def compute_route_matrix(
     n = len(locations)
     if n == 0:
         return []
+    
+    _place_ids = place_ids or [None] * n
     
     matrix = [[0] * n for _ in range(n)]
     total_elements = 0
@@ -564,24 +588,12 @@ async def compute_route_matrix(
             j_end = min(j_start + chunk_size, n)
             
             origins = [
-                {
-                    "waypoint": {
-                        "location": {
-                            "latLng": {"latitude": locations[i][0], "longitude": locations[i][1]}
-                        }
-                    }
-                }
+                _build_waypoint(locations[i], _place_ids[i])
                 for i in range(i_start, i_end)
             ]
             
             destinations = [
-                {
-                    "waypoint": {
-                        "location": {
-                            "latLng": {"latitude": locations[j][0], "longitude": locations[j][1]}
-                        }
-                    }
-                }
+                _build_waypoint(locations[j], _place_ids[j])
                 for j in range(j_start, j_end)
             ]
             

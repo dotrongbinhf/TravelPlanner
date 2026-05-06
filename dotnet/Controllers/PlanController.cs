@@ -1,6 +1,7 @@
 using dotnet.Data;
 using dotnet.Entites;
 using dotnet.Dtos.Plan;
+using dotnet.Dtos.Collaborator;
 using dotnet.Enums;
 using dotnet.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -57,12 +58,13 @@ namespace dotnet.Controllers
 
             var result = await dbContext.Plans
                 .Where(el => el.Id == id)
+                .Include(el => el.Owner)
                 .Include(el => el.Notes)
                 .Include(el => el.PackingLists)
                     .ThenInclude(pl => pl.PackingItems)
                 .Include(el => el.ExpenseItems)
-                .Include(el => el.Participants)
-                    .ThenInclude(p => p.User)
+                .Include(el => el.Collaborators)
+                    .ThenInclude(c => c.User)
                 .Include(el => el.ItineraryDays)
                     .ThenInclude(iday => iday.ItineraryItems)
                 .FirstOrDefaultAsync();
@@ -70,6 +72,12 @@ namespace dotnet.Controllers
             if(result == null)
             {
                 return NotFound();
+            }
+
+            // Access check: owner or accepted collaborator
+            if (result.OwnerId != userId && !result.Collaborators.Any(c => c.UserId == userId && c.Status == InvitationStatus.Accepted))
+            {
+                return Forbid("You don't have access to this plan");
             }
 
             var placeIds = result.ItineraryDays
@@ -88,6 +96,9 @@ namespace dotnet.Controllers
             {
                 Id = result.Id,
                 OwnerId = result.OwnerId,
+                OwnerName = result.Owner?.Name,
+                OwnerUsername = result.Owner?.Username,
+                OwnerAvatarUrl = result.Owner?.AvatarUrl,
                 Name = result.Name,
                 CoverImageUrl = result.CoverImageUrl,
                 StartTime = result.StartTime,
@@ -131,16 +142,16 @@ namespace dotnet.Controllers
                         Name = ei.Name,
                         Amount = ei.Amount,
                     }).ToList(),
-                Participants = result.Participants.Select(p => new Dtos.Participant.ParticipantDto
+                Collaborators = result.Collaborators.Select(c => new CollaboratorDto
                 {
-                    Id = p.Id,
-                    UserId = p.UserId,
-                    PlanId = p.PlanId,
-                    Role = p.Role,
-                    Status = p.Status,
-                    Name = p.User.Name,
-                    Username = p.User.Username,
-                    AvatarUrl = p.User.AvatarUrl
+                    Id = c.Id,
+                    UserId = c.UserId,
+                    PlanId = c.PlanId,
+                    Role = c.Role,
+                    Status = c.Status,
+                    Name = c.User.Name,
+                    Username = c.User.Username,
+                    AvatarUrl = c.User.AvatarUrl
                 }).ToList(),
                 ItineraryDays = result.ItineraryDays
                     .OrderBy(iday => iday.Order)
@@ -189,16 +200,6 @@ namespace dotnet.Controllers
 
             await dbContext.Plans.AddAsync(newPlan);
 
-            var participant = new Participant
-            {
-                Id = Guid.NewGuid(),
-                PlanId = newPlan.Id,
-                UserId = userId.Value,
-                Role = Enums.PlanRole.Owner,
-                Status = Enums.InvitationStatus.Accepted
-            };
-            await dbContext.Participants.AddAsync(participant);
-
             var dateCount = (newPlan.EndTime - newPlan.StartTime).Days + 1;
             var itineraryDays = new List<ItineraryDay>(dateCount);
             for (int i = 0; i < dateCount; i++)
@@ -223,17 +224,6 @@ namespace dotnet.Controllers
                 EndTime = request.EndTime,
                 Budget = request.Budget,
                 CurrencyCode = request.CurrencyCode,
-                Participants = new List<Dtos.Participant.ParticipantDto>
-                {
-                    new Dtos.Participant.ParticipantDto
-                    {
-                        Id = participant.Id,
-                        UserId = participant.UserId,
-                        PlanId = participant.PlanId,
-                        Role = participant.Role,
-                        Status = participant.Status
-                    }
-                }
             });
         }
 
@@ -241,6 +231,9 @@ namespace dotnet.Controllers
         [HttpPatch("{id:Guid}")]
         public async Task<IActionResult> UpdatePlan(Guid id, UpdatePlanRequest request)
         {
+            var userId = _currentUser.Id;
+            if (userId == null) return Unauthorized();
+
             var plan = await dbContext.Plans
                 .Where(el => el.Id == id)
                 .Include(el => el.ItineraryDays)
@@ -249,6 +242,17 @@ namespace dotnet.Controllers
             if (plan == null)
             {
                 return NotFound();
+            }
+
+            // Authorization: Owner or Editor collaborator
+            if (plan.OwnerId != userId)
+            {
+                var collaborator = await dbContext.Collaborators
+                    .FirstOrDefaultAsync(c => c.PlanId == id && c.UserId == userId && c.Status == InvitationStatus.Accepted && c.Role == PlanRole.Editor);
+                if (collaborator == null)
+                {
+                    return Forbid("Only owner or editor can update plan");
+                }
             }
 
             plan.Name = request.Name ?? plan.Name;
@@ -351,12 +355,26 @@ namespace dotnet.Controllers
         [HttpPatch("{id:Guid}/cover-image")]
         public async Task<IActionResult> UploadCoverImage(Guid id, IFormFile coverImage)
         {
+            var userId = _currentUser.Id;
+            if (userId == null) return Unauthorized();
+
             var plan = await dbContext.Plans
                 .FirstOrDefaultAsync(p => p.Id == id);
 
             if (plan == null)
             {
                 return NotFound();
+            }
+
+            // Authorization: Owner or Editor collaborator
+            if (plan.OwnerId != userId)
+            {
+                var collaborator = await dbContext.Collaborators
+                    .FirstOrDefaultAsync(c => c.PlanId == id && c.UserId == userId && c.Status == InvitationStatus.Accepted && c.Role == PlanRole.Editor);
+                if (collaborator == null)
+                {
+                    return Forbid("Only owner or editor can update cover image");
+                }
             }
 
             var uploadResult = await _cloudinaryService.UploadImageAsync(coverImage, id.ToString(), "Plans_Cover");
@@ -375,7 +393,12 @@ namespace dotnet.Controllers
         }
 
         [HttpGet("mine")]
-        public async Task<ActionResult<Helpers.PaginatedResult<PlanDto>>> GetMyPlans(int page = 1, int pageSize = 10)
+        public async Task<ActionResult<Helpers.PaginatedResult<PlanDto>>> GetMyPlans(
+            int page = 1, int pageSize = 10,
+            string? search = null,
+            DateTimeOffset? dateFrom = null, DateTimeOffset? dateTo = null,
+            string? status = null,
+            string? sortBy = "startTime", string? sortOrder = "desc")
         {
             var userId = _currentUser.Id;
             if (userId == null)
@@ -384,33 +407,59 @@ namespace dotnet.Controllers
             }
 
             var query = dbContext.Plans.Where(p => p.OwnerId == userId)
-                .Include(p => p.Participants)
-                    .ThenInclude(participant => participant.User);
+                .Include(p => p.Collaborators)
+                    .ThenInclude(collaborator => collaborator.User)
+                .Include(p => p.Owner)
+                .AsQueryable();
+
+            // Search by name
+            if (!string.IsNullOrWhiteSpace(search))
+                query = query.Where(p => p.Name.Contains(search));
+
+            // Date range filter
+            if (dateFrom.HasValue)
+                query = query.Where(p => p.StartTime >= dateFrom.Value);
+            if (dateTo.HasValue)
+                query = query.Where(p => p.StartTime <= dateTo.Value);
+
+            // Status filter: upcoming (default) or past
+            var now = DateTimeOffset.UtcNow;
+            if (string.Equals(status, "past", StringComparison.OrdinalIgnoreCase))
+                query = query.Where(p => p.StartTime <= now);
+            else if (string.Equals(status, "upcoming", StringComparison.OrdinalIgnoreCase))
+                query = query.Where(p => p.EndTime >= now);
+
+            // Sort
+            query = ApplyPlanSort(query, sortBy, sortOrder);
+
             var totalCount = await query.CountAsync();
             var plans = await query
-                .OrderByDescending(p => p.StartTime)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .Select(p => new PlanDto
                 {
                     Id = p.Id,
                     OwnerId = p.OwnerId,
+                    OwnerName = p.Owner.Name,
+                    OwnerUsername = p.Owner.Username,
+                    OwnerAvatarUrl = p.Owner.AvatarUrl,
                     Name = p.Name,
                     CoverImageUrl = p.CoverImageUrl,
                     StartTime = p.StartTime,
                     EndTime = p.EndTime,
                     Budget = p.Budget,
                     CurrencyCode = p.CurrencyCode,
-                    Participants = p.Participants.Select(participant => new Dtos.Participant.ParticipantDto
+                    CreatedAt = p.CreatedAt,
+                    Collaborators = p.Collaborators.Select(collaborator => new CollaboratorDto
                     {
-                        Id = participant.Id,
-                        UserId = participant.UserId,
-                        PlanId = participant.PlanId,
-                        Role = participant.Role,
-                        Status = participant.Status,
-                        Name = participant.User.Name,
-                        Username = participant.User.Username,
-                        AvatarUrl = participant.User.AvatarUrl
+                        Id = collaborator.Id,
+                        UserId = collaborator.UserId,
+                        PlanId = collaborator.PlanId,
+                        Role = collaborator.Role,
+                        Status = collaborator.Status,
+                        Name = collaborator.User.Name,
+                        Username = collaborator.User.Username,
+                        AvatarUrl = collaborator.User.AvatarUrl
                     }).ToList()
                 })
                 .ToListAsync();
@@ -425,7 +474,12 @@ namespace dotnet.Controllers
         }
 
         [HttpGet("shared")]
-        public async Task<ActionResult<Helpers.PaginatedResult<PlanDto>>> GetSharedPlans(int page = 1, int pageSize = 10)
+        public async Task<ActionResult<Helpers.PaginatedResult<PlanDto>>> GetSharedPlans(
+            int page = 1, int pageSize = 10,
+            string? search = null,
+            DateTimeOffset? dateFrom = null, DateTimeOffset? dateTo = null,
+            string? status = null,
+            string? sortBy = "startTime", string? sortOrder = "desc")
         {
             var userId = _currentUser.Id;
             if (userId == null)
@@ -433,15 +487,37 @@ namespace dotnet.Controllers
                 return Unauthorized();
             }
 
-            var query = dbContext.Participants
-                .Where(p => p.UserId == userId && p.Status == Enums.InvitationStatus.Accepted && p.Role != Enums.PlanRole.Owner)
-                .Include(p => p.Plan)
-                    .ThenInclude(plan => plan.Participants)
-                        .ThenInclude(participant => participant.User);
+            var query = dbContext.Collaborators
+                .Where(c => c.UserId == userId && c.Status == Enums.InvitationStatus.Accepted)
+                .Include(c => c.Plan)
+                    .ThenInclude(plan => plan.Collaborators)
+                        .ThenInclude(collaborator => collaborator.User)
+                .Include(c => c.Plan)
+                    .ThenInclude(plan => plan.Owner)
+                .AsQueryable();
+
+            // Search by name
+            if (!string.IsNullOrWhiteSpace(search))
+                query = query.Where(p => p.Plan.Name.Contains(search));
+
+            // Date range filter
+            if (dateFrom.HasValue)
+                query = query.Where(p => p.Plan.StartTime >= dateFrom.Value);
+            if (dateTo.HasValue)
+                query = query.Where(p => p.Plan.StartTime <= dateTo.Value);
+
+            // Status filter
+            var now = DateTimeOffset.UtcNow;
+            if (string.Equals(status, "past", StringComparison.OrdinalIgnoreCase))
+                query = query.Where(p => p.Plan.StartTime <= now);
+            else if (string.Equals(status, "upcoming", StringComparison.OrdinalIgnoreCase))
+                query = query.Where(p => p.Plan.EndTime >= now);
+
+            // Sort
+            query = ApplyCollaboratorPlanSort(query, sortBy, sortOrder);
 
             var totalCount = await query.CountAsync();
             var plans = await query
-                .OrderByDescending(p => p.Plan.StartTime)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .ToListAsync();
@@ -451,25 +527,29 @@ namespace dotnet.Controllers
                 {
                     Id = p.Plan.Id,
                     OwnerId = p.Plan.OwnerId,
+                    OwnerName = p.Plan.Owner.Name,
+                    OwnerUsername = p.Plan.Owner.Username,
+                    OwnerAvatarUrl = p.Plan.Owner.AvatarUrl,
                     Name = p.Plan.Name,
                     CoverImageUrl = p.Plan.CoverImageUrl,
                     StartTime = p.Plan.StartTime,
                     EndTime = p.Plan.EndTime,
                     Budget = p.Plan.Budget,
                     CurrencyCode = p.Plan.CurrencyCode,
-                    Participants = p.Plan.Participants.Select(participant => new Dtos.Participant.ParticipantDto
+                    CreatedAt = p.Plan.CreatedAt,
+                    Collaborators = p.Plan.Collaborators.Select(collaborator => new CollaboratorDto
                     {
-                        Id = participant.Id,
-                        UserId = participant.UserId,
-                        PlanId = participant.PlanId,
-                        Role = participant.Role,
-                        Status = participant.Status,
-                        Name = participant.User.Name,
-                        Username = participant.User.Username,
-                        AvatarUrl = participant.User.AvatarUrl
+                        Id = collaborator.Id,
+                        UserId = collaborator.UserId,
+                        PlanId = collaborator.PlanId,
+                        Role = collaborator.Role,
+                        Status = collaborator.Status,
+                        Name = collaborator.User.Name,
+                        Username = collaborator.User.Username,
+                        AvatarUrl = collaborator.User.AvatarUrl
                     }).ToList(),
-                    ParticipantId = p.Plan.Participants
-                        .FirstOrDefault(participant => participant.UserId == userId)?.Id
+                    CollaboratorId = p.Plan.Collaborators
+                        .FirstOrDefault(collaborator => collaborator.UserId == userId)?.Id
                 })
                 .ToList();
 
@@ -483,7 +563,12 @@ namespace dotnet.Controllers
         }
 
         [HttpGet("pending")]
-        public async Task<ActionResult<Helpers.PaginatedResult<PlanDto>>> GetPendingInvitations(int page = 1, int pageSize = 10)
+        public async Task<ActionResult<Helpers.PaginatedResult<PlanDto>>> GetPendingInvitations(
+            int page = 1, int pageSize = 10,
+            string? search = null,
+            DateTimeOffset? dateFrom = null, DateTimeOffset? dateTo = null,
+            string? status = null,
+            string? sortBy = "startTime", string? sortOrder = "desc")
         {
             var userId = _currentUser.Id;
             if (userId == null)
@@ -491,15 +576,37 @@ namespace dotnet.Controllers
                 return Unauthorized();
             }
 
-            var query = dbContext.Participants
-                .Where(p => p.UserId == userId && p.Status == Enums.InvitationStatus.Pending)
-                .Include(p => p.Plan)
-                    .ThenInclude(plan => plan.Participants)
-                        .ThenInclude(participant => participant.User);
+            var query = dbContext.Collaborators
+                .Where(c => c.UserId == userId && c.Status == Enums.InvitationStatus.Pending)
+                .Include(c => c.Plan)
+                    .ThenInclude(plan => plan.Collaborators)
+                        .ThenInclude(collaborator => collaborator.User)
+                .Include(c => c.Plan)
+                    .ThenInclude(plan => plan.Owner)
+                .AsQueryable();
+
+            // Search by name
+            if (!string.IsNullOrWhiteSpace(search))
+                query = query.Where(p => p.Plan.Name.Contains(search));
+
+            // Date range filter
+            if (dateFrom.HasValue)
+                query = query.Where(p => p.Plan.StartTime >= dateFrom.Value);
+            if (dateTo.HasValue)
+                query = query.Where(p => p.Plan.StartTime <= dateTo.Value);
+
+            // Status filter
+            var now = DateTimeOffset.UtcNow;
+            if (string.Equals(status, "past", StringComparison.OrdinalIgnoreCase))
+                query = query.Where(p => p.Plan.StartTime <= now);
+            else if (string.Equals(status, "upcoming", StringComparison.OrdinalIgnoreCase))
+                query = query.Where(p => p.Plan.EndTime >= now);
+
+            // Sort
+            query = ApplyCollaboratorPlanSort(query, sortBy, sortOrder);
 
             var totalCount = await query.CountAsync();
             var plans = await query
-                .OrderByDescending(p => p.CreatedAt)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .ToListAsync();
@@ -509,22 +616,26 @@ namespace dotnet.Controllers
                 {
                     Id = p.Plan.Id,
                     OwnerId = p.Plan.OwnerId,
+                    OwnerName = p.Plan.Owner.Name,
+                    OwnerUsername = p.Plan.Owner.Username,
+                    OwnerAvatarUrl = p.Plan.Owner.AvatarUrl,
                     Name = p.Plan.Name,
                     CoverImageUrl = p.Plan.CoverImageUrl,
                     StartTime = p.Plan.StartTime,
                     EndTime = p.Plan.EndTime,
                     Budget = p.Plan.Budget,
                     CurrencyCode = p.Plan.CurrencyCode,
-                    Participants = p.Plan.Participants.Select(participant => new Dtos.Participant.ParticipantDto
+                    CreatedAt = p.Plan.CreatedAt,
+                    Collaborators = p.Plan.Collaborators.Select(collaborator => new CollaboratorDto
                     {
-                        Id = participant.Id,
-                        UserId = participant.UserId,
-                        PlanId = participant.PlanId,
-                        Role = participant.Role,
-                        Status = participant.Status,
-                        Name = participant.User.Name,
-                        Username = participant.User.Username,
-                        AvatarUrl = participant.User.AvatarUrl
+                        Id = collaborator.Id,
+                        UserId = collaborator.UserId,
+                        PlanId = collaborator.PlanId,
+                        Role = collaborator.Role,
+                        Status = collaborator.Status,
+                        Name = collaborator.User.Name,
+                        Username = collaborator.User.Username,
+                        AvatarUrl = collaborator.User.AvatarUrl
                     }).ToList()
                 }).ToList();
 
@@ -550,7 +661,7 @@ namespace dotnet.Controllers
                 return Unauthorized();
             }
 
-            // Validate source plan exists and user owns it
+            // Validate source plan exists and user is owner or editor
             var sourcePlan = await dbContext.Plans.FirstOrDefaultAsync(p => p.Id == id);
             if (sourcePlan == null)
             {
@@ -558,7 +669,12 @@ namespace dotnet.Controllers
             }
             if (sourcePlan.OwnerId != userId)
             {
-                return Forbid("Only the owner can apply AI plan");
+                var aiCollaborator = await dbContext.Collaborators
+                    .FirstOrDefaultAsync(c => c.PlanId == id && c.UserId == userId && c.Status == InvitationStatus.Accepted && c.Role == PlanRole.Editor);
+                if (aiCollaborator == null)
+                {
+                    return Forbid("Only the owner or editor can apply AI plan");
+                }
             }
 
             Plan targetPlan;
@@ -577,16 +693,6 @@ namespace dotnet.Controllers
                     CurrencyCode = request.CurrencyCode ?? sourcePlan.CurrencyCode,
                 };
                 await dbContext.Plans.AddAsync(targetPlan);
-
-                // Add owner as participant
-                await dbContext.Participants.AddAsync(new Participant
-                {
-                    Id = Guid.NewGuid(),
-                    PlanId = targetPlan.Id,
-                    UserId = userId.Value,
-                    Role = PlanRole.Owner,
-                    Status = InvitationStatus.Accepted,
-                });
             }
             else
             {
@@ -775,12 +881,13 @@ namespace dotnet.Controllers
             // ── Return full PlanDto ──────────────────────────────────
             var result = await dbContext.Plans
                 .Where(p => p.Id == targetPlan.Id)
+                .Include(p => p.Owner)
                 .Include(p => p.Notes)
                 .Include(p => p.PackingLists)
                     .ThenInclude(pl => pl.PackingItems)
                 .Include(p => p.ExpenseItems)
-                .Include(p => p.Participants)
-                    .ThenInclude(p => p.User)
+                .Include(p => p.Collaborators)
+                    .ThenInclude(c => c.User)
                 .Include(p => p.ItineraryDays)
                     .ThenInclude(iday => iday.ItineraryItems)
                 .FirstOrDefaultAsync();
@@ -806,6 +913,9 @@ namespace dotnet.Controllers
             {
                 Id = result.Id,
                 OwnerId = result.OwnerId,
+                OwnerName = result.Owner?.Name,
+                OwnerUsername = result.Owner?.Username,
+                OwnerAvatarUrl = result.Owner?.AvatarUrl,
                 Name = result.Name,
                 CoverImageUrl = result.CoverImageUrl,
                 StartTime = result.StartTime,
@@ -849,16 +959,16 @@ namespace dotnet.Controllers
                         Name = ei.Name,
                         Amount = ei.Amount,
                     }).ToList(),
-                Participants = result.Participants.Select(p => new Dtos.Participant.ParticipantDto
+                Collaborators = result.Collaborators.Select(c => new CollaboratorDto
                 {
-                    Id = p.Id,
-                    UserId = p.UserId,
-                    PlanId = p.PlanId,
-                    Role = p.Role,
-                    Status = p.Status,
-                    Name = p.User.Name,
-                    Username = p.User.Username,
-                    AvatarUrl = p.User.AvatarUrl
+                    Id = c.Id,
+                    UserId = c.UserId,
+                    PlanId = c.PlanId,
+                    Role = c.Role,
+                    Status = c.Status,
+                    Name = c.User.Name,
+                    Username = c.User.Username,
+                    AvatarUrl = c.User.AvatarUrl
                 }).ToList(),
                 ItineraryDays = result.ItineraryDays
                     .OrderBy(iday => iday.Order)
@@ -911,6 +1021,157 @@ namespace dotnet.Controllers
             await dbContext.SaveChangesAsync();
 
             return NoContent();
+        }
+        // ── Sort helpers ─────────────────────────────────────────────
+        private static IQueryable<Plan> ApplyPlanSort(IQueryable<Plan> query, string? sortBy, string? sortOrder)
+        {
+            var isAsc = string.Equals(sortOrder, "asc", StringComparison.OrdinalIgnoreCase);
+            return sortBy?.ToLowerInvariant() switch
+            {
+                "createdat" => isAsc ? query.OrderBy(p => p.CreatedAt) : query.OrderByDescending(p => p.CreatedAt),
+                "name" => isAsc ? query.OrderBy(p => p.Name) : query.OrderByDescending(p => p.Name),
+                "starttime" => isAsc ? query.OrderBy(p => p.StartTime) : query.OrderByDescending(p => p.StartTime),
+                _ => query.OrderByDescending(p => p.StartTime),
+            };
+        }
+
+        private static IQueryable<Collaborator> ApplyCollaboratorPlanSort(IQueryable<Collaborator> query, string? sortBy, string? sortOrder)
+        {
+            var isAsc = string.Equals(sortOrder, "asc", StringComparison.OrdinalIgnoreCase);
+            return sortBy?.ToLowerInvariant() switch
+            {
+                "createdat" => isAsc ? query.OrderBy(p => p.Plan.CreatedAt) : query.OrderByDescending(p => p.Plan.CreatedAt),
+                "name" => isAsc ? query.OrderBy(p => p.Plan.Name) : query.OrderByDescending(p => p.Plan.Name),
+                "starttime" => isAsc ? query.OrderBy(p => p.Plan.StartTime) : query.OrderByDescending(p => p.Plan.StartTime),
+                _ => query.OrderByDescending(p => p.Plan.StartTime),
+            };
+        }
+
+        // ── Clone Plan ───────────────────────────────────────────────
+        [HttpPost("{id:Guid}/clone")]
+        public async Task<IActionResult> ClonePlan(Guid id, [FromBody] ClonePlanRequest request)
+        {
+            var userId = _currentUser.Id;
+            if (userId == null)
+            {
+                return Unauthorized();
+            }
+
+            // Validate user has access to the plan (owner or accepted collaborator)
+            var sourcePlan = await dbContext.Plans
+                .Where(p => p.Id == id)
+                .Include(p => p.Notes)
+                .Include(p => p.PackingLists)
+                    .ThenInclude(pl => pl.PackingItems)
+                .Include(p => p.ExpenseItems)
+                .Include(p => p.ItineraryDays)
+                    .ThenInclude(iday => iday.ItineraryItems)
+                .FirstOrDefaultAsync();
+
+            if (sourcePlan == null)
+            {
+                return NotFound("Plan not found");
+            }
+
+            var isOwner = sourcePlan.OwnerId == userId;
+            var isCollaborator = await dbContext.Collaborators
+                .AnyAsync(c => c.PlanId == id && c.UserId == userId && c.Status == InvitationStatus.Accepted);
+            if (!isOwner && !isCollaborator)
+            {
+                return Forbid("You don't have access to this plan");
+            }
+
+            // Create new plan
+            var newPlan = new Plan
+            {
+                Id = Guid.NewGuid(),
+                OwnerId = userId.Value,
+                Name = !string.IsNullOrWhiteSpace(request.Name) ? request.Name : $"Copy of \"{sourcePlan.Name}\"",
+                CoverImageUrl = sourcePlan.CoverImageUrl,
+                StartTime = sourcePlan.StartTime,
+                EndTime = sourcePlan.EndTime,
+                Budget = sourcePlan.Budget,
+                CurrencyCode = sourcePlan.CurrencyCode,
+            };
+            await dbContext.Plans.AddAsync(newPlan);
+
+            // Copy ItineraryDays + ItineraryItems
+            foreach (var srcDay in sourcePlan.ItineraryDays)
+            {
+                var newDay = new ItineraryDay
+                {
+                    Id = Guid.NewGuid(),
+                    PlanId = newPlan.Id,
+                    Order = srcDay.Order,
+                    Title = srcDay.Title,
+                };
+                await dbContext.ItineraryDays.AddAsync(newDay);
+
+                foreach (var srcItem in srcDay.ItineraryItems.Where(ii => !ii.IsDeleted))
+                {
+                    dbContext.ItineraryItems.Add(new ItineraryItem
+                    {
+                        Id = Guid.NewGuid(),
+                        ItineraryDayId = newDay.Id,
+                        PlaceId = srcItem.PlaceId,
+                        StartTime = srcItem.StartTime,
+                        Duration = srcItem.Duration,
+                        Note = srcItem.Note,
+                    });
+                }
+            }
+
+            // Copy ExpenseItems
+            foreach (var srcExpense in sourcePlan.ExpenseItems)
+            {
+                dbContext.ExpenseItems.Add(new ExpenseItem
+                {
+                    Id = Guid.NewGuid(),
+                    PlanId = newPlan.Id,
+                    Category = srcExpense.Category,
+                    Name = srcExpense.Name,
+                    Amount = srcExpense.Amount,
+                });
+            }
+
+            // Copy PackingLists + PackingItems
+            foreach (var srcList in sourcePlan.PackingLists)
+            {
+                var newList = new PackingList
+                {
+                    Id = Guid.NewGuid(),
+                    PlanId = newPlan.Id,
+                    Name = srcList.Name,
+                };
+                await dbContext.PackingLists.AddAsync(newList);
+
+                foreach (var srcItem in srcList.PackingItems)
+                {
+                    dbContext.PackingItems.Add(new PackingItem
+                    {
+                        Id = Guid.NewGuid(),
+                        PackingListId = newList.Id,
+                        Name = srcItem.Name,
+                        IsPacked = false,
+                    });
+                }
+            }
+
+            // Copy Notes
+            foreach (var srcNote in sourcePlan.Notes)
+            {
+                dbContext.Notes.Add(new Note
+                {
+                    Id = Guid.NewGuid(),
+                    PlanId = newPlan.Id,
+                    Title = srcNote.Title,
+                    Content = srcNote.Content,
+                });
+            }
+
+            await dbContext.SaveChangesAsync();
+
+            return Ok(new { id = newPlan.Id, name = newPlan.Name });
         }
     }
 }

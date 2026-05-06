@@ -104,16 +104,8 @@ One compact, welcoming paragraph highlighting destination, dates, travelers, and
 
 ### Closing & Next Steps
 - End your response by asking if they want to modify the current result.
-- Currently, the user has built: {built_sections_text}.
-- Mention what is still missing and ask if they want you to work on those next.
-- **CRITICAL**: ONLY suggest actions from this list of what the system can do:
-  - Modify the itinerary (add/remove/rearrange places, change times)
-  - Search for flights
-  - Search for hotels/accommodations
-  - Search for restaurants
-  - Search for attractions/sightseeing
-  - Adjust budget/packing/travel notes
-- Do NOT suggest actions like "book a hotel", "reserve a table", "buy tickets", "set up notifications", or any feature not listed above.
+- Suggest next steps using ONLY the items from the "Suggested Next Steps" section (injected below), but rephrase them as friendly, natural sentences — do NOT list them as raw action labels.
+- Do NOT suggest actions like "book a hotel", "reserve a table", "buy tickets", "set up notifications", or any feature not in the suggested list.
 
 ### Full Plan — Hotel & Flight Recommendations
 - If this is a Full Plan (flights + hotels + itinerary generated together), include a brief paragraph explaining WHY you chose the recommended hotel and flight.
@@ -156,8 +148,9 @@ def _build_curated_context(agent_outputs: dict, plan_context: dict, aggregated_c
         ctx["trip_overview"] = mobility["overview"]
     parts.append(f"--- PLAN CONTEXT ---\n{json.dumps(ctx, ensure_ascii=False, indent=2)}\n")
 
-    # Aggregated budget (already curated by cost_aggregator)
-    parts.append(f"--- AGGREGATED BUDGET ---\n{json.dumps(aggregated_costs, ensure_ascii=False, indent=2)}\n")
+    # Aggregated budget (already curated by cost_aggregator) — skip if empty
+    if aggregated_costs and aggregated_costs.get("categories"):
+        parts.append(f"--- AGGREGATED BUDGET ---\n{json.dumps(aggregated_costs, ensure_ascii=False, indent=2)}\n")
 
     # Flight — recommended flights (with google_flights_url) + total price + alternatives
     flight = agent_outputs.get("flight_agent", {})
@@ -245,8 +238,15 @@ def _build_curated_context(agent_outputs: dict, plan_context: dict, aggregated_c
                 
         curated_itinerary = {
             "days": curated_days,
-            "dropped": itinerary.get("dropped", []),
         }
+
+        # Inject schedule warnings if violations exist
+        if itinerary.get("has_violations"):
+            curated_itinerary["schedule_warnings"] = [
+                f"Day {v['day']}: {v['stop_name']} — {v['issue']}"
+                for v in itinerary.get("violations", [])
+            ]
+
         parts.append(f"--- DAILY ITINERARY ---\n{json.dumps(curated_itinerary, ensure_ascii=False, indent=2)}\n")
 
     # Weather — curated daily forecast
@@ -286,9 +286,11 @@ def _build_curated_context(agent_outputs: dict, plan_context: dict, aggregated_c
         }
         parts.append(f"--- RESTAURANTS ---\n{json.dumps(curated_restaurant, ensure_ascii=False, indent=2)}\n")
 
-    # Attraction — curated for standalone or pipeline
+    # Attraction — only inject raw data when there's no itinerary
+    # In pipeline mode with itinerary, attraction data is already in DAILY ITINERARY
     attraction = agent_outputs.get("attraction_agent", {})
-    if attraction and not attraction.get("skipped"):
+    has_itinerary = bool(agent_outputs.get("itinerary_agent", {}).get("days"))
+    if attraction and not attraction.get("skipped") and not has_itinerary:
         curated_segments = []
         for seg in attraction.get("segments", []):
             curated_attractions = []
@@ -306,14 +308,17 @@ def _build_curated_context(agent_outputs: dict, plan_context: dict, aggregated_c
             })
         parts.append(f"--- ATTRACTIONS ---\n{json.dumps(curated_segments, ensure_ascii=False, indent=2)}\n")
 
-    # Preparation — budget breakdown, packing, notes
+    # Preparation — packing and notes (budget is already in AGGREGATED BUDGET in pipeline mode)
     prep = agent_outputs.get("preparation_agent", {})
     if prep and not prep.get("skipped"):
         curated_prep = {
-            "budget": prep.get("budget", {}),
             "packing_lists": prep.get("packing_lists", []),
             "notes": prep.get("notes", []),
         }
+        if not (aggregated_costs and aggregated_costs.get("categories")):
+            budget = prep.get("budget", {})
+            if budget:
+                curated_prep["budget"] = budget
         parts.append(f"--- PREPARATION ---\n{json.dumps(curated_prep, ensure_ascii=False, indent=2)}\n")
 
     return "\n".join(parts)
@@ -334,7 +339,6 @@ async def synthesize_agent_node(state: GraphState) -> dict[str, Any]:
     current_plan = state.get("current_plan") or {}
 
     # RESTORE MISSING AGENT OUTPUTS FROM CURRENT_PLAN
-    # Because intent.py wipes agent_outputs on every turn, we must restore
     # the outputs of agents that didn't run in this turn from the current_plan cache.
     if "flight_agent" not in agent_outputs and "flight_search" in current_plan:
         agent_outputs["flight_agent"] = current_plan["flight_search"]
@@ -354,16 +358,15 @@ async def synthesize_agent_node(state: GraphState) -> dict[str, Any]:
         agent_outputs["itinerary_agent"] = current_plan["itinerary"]
 
     # Determine mode
-    STANDALONE_INTENTS = ("search_flights", "search_hotels", "suggest_attractions", "search_restaurants", "preparation_inquiry")
+    STANDALONE_INTENTS = ("search_flights", "search_hotels", "suggest_attractions", "search_restaurants", "preparation_inquiry", "modify_preparation")
     SELECT_INTENTS = ("select_flight", "select_hotel", "select_restaurant")
     is_standalone = intent in STANDALONE_INTENTS
     is_select = intent in SELECT_INTENTS
-    is_simple = intent in ("general", "clarification_needed")
 
     plan_context = current_plan.get("plan_context", {})
     mobility_plan = plan.get("mobility_plan", {})
     
-    # We prioritize user_request_rewrite to focus Synthesize on the actionable intent
+    # prioritize user_request_rewrite to focus Synthesize on the actionable intent
     user_request_rewrite = intent_output.get("user_request_rewrite", "")
     
     # Determine what sections are already built to prompt next-step suggestions
@@ -373,14 +376,10 @@ async def synthesize_agent_node(state: GraphState) -> dict[str, Any]:
     if current_plan.get("packing"): built_sections.append("Packing List")
     if plan_context: built_sections.append("Basic Trip Parameters")
 
-    built_sections_text = ', '.join(built_sections) if built_sections else 'Nothing yet'
-    system_content = SYNTHESIZE_SYSTEM.replace("{built_sections_text}", built_sections_text)
+    system_content = SYNTHESIZE_SYSTEM
     aggregated_costs = {}
 
-    if is_simple:
-        system_content += "\n\nThis is a simple query/greeting. Respond naturally to the user in their language without outputting a full travel plan template."
-        structured_output = {}
-    elif is_standalone:
+    if is_standalone:
         # ═══ STANDALONE MODE ═══
         agent_name_map = {
             "search_flights": "Flight",
@@ -388,6 +387,7 @@ async def synthesize_agent_node(state: GraphState) -> dict[str, Any]:
             "suggest_attractions": "Attraction",
             "search_restaurants": "Restaurant",
             "preparation_inquiry": "Preparation & Budget",
+            "modify_preparation": "Preparation & Budget",
         }
         agent_label = agent_name_map.get(intent, "Agent")
         response_language = plan_context.get("language", "en")
@@ -442,6 +442,7 @@ You are presenting {agent_label} search results — NOT a full travel plan.
             "suggest_attractions": "attraction_agent",
             "search_restaurants": "restaurant_agent",
             "preparation_inquiry": "preparation_agent",
+            "modify_preparation": "preparation_agent",
         }
         target_agent_key = agent_key_map_standalone.get(intent)
         filtered_outputs = {target_agent_key: agent_outputs.get(target_agent_key)} if target_agent_key and target_agent_key in agent_outputs else {}
@@ -459,16 +460,18 @@ You are presenting {agent_label} search results — NOT a full travel plan.
 You MUST respond in language code: {response_language}
 All your output text must be in this language.
 """
-        # Add draft mode note if applicable
-        if intent == "draft_plan":
-            system_content += """
+        # Dynamic check: which agents did NOT run in this turn?
+        missing_agents = []
+        if "flight_agent" not in agent_outputs: missing_agents.append("Flight")
+        if "hotel_agent" not in agent_outputs: missing_agents.append("Hotel")
+        if "restaurant_agent" not in agent_outputs: missing_agents.append("Restaurant")
+        if missing_agents:
+            system_content += f"""
 
-## DRAFT MODE — STRICT RULES
-This is a DRAFT plan. The following agents did NOT run: Flight, Hotel, Restaurant.
-- DO NOT invent missing data. If constraints couldn't be met, honestly state it.
-- Since this is an isolated query, mention what exists explicitly in the data block.
-- At the end of your response, ask if they are satisfied with these results or if they want to modify them. Also briefly suggest continuing to build the rest of their plan (e.g. itinerary, budget) if they haven't been built yet.
-- Budget estimates for flights/hotels/restaurants come from the Preparation Agent — show them ONLY in the 💰 Budget Breakdown table, clearly marked as estimates (~).
+## AGENTS NOT RUNNING: {', '.join(missing_agents)}
+- DO NOT invent data for agents that did not run.
+- Budget estimates for missing agents come from the Preparation Agent — show them ONLY in the 💰 Budget Breakdown table, clearly marked as estimates (~).
+- At the end, ask if the user is satisfied with the results or wants to modify them.
 """
 
         # 1. Aggregate Costs
@@ -507,22 +510,57 @@ You are presenting an UPDATED itinerary after the user requested changes.
 """
             if not fulfilled and mod_notes:
                 modify_instructions += f"""
-## CONSTRAINT COMPROMISE (MUST EXPLAIN TO USER)
+## REQUEST COULD NOT BE FULFILLED
 The Itinerary Agent could NOT fulfill the user's exact request due to real-world constraints.
-You MUST apologize, explain exactly why their original request failed, and present the compromise.
+The original schedule has been KEPT unchanged.
+You MUST clearly explain WHY the request could not be fulfilled and suggest what the user can do instead.
 
 Notes from Itinerary Agent:
 {mod_notes}
 
-Example tone: "I've updated the schedule, but unfortunately [attraction] is closed at that time. I've scheduled it for [new time] instead."
+Example tone: "I'm sorry, but [attraction] is closed on [day]. Your schedule remains unchanged."
 """
             elif fulfilled:
-                modify_instructions += """
+                # Check for code-detected violations (Accept but Warn)
+                has_violations = itinerary_data.get("has_violations", False)
+                if has_violations:
+                    violation_list = itinerary_data.get("violations", [])
+                    violation_text = "\n".join(
+                        f"- Day {v['day']}: {v['stop_name']} — {v['issue']}" for v in violation_list
+                    )
+                    modify_instructions += f"""
+## SUCCESSFUL MODIFICATION (WITH WARNINGS)
+The schedule was updated as requested, but there are some timing issues that could not be fully resolved:
+{violation_text}
+
+You MUST:
+1. Confirm the changes were applied
+2. Add a ⚠️ note mentioning these timing issues so the user is aware
+3. Suggest the user can ask to adjust the schedule further if needed
+"""
+                else:
+                    modify_instructions += """
 ## SUCCESSFUL MODIFICATION
 The schedule was updated successfully.
 At the end, suggest 1-2 next steps briefly.
 """
             system_content += modify_instructions
+
+        # 4b. For pipeline/full_plan mode: check violations on fresh schedules
+        itinerary_data_check = agent_outputs.get("itinerary_agent", {})
+        if intent not in ("modify_itinerary",) and itinerary_data_check.get("has_violations"):
+            violation_list = itinerary_data_check.get("violations", [])
+            violation_text = "\n".join(
+                f"- Day {v['day']}: {v['stop_name']} — {v['issue']}" for v in violation_list
+            )
+            system_content += f"""
+
+## ⚠️ SCHEDULE WARNINGS
+The generated itinerary has some timing issues that could not be fully resolved:
+{violation_text}
+
+Include a brief ⚠️ note in your response mentioning these issues so the user is aware and can request adjustments.
+"""
 
         # 5. Add selection-triggered rerange instructions
         if is_select:
@@ -558,7 +596,27 @@ The user selected a new {sel_type} from previous search results.
 
         logger.info(f"   Curated context size: {len(context_str):,} chars")
 
-    # ── (feasibility short circuit removed) ──
+    # ── Pre-compute suggestions BEFORE LLM call ──────────────────
+    # Project what current_plan will look like after merging this turn's outputs
+    projected_plan = dict(current_plan)
+    if "itinerary_agent" in agent_outputs: projected_plan["itinerary"] = agent_outputs["itinerary_agent"]
+    if "flight_agent" in agent_outputs: projected_plan["flight_search"] = agent_outputs["flight_agent"]
+    if "hotel_agent" in agent_outputs: projected_plan["hotel_search"] = agent_outputs["hotel_agent"]
+    if "restaurant_agent" in agent_outputs: projected_plan["restaurant_search"] = agent_outputs["restaurant_agent"]
+    if "preparation_agent" in agent_outputs:
+        prep = agent_outputs["preparation_agent"]
+        projected_plan["budget"] = prep.get("budget", {})
+    last_suggestions = _generate_suggestions(intent, agent_outputs, projected_plan)
+
+    # Inject suggestions into prompt so LLM naturally weaves them into closing text
+    if last_suggestions:
+        suggestion_lines = "\n".join(f"- {s['label']}" for s in last_suggestions)
+        system_content += f"""\n\n## Suggested Next Steps
+The following actions are available for the user's next step:
+{suggestion_lines}
+
+**IMPORTANT**: Do NOT list these as raw action names or a bullet list. Instead, naturally weave them into 1-3 friendly, conversational sentences that invite the user to take action. Do NOT suggest actions outside this list.
+"""
 
     # Build LLM messages — only system prompt + one user message
     llm_messages = [SystemMessage(content=system_content)]
@@ -604,6 +662,7 @@ The user selected a new {sel_type} from previous search results.
             "suggest_attractions": "attraction_agent",
             "search_restaurants": "restaurant_agent",
             "preparation_inquiry": "preparation_agent",
+            "modify_preparation": "preparation_agent",
         }
         target_agent_key = agent_key_map_standalone.get(intent)
         
@@ -630,7 +689,7 @@ The user selected a new {sel_type} from previous search results.
         if plan_context:
             structured_output["plan_context"] = plan_context
 
-    elif not is_simple:
+    else:
         structured_output["plan_context"] = plan_context
         structured_output["aggregated_costs"] = aggregated_costs
 
@@ -648,8 +707,6 @@ The user selected a new {sel_type} from previous search results.
             structured_output["packing_lists"] = prep.get("packing_lists", [])
             structured_output["notes"] = prep.get("notes", [])
             structured_output["preparation"] = prep
-        if "itinerary_agent" in agent_outputs:
-            structured_output["daily_schedules"] = agent_outputs["itinerary_agent"].get("daily_schedules", [])
 
         # Build normalized apply_data for frontend → .NET Apply endpoint
         try:
@@ -695,10 +752,8 @@ The user selected a new {sel_type} from previous search results.
             current_plan["packing"] = prep.get("packing_lists", [])
             current_plan["notes"] = prep.get("notes", [])
 
-    elif not is_simple:
+    else:
         current_plan["plan_context"] = plan_context
-        if intent != "modify_itinerary" and not is_select:
-            current_plan["is_draft"] = (intent == "draft_plan")
 
         if "itinerary_agent" in agent_outputs:
             current_plan["itinerary"] = agent_outputs["itinerary_agent"]
@@ -716,11 +771,8 @@ The user selected a new {sel_type} from previous search results.
             current_plan["restaurant_search"] = agent_outputs["restaurant_agent"]
         if "attraction_agent" in agent_outputs:
             current_plan["attraction_search"] = agent_outputs["attraction_agent"]
-        if aggregated_costs:
-            current_plan["aggregated_costs"] = aggregated_costs
 
-    # ── Generate last_suggestions ──────────────────────────────────
-    last_suggestions = _generate_suggestions(intent, agent_outputs, current_plan)
+    # ── Save pre-computed suggestions ──────────────────────────────
     current_plan["last_suggestions"] = last_suggestions
     logger.info(f"   💡 Suggestions: {[s['label'] for s in last_suggestions]}")
 
@@ -735,60 +787,60 @@ The user selected a new {sel_type} from previous search results.
 
 
 def _generate_suggestions(intent: str, agent_outputs: dict, current_plan: dict) -> list[dict]:
-    """Generate contextual next-step suggestions based on current intent and global state."""
-    
-    is_draft = current_plan.get("is_draft", True)
-    has_flights = "flight_search" in current_plan or current_plan.get("mobility_plan", {}).get("inbound_flight")
-    has_hotels = "hotel_search" in current_plan or "mobility_plan" in current_plan
-    
-    SELECT_INTENTS = ("select_flight", "select_hotel")
-    is_select = intent in SELECT_INTENTS
-    
+    """Generate contextual next-step suggestions based on what was just done
+    and what the plan is still missing.
+
+    Strategy:
+      Slot 1 — "Adjust what was just done" (modify/redo current result)
+      Slot 2-3 — "What's missing from the plan?" (ordered by natural flow)
+    """
+    has_itinerary = bool(current_plan.get("itinerary"))
+    has_flights = bool(current_plan.get("flight_search"))
+    has_hotels = bool(current_plan.get("hotel_search"))
+    has_restaurants = bool(current_plan.get("restaurant_search"))
+    has_preparation = bool(
+        current_plan.get("budget")
+        or current_plan.get("packing")
+        or current_plan.get("notes")
+    )
+
     suggestions = []
-    
-    if intent == "draft_plan":
-        suggestions = [
-            {"label": "Search flights", "action": "search_flights"},
-            {"label": "Search hotels", "action": "search_hotels"},
-            {"label": "Search restaurants", "action": "search_restaurants"},
-        ]
-    elif intent == "modify_itinerary" or is_select:
-        suggestions.append({"label": "Modify more", "action": "modify_plan"})
-        if not has_flights:
-            suggestions.append({"label": "Search flights", "action": "search_flights"})
-        if not has_hotels:
-            suggestions.append({"label": "Search hotels", "action": "search_hotels"})
-        if has_flights and has_hotels:
-            suggestions.append({"label": "Search restaurants", "action": "search_restaurants"})
-    elif intent == "full_plan":
-        suggestions = [
-            {"label": "Modify itinerary", "action": "modify_plan"},
-            {"label": "Change hotel", "action": "search_hotels"},
-            {"label": "Find restaurants", "action": "search_restaurants"},
-        ]
-    elif intent == "preparation_inquiry":
-        suggestions = [
-            {"label": "Create detailed plan", "action": "draft_plan"},
-        ]
+    used_actions: set[str] = set()
+
+    def _add(label: str, action: str) -> None:
+        if action not in used_actions:
+            suggestions.append({"label": label, "action": action})
+            used_actions.add(action)
+
+    # ── Suggest adjusting what was just done ──────────────
+    PLAN_CREATION = ("draft_plan", "full_plan", "modify_itinerary")
+    SELECTION = ("select_flight", "select_hotel", "select_restaurant")
+
+    if intent in PLAN_CREATION or intent in SELECTION:
+        _add("Modify itinerary", "modify_itinerary")
+    elif intent in ("preparation_inquiry", "modify_preparation"):
+        _add("Adjust budget/packing", "modify_preparation")
     elif intent == "search_flights":
-        if not has_hotels:
-            suggestions.append({"label": "Search hotels", "action": "search_hotels"})
-        suggestions.append({"label": "Modify itinerary", "action": "modify_plan"})
+        _add("Search different flights", "search_flights")
     elif intent == "search_hotels":
-        if not has_flights:
-            suggestions.append({"label": "Search flights", "action": "search_flights"})
-        suggestions.append({"label": "Search restaurants", "action": "search_restaurants"})
-    elif intent == "suggest_attractions":
-        suggestions = [
-            {"label": "Create plan", "action": "draft_plan"},
-            {"label": "Search restaurants", "action": "search_restaurants"},
-        ]
+        _add("Search different hotels", "search_hotels")
     elif intent == "search_restaurants":
-        if not has_flights:
-            suggestions.append({"label": "Search flights", "action": "search_flights"})
-        if not has_hotels:
-            suggestions.append({"label": "Search hotels", "action": "search_hotels"})
-        suggestions.append({"label": "Modify itinerary", "action": "modify_plan"})
-        
-    # Ensure max 3 suggestions
+        _add("Search different restaurants", "search_restaurants")
+    elif intent == "suggest_attractions":
+        _add("Search more attractions", "suggest_attractions")
+
+    # ── Fill gaps — what's missing from the plan ───────
+    # Priority: itinerary → flights → hotels → restaurants → preparation
+    if not has_itinerary:
+        _add("Create plan", "draft_plan")
+    if has_itinerary and not has_flights:
+        _add("Search flights", "search_flights")
+    if has_itinerary and not has_hotels:
+        _add("Search hotels", "search_hotels")
+    if has_itinerary and not has_restaurants:
+        _add("Search restaurants", "search_restaurants")
+    if has_itinerary and not has_preparation:
+        _add("Budget & packing", "preparation_inquiry")
+
     return suggestions[:3]
+

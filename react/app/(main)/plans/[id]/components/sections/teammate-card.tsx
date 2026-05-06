@@ -1,28 +1,15 @@
-import { Check, Pencil, Trash2, X } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { getInitials, getResizedImageUrl } from "@/utils/image";
-import { Participant } from "@/types/participant";
-import { InvitationStatus, PlanRole } from "@/api/participant/types";
-import { TEAMMATE_ROLES } from "@/constants/participant";
+import { Collaborator } from "@/types/collaborator";
+import { InvitationStatus, PlanRole } from "@/api/collaborator/types";
+import { COLLABORATOR_ROLES } from "@/constants/collaborator";
+import ActionMenu from "@/components/action-menu";
+import { Trash } from "lucide-react";
 
-interface TeammateCardProps {
-  teammate: Participant;
-  isEditing: boolean;
-  editRole: PlanRole;
-  onRoleChange: (role: PlanRole) => void;
-  onConfirm: () => void;
-  onCancel: () => void;
-  onEdit: () => void;
-  onDelete: () => void;
-  isOwner?: boolean;
-  containerRef?: React.RefObject<HTMLDivElement | null>;
+interface CollaboratorCardProps {
+  collaborator: Collaborator;
+  onDelete?: (collaborator: Collaborator) => void;
 }
 
 export const getRoleBadgeColor = (role: PlanRole) => {
@@ -36,18 +23,10 @@ export const getRoleBadgeColor = (role: PlanRole) => {
   }
 };
 
-export default function TeammateCard({
-  teammate,
-  isEditing,
-  editRole,
-  onRoleChange,
-  onConfirm,
-  onCancel,
-  onEdit,
+export default function CollaboratorCard({
+  collaborator,
   onDelete,
-  isOwner = false,
-  containerRef,
-}: TeammateCardProps) {
+}: CollaboratorCardProps) {
   const getStatusBadgeColor = (status: InvitationStatus) => {
     switch (status) {
       case InvitationStatus.Accepted:
@@ -59,95 +38,27 @@ export default function TeammateCard({
     }
   };
 
-  if (isEditing) {
-    return (
-      <div
-        ref={containerRef}
-        className="p-3 bg-gray-100 rounded-lg flex items-center justify-between border-2 border-blue-400 border-dashed"
-      >
-        <div className="flex items-center gap-3">
-          <Avatar className="h-10 w-10">
-            <AvatarImage
-              src={getResizedImageUrl(teammate.avatarUrl ?? "", 256, 256)}
-              alt={teammate.name}
-            />
-            <AvatarFallback className="bg-blue-500 text-white text-sm">
-              {getInitials(teammate.name, teammate.username)}
-            </AvatarFallback>
-          </Avatar>
-
-          <div className="flex flex-col">
-            <span className="text-sm font-medium text-gray-700">
-              {teammate.username}
-            </span>
-            <span className="text-xs text-gray-500">{teammate.name}</span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className="px-3 py-1.5 text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 transition-colors">
-                {TEAMMATE_ROLES.find((r) => r.value === editRole)?.label}
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {TEAMMATE_ROLES.filter((r) => r.value !== PlanRole.Owner).map(
-                (role) => (
-                  <DropdownMenuItem
-                    key={role.value}
-                    onClick={() => onRoleChange(role.value)}
-                    className="cursor-pointer"
-                  >
-                    {role.label}
-                  </DropdownMenuItem>
-                ),
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <div className="flex gap-1">
-            <button
-              onClick={onCancel}
-              className="cursor-pointer p-1.5 rounded-md bg-gray-300 hover:bg-gray-400 text-gray-700 transition-colors"
-              title="Cancel"
-            >
-              <X size={14} />
-            </button>
-            <button
-              onClick={onConfirm}
-              className="cursor-pointer p-1.5 rounded-md bg-green-400 hover:bg-green-500 text-white transition-colors"
-              title="Confirm"
-            >
-              <Check size={14} />
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="group p-3 bg-gray-100 rounded-lg flex items-center justify-between">
+    <div className="p-3 bg-gray-100 rounded-lg flex items-center justify-between group relative">
       <div className="flex items-center gap-3">
         <Avatar className="h-10 w-10">
           <AvatarImage
-            src={getResizedImageUrl(teammate.avatarUrl ?? "", 256, 256)}
-            alt={teammate.name}
+            src={getResizedImageUrl(collaborator.avatarUrl ?? "", 256, 256)}
+            alt={collaborator.name}
           />
           <AvatarFallback className="bg-blue-500 text-white text-sm">
-            {getInitials(teammate.name, teammate.username)}
+            {getInitials(collaborator.name, collaborator.username)}
           </AvatarFallback>
         </Avatar>
 
         <div className="flex flex-col">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-gray-700">
-              {teammate.name
-                ? `${teammate.name} (${teammate.username})`
-                : teammate.username}
+              {collaborator.name
+                ? `${collaborator.name} (${collaborator.username})`
+                : collaborator.username}
             </span>
-            {teammate.status === InvitationStatus.Pending && (
+            {collaborator.status === InvitationStatus.Pending && (
               <Badge
                 variant="secondary"
                 className={getStatusBadgeColor(InvitationStatus.Pending)}
@@ -159,30 +70,28 @@ export default function TeammateCard({
           <div className="flex items-center gap-2">
             <Badge
               variant="secondary"
-              className={getRoleBadgeColor(teammate.role)}
+              className={getRoleBadgeColor(collaborator.role)}
             >
-              {TEAMMATE_ROLES.find((r) => r.value === teammate.role)?.label}
+              {COLLABORATOR_ROLES.find((r) => r.value === collaborator.role)?.label}
             </Badge>
           </div>
         </div>
       </div>
 
-      {!isOwner && (
-        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          {/* <button
-            className="cursor-pointer rounded-md p-1.5 bg-yellow-400 hover:bg-yellow-500 text-white"
-            onClick={onEdit}
-            title="Edit role"
-          >
-            <Pencil size={14} />
-          </button> */}
-          <button
-            className="cursor-pointer rounded-md p-1.5 bg-red-400 hover:bg-red-500 text-white"
-            onClick={onDelete}
-            title="Remove"
-          >
-            <Trash2 size={14} />
-          </button>
+      {onDelete && (
+        <div className="absolute right-3 opacity-0 group-hover:opacity-100 has-[[data-state=open]]:opacity-100 transition-opacity">
+          <ActionMenu
+            options={[
+              {
+                label: "Remove",
+                icon: Trash,
+                onClick: () => onDelete(collaborator),
+                variant: "delete",
+              },
+            ]}
+            iconSize={16}
+            ellipsisSize={16}
+          />
         </div>
       )}
     </div>

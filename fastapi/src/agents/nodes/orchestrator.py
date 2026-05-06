@@ -123,7 +123,7 @@ If the user did NOT mention a specific preference, do NOT invent one — the age
 
 ## task_list Rules
 - MUST include "attraction"
-- ONLY include "flight", "hotel", and "restaurant" IF the intent is `full_plan` (or if explicitly requested in `modify_plan`) AND they are applicable:
+- ONLY include "flight", "hotel", and "restaurant" IF the intent is `full_plan` AND they are applicable:
   - Include "flight" ONLY if intent is full_plan AND departure_logistics.mode is "flight" AND user needs flight.
   - Include "hotel" ONLY if intent is full_plan AND user needs hotel.
   - Include "restaurant" ONLY if intent is full_plan AND user needs restaurant.
@@ -244,10 +244,10 @@ Do NOT proactively suggest day trips to other regions unless the user asks.
 - Attraction preferences MUST NOT include food/cuisine-related interests.
 """
 
-async def _resolve_non_flight_hubs(plan: dict, state_plan_context: dict = None) -> dict:
-    """Resolve non-flight transport hubs using LLM-verified pattern.
+async def _resolve_transport_hubs(plan: dict, state_plan_context: dict = None) -> dict:
+    """Resolve transport hubs (including draft-mode flight airports) using LLM-verified pattern.
 
-    When mode is coach/train, hub_name is an LLM-generated name (e.g., "Bến xe Hà Giang").
+    When mode is coach/train/flight(estimated), hub_name is an LLM-generated name.
     We resolve it to a real placeId using the same LLM-verified approach as Attraction Agent.
 
     Modifies plan in-place, adding hub_placeId to logistics.
@@ -257,8 +257,11 @@ async def _resolve_non_flight_hubs(plan: dict, state_plan_context: dict = None) 
     ret_log = mobility_plan.get("return_logistics") or {}
     mode = dep_log.get("mode", "")
 
-    # Only resolve for non-flight modes with hub_name
-    if mode in ("flight", "") or not mode:
+    # Skip if no mode
+    if not mode:
+        return plan
+    # For flight mode: only resolve in draft (estimated) — full_plan has tool-resolved names
+    if mode == "flight" and not dep_log.get("estimated"):
         return plan
 
     destination = state_plan_context.get("destination", "") if state_plan_context else ""
@@ -342,18 +345,8 @@ You are creating a DRAFT plan. For departure_logistics/return_logistics:
 - If mode is "flight": you MUST provide estimated timing (hub_name, start_time, arrival_time, estimated: true).
   Flight Agent will NOT run — your estimates will be used directly.
 - For hotel: provide hotel_search_area in segments as usual (Hotel Agent will NOT run).
-- For tasks: you MUST still provide attraction and restaurant context.
-  Flight and hotel task sections can be null (agents won't run).
-"""
-        elif user_intent == "modify_plan":
-            system_content += """
-
-## MODIFY MODE ACTIVE
-You are MODIFYING an existing plan. The existing plan context is provided below.
-- Incorporate the user's requested changes into the plan.
-- Keep unchanged sections as-is — only modify what the user asked to change.
-- If the user changed dates/travelers, update ALL affected sections accordingly.
-- Re-generate the full plan structure with the modifications applied.
+- For tasks: you MUST still provide attraction context.
+  Flight, hotel, and restaurant task sections can be null (agents won't run).
 """
 
         # ── Context from Intent Agent ──
@@ -430,16 +423,12 @@ You are MODIFYING an existing plan. The existing plan context is provided below.
             "agent_requests": agent_requests,
         }
 
-        # Phase 2: Resolve non-flight transport hubs (skip for draft estimated flights)
-        dep_log = (mobility_plan.get("departure_logistics") or {})
-        if not dep_log.get("estimated"):
-            macro_plan = await _resolve_non_flight_hubs(macro_plan, plan_ctx)
+        # Phase 2: Resolve transport hubs (including draft-mode flight airports)
+        macro_plan = await _resolve_transport_hubs(macro_plan, plan_ctx)
 
         logger.info(f"   🚀 Plan created: {task_list}")
 
         return {
-            "pending_tasks": task_list,
-            "completed_tasks": [],
             "macro_plan": macro_plan,
             "current_plan": current_plan,
             "agent_outputs": {"orchestrator": {"intent": user_intent, "tasks": task_list}},
@@ -453,8 +442,6 @@ You are MODIFYING an existing plan. The existing plan context is provided below.
         language = plan_context.get("language", "en")
         fallback = "Đã xảy ra lỗi khi phân tích chuyến đi. Vui lòng thử lại." if language == "vi" else "I'm sorry, I encountered an error. Could you try rephrasing your request?"
         return {
-            "pending_tasks": [],
-            "completed_tasks": [],
             "macro_plan": {"task_list": []},
             "agent_outputs": {"orchestrator": {"error": str(e)}},
 

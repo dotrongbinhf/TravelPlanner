@@ -40,7 +40,7 @@ export type CreateMessageRequest = {
 
 
 
-// Agent streaming event types (received via SignalR from .NET → FastAPI)
+// Agent streaming event types (received via SSE from .NET → FastAPI)
 export type AgentEvent = {
   eventType:
     | "agent_start"

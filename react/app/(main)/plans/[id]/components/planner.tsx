@@ -11,16 +11,17 @@ import Overview from "./sections/overview";
 import Itinerary from "./sections/itinerary";
 import Budget from "./sections/budget";
 import PackingLists from "./sections/packing-lists";
-import Teammates from "./sections/teammates";
+import Sharing from "./sections/teammates";
 import Notes from "./sections/notes";
 import { sectionItems } from "./sidebar";
 import { useMemo } from "react";
 import { Plan } from "@/types/plan";
 import { Note } from "@/types/note";
 import { PackingList } from "@/types/packingList";
-import { Participant } from "@/types/participant";
+import { Collaborator } from "@/types/collaborator";
 import { ExpenseItem } from "@/types/budget";
 import { ItineraryDay } from "@/types/itineraryDay";
+import { useAppContext } from "@/contexts/AppContext";
 
 interface PlannerProps {
   readonly sectionRefs: RefObject<{
@@ -39,6 +40,8 @@ export default function Planner({
   plan,
   setPlan,
 }: PlannerProps) {
+  const { user } = useAppContext();
+  
   const planStartTime = useMemo(
     () => (plan?.startTime ? new Date(plan.startTime) : null),
     [plan?.startTime],
@@ -114,12 +117,12 @@ export default function Planner({
     });
   };
 
-  const updateParticipants = (participants: Participant[]) => {
+  const updateCollaborators = (collaborators: Collaborator[]) => {
     setPlan((prev) => {
       if (!prev) return null;
       return {
         ...prev,
-        participants,
+        collaborators,
       };
     });
   };
@@ -206,7 +209,6 @@ export default function Planner({
             coverImageUrl={plan.coverImageUrl}
             startTime={planStartTime || new Date()}
             endTime={planEndTime || new Date()}
-            participantCount={plan?.participants?.length ?? 1}
             placesCount={
               plan?.itineraryDays?.reduce(
                 (count, itineraryDay) =>
@@ -263,16 +265,6 @@ export default function Planner({
         </div>
 
         <div className="rounded-lg border-2 border-gray-200 p-6">
-          <Teammates
-            ref={(el) => {
-              sectionRefs.current["teammates"] = el;
-            }}
-            participants={plan.participants ?? []}
-            onUpdate={updateParticipants}
-          />
-        </div>
-
-        <div className="rounded-lg border-2 border-gray-200 p-6">
           <Notes
             ref={(el) => {
               sectionRefs.current["notes"] = el;
@@ -280,6 +272,18 @@ export default function Planner({
             planId={plan.id}
             notes={plan.notes ?? []}
             updateNotes={updateNotes}
+          />
+        </div>
+
+        <div className="rounded-lg border-2 border-gray-200 p-6">
+          <Sharing
+            ref={(el) => {
+              sectionRefs.current["sharing"] = el;
+            }}
+            planId={plan.id}
+            isOwner={plan.ownerId === user?.id}
+            collaborators={plan.collaborators ?? []}
+            updateCollaborators={updateCollaborators}
           />
         </div>
 

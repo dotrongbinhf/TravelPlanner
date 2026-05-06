@@ -11,7 +11,7 @@ export interface ActionOption {
   label: string;
   icon?: LucideIcon;
   onClick: () => void;
-  variant?: "default" | "delete" | "edit";
+  variant?: "default" | "delete" | "edit" | "clone";
 }
 
 interface ActionMenuProps {
@@ -59,6 +59,7 @@ export default function ActionMenu({
                   "rounded-md",
                   option.variant === "delete" && "p-1.5 bg-red-400",
                   option.variant === "edit" && "p-1.5 bg-yellow-400",
+                  option.variant === "clone" && "p-1.5 bg-blue-400",
                 )}
               >
                 <option.icon

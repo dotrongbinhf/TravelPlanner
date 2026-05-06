@@ -28,7 +28,7 @@ export function isCrossDayEvent(
   return totalMinutes >= 24 * 60;
 }
 
-function calcEndTime(startTime: string, duration: string): string {
+export function calcEndTime(startTime: string, duration: string): string {
   const [sH, sM] = startTime.split(":").map(Number);
   const [dH, dM] = duration.split(":").map(Number);
   const totalMinutes = sH * 60 + sM + dH * 60 + dM;

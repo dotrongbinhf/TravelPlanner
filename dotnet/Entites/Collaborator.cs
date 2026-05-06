@@ -1,8 +1,8 @@
-﻿using dotnet.Enums;
+using dotnet.Enums;
 
 namespace dotnet.Entites
 {
-    public class Participant : BaseAuditableEntity
+    public class Collaborator : BaseAuditableEntity
     {
         public Guid Id { get; set; }
         public Guid UserId { get; set; }

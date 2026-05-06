@@ -459,6 +459,7 @@ export default function PromptBuilder({
               updateField("endDate", end);
             }}
             className="text-sm h-9"
+            minDate={new Date()}
           />
         </FormField>
 

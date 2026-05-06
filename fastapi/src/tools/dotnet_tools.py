@@ -80,30 +80,26 @@ async def search_hotels(
 
 @tool
 async def search_airports(
-    lat: float,
-    lon: float,
-    radius_km: int = 100,
-    limit: int = 5,
+    query: str,
+    hl: str = "en",
+    gl: str = "us",
 ) -> dict[str, Any]:
-    """Search for airports near a geographic location.
+    """Search for airports near a location by name using Google Flights Autocomplete.
     
     Args:
-        lat: Latitude of the location.
-        lon: Longitude of the location.
-        radius_km: Search radius in kilometers (default 100).
-        limit: Maximum number of results (default 5).
+        query: Location name to search for nearby airports (e.g. "Bắc Ninh", "Da Nang", "Tokyo").
+        hl: Language code for results (e.g. "en", "vi", "ja"). Default "en".
+        gl: Country code for search context (e.g. "us", "vn", "jp"). Default "us".
 
     Returns:
-        List of nearby airports with IATA codes.
+        List of location suggestions, each containing nearby airports with IATA codes.
     """
     params = {
-        "lat": lat,
-        "lon": lon,
-        "radiusKm": radius_km,
-        "limit": limit,
-        "withFlightInfoOnly": True,
+        "q": query,
+        "hl": hl,
+        "gl": gl,
     }
-    logger.info(f"[search_airports] lat={lat}, lon={lon}, radius={radius_km}km")
+    logger.info(f"[search_airports] query={query}, hl={hl}, gl={gl}")
     result = await dotnet_client.get("/api/flight/airports", params=params)
     return result
 
@@ -261,4 +257,3 @@ async def create_place_in_db(place_data: dict[str, Any]) -> dict[str, Any]:
     logger.info(f"[create_place_in_db] placeId={place_data.get('placeId', 'unknown')}")
     result = await dotnet_client.post("/api/place", data=place_data)
     return result
-

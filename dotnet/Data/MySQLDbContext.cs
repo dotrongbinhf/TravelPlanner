@@ -1,4 +1,4 @@
-﻿using dotnet.Entites;
+using dotnet.Entites;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
@@ -45,7 +45,7 @@ namespace dotnet.Data
         }
         public DbSet<User> Users { get; set; }
         public DbSet<Plan> Plans { get; set; }
-        public DbSet<Participant> Participants { get; set; }
+        public DbSet<Collaborator> Collaborators { get; set; }
         public DbSet<ItineraryItem> ItineraryItems { get; set; }
         public DbSet<ExpenseItem> ExpenseItems { get; set; }
         public DbSet<PackingList> PackingLists { get; set; }

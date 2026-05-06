@@ -244,9 +244,11 @@ export default function ItineraryItemCard({
               <h4 className="font-semibold text-gray-900 truncate text-sm leading-tight">
                 {place.title}
               </h4>
-              
+
               {place.address && (
-                <p className="text-xs text-gray-500 truncate">{place.address}</p>
+                <p className="text-xs text-gray-500 truncate">
+                  {place.address}
+                </p>
               )}
               {place.category && (
                 <span className="text-[10px] uppercase font-bold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded border shrink-0 tracking-wide w-fit">
@@ -260,7 +262,10 @@ export default function ItineraryItemCard({
                     <span className="text-yellow-700 font-bold">
                       {place.reviewRating.toFixed(1)}
                     </span>
-                    <Star size={10} className="fill-yellow-500 text-yellow-500" />
+                    <Star
+                      size={10}
+                      className="fill-yellow-500 text-yellow-500"
+                    />
                   </div>
                 )}
 

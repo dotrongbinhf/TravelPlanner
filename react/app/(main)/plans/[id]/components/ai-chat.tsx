@@ -299,8 +299,8 @@ export default function AIChat({
       setActivePopup(null);
 
       try {
-        // Send to AI agent system via SignalR
-        // .NET Hub saves user message to DB before forwarding to FastAPI
+        // Send to AI agent system via SSE stream
+        // .NET controller saves user message to DB before forwarding to FastAPI
         streamingConversationIdRef.current = activeConversationId;
         await sendAgentMessage(activeConversationId, userContent);
       } catch (error) {

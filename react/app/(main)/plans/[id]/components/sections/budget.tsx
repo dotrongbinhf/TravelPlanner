@@ -103,6 +103,9 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
     null,
   );
 
+  // Accordion state
+  const [openCategories, setOpenCategories] = useState<string[]>([]);
+
   const newExpenseRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const editExpenseRef = useRef<HTMLDivElement>(null);
@@ -153,6 +156,9 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
     setNewName("");
     setNewAmount("");
     setNewCategory(category);
+    setOpenCategories((prev) =>
+      prev.includes(category.toString()) ? prev : [...prev, category.toString()],
+    );
   };
 
   const handleConfirmAdd = async () => {
@@ -220,6 +226,7 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
     const rawValue = editAmount.replace(/[^\d]/g, "");
     const amount = parseInt(rawValue) || 0;
     if (editingId && editName.trim() && amount > 0) {
+      const originalExpense = expenseItems.find((e) => e.id === editingId);
       try {
         const updatedExpense = await updateExpenseItem(editingId, {
           name: editName.trim(),
@@ -229,14 +236,26 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
         updateExpenseItems(
           expenseItems.map((e) => (e.id === editingId ? updatedExpense : e)),
         );
+        
+        // Open the accordions if category changed
+        if (originalExpense && originalExpense.category !== editCategory) {
+          setOpenCategories((prev) => {
+            const newSet = new Set(prev);
+            newSet.add(originalExpense.category.toString());
+            newSet.add(editCategory.toString());
+            return Array.from(newSet);
+          });
+        }
+
         toast.success("Updated Expense");
         handleCancelEdit();
       } catch (error) {
         console.error("Error updating expense:", error);
         toast.error("Failed to update expense");
       }
+    } else {
+      handleCancelEdit();
     }
-    handleCancelEdit();
   };
 
   const handleCancelEdit = () => {
@@ -470,14 +489,19 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
         <h3 className="font-semibold text-base text-gray-800">Expenses</h3>
 
         <div className="flex flex-col gap-3">
-          <Accordion type="multiple" className="flex flex-col gap-3">
+          <Accordion
+            type="multiple"
+            value={openCategories}
+            onValueChange={setOpenCategories}
+            className="flex flex-col gap-3"
+          >
             {categoryGroups.map((cat) => (
               <AccordionItem
                 key={cat.value}
                 value={cat.value.toString()}
-                className="border border-gray-100 rounded-xl bg-white shadow-sm overflow-hidden transition-all hover:border-gray-200"
+                className="group border border-gray-100 rounded-xl bg-white shadow-sm overflow-hidden transition-all hover:border-gray-200"
               >
-                <AccordionTrigger className="px-5 py-4 hover:bg-slate-50/50 hover:no-underline data-[state=open]:border-b data-[state=open]:border-gray-50 transition-colors">
+                <AccordionTrigger className="px-5 py-4 hover:bg-slate-50/50 hover:no-underline data-[state=open]:border-b data-[state=open]:border-gray-50 transition-colors items-center">
                   <div className="flex items-center justify-between w-full pr-4">
                     <div className="flex items-center gap-3">
                       <span
@@ -497,7 +521,7 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
                         {cat.total.toLocaleString(currencyLocale)}
                       </span>
                       <button
-                        className="p-1.5 rounded-md bg-white hover:bg-green-50 text-green-500 hover:text-green-600 border border-gray-200 hover:border-green-200 transition-all shadow-sm opacity-0 group-hover:opacity-100 hover:!opacity-100"
+                        className="cursor-pointer p-2 rounded-lg bg-green-400 hover:bg-green-500 text-white transition-colors duration-200 shadow-sm opacity-0 group-hover:opacity-100 group-data-[state=open]:opacity-100 focus:opacity-100"
                         title={`Add ${cat.label} expense`}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -511,7 +535,7 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
                           }, 100);
                         }}
                       >
-                        <Plus size={14} />
+                        <Plus size={16} strokeWidth={3} />
                       </button>
                     </div>
                   </div>
@@ -535,6 +559,8 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
                         onDelete={() => handleDeleteExpense(expense)}
                         nameInputRef={editNameInputRef}
                         containerRef={editExpenseRef}
+                        category={editCategory}
+                        onCategoryChange={setEditCategory}
                       />
                     ))
                   ) : (
@@ -557,6 +583,8 @@ const Budget = forwardRef<HTMLDivElement, BudgetProps>(function Budget(
                       onCancel={handleCancelAdd}
                       nameInputRef={nameInputRef}
                       containerRef={newExpenseRef}
+                      category={newCategory}
+                      onCategoryChange={setNewCategory}
                     />
                   )}
                 </AccordionContent>

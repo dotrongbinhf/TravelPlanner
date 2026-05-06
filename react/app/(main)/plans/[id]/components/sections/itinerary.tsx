@@ -466,6 +466,7 @@ const Itinerary = forwardRef<HTMLDivElement, ItineraryProps>(function Itinerary(
             className="font-medium"
             iconStrokeWidth={3}
             showActions={true}
+            minDate={new Date()}
           />
         </div>
       </div>

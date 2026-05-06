@@ -4,7 +4,7 @@ import {
   Calendar,
   Wallet,
   Backpack,
-  Users,
+  Share2,
   StickyNote,
   LayoutDashboard,
   ChevronsLeft,
@@ -31,8 +31,8 @@ export const sectionItems = [
   { id: "itinerary", title: "Itinerary", icon: Calendar },
   { id: "budget", title: "Budget", icon: Wallet },
   { id: "packing-lists", title: "Packing Lists", icon: Backpack },
-  { id: "teammates", title: "Participants", icon: Users },
   { id: "notes", title: "Notes", icon: StickyNote },
+  { id: "sharing", title: "Sharing", icon: Share2 },
 ];
 
 export default function Sidebar({

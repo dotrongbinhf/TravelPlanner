@@ -15,6 +15,7 @@ interface DateRangePickerProps {
   className?: string;
   iconStrokeWidth?: number;
   showActions?: boolean;
+  minDate?: Date;
 }
 
 export function DateRangePicker({
@@ -24,6 +25,7 @@ export function DateRangePicker({
   className,
   iconStrokeWidth,
   showActions = false,
+  minDate,
 }: DateRangePickerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -133,7 +135,7 @@ export function DateRangePicker({
             rangeColors={["#2563eb"]}
             showDateDisplay={false}
             className="rounded-t-lg"
-            minDate={new Date()}
+            {...(minDate !== undefined ? { minDate } : {})}
           />
           {showActions && (
             <div className="flex justify-end gap-1 p-2 border-t border-gray-100 bg-gray-50 rounded-b-lg">

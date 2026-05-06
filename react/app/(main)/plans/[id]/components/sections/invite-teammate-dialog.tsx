@@ -8,7 +8,8 @@ import { findUserByNameOrUsername } from "@/api/user/user";
 import toast from "react-hot-toast";
 import { getInitials, getResizedImageUrl } from "@/utils/image";
 import { User } from "@/types/user";
-import { PlanRole } from "@/api/participant/types";
+import { PlanRole } from "@/api/collaborator/types";
+import { COLLABORATOR_ROLES } from "@/constants/collaborator";
 
 interface InviteTeammateDialogProps {
   open: boolean;
@@ -237,14 +238,14 @@ export default function InviteTeammateDialog({
                       className={getRoleBadgeColor(selectedRole)}
                     >
                       {
-                        TEAMMATE_ROLES.find((r) => r.value === selectedRole)
+                        COLLABORATOR_ROLES.find((r) => r.value === selectedRole)
                           ?.label
                       }
                     </Badge>
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  {TEAMMATE_ROLES.filter((r) => r.value !== PlanRole.Owner).map(
+                  {COLLABORATOR_ROLES.filter((r) => r.value !== PlanRole.Owner).map(
                     (role) => (
                       <DropdownMenuItem
                         key={role.value}

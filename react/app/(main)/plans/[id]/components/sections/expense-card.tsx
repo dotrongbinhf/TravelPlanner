@@ -4,6 +4,12 @@ import {
   EXPENSE_CATEGORIES,
 } from "@/types/budget";
 import { Check, Pencil, Trash2, X } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from "@/components/ui/select";
 
 interface ExpenseCardProps {
   expenseItem?: ExpenseItem;
@@ -20,6 +26,8 @@ interface ExpenseCardProps {
   onDelete?: () => void;
   nameInputRef?: React.RefObject<HTMLInputElement | null>;
   containerRef?: React.RefObject<HTMLDivElement | null>;
+  category?: ExpenseCategory;
+  onCategoryChange?: (value: ExpenseCategory) => void;
 }
 
 export default function ExpenseCard({
@@ -37,6 +45,8 @@ export default function ExpenseCard({
   onDelete,
   nameInputRef,
   containerRef,
+  category,
+  onCategoryChange,
 }: ExpenseCardProps) {
   const getCategoryInfo = (cat: ExpenseCategory) => {
     return (
@@ -61,9 +71,40 @@ export default function ExpenseCard({
         ref={containerRef}
         className="p-3.5 bg-blue-50/30 rounded-xl flex items-start justify-between ring-2 ring-blue-400 border-transparent shadow-sm transition-all"
       >
-        <div className="flex items-center gap-3 flex-1 overflow-hidden">
-          {/* Visual Dot */}
-          <div className="w-3 h-3 rounded-full shrink-0" />
+        <div className="flex items-center gap-2 flex-1 overflow-hidden">
+          {/* Category Selector */}
+          <Select
+            value={category?.toString()}
+            onValueChange={(val) => onCategoryChange?.(parseInt(val))}
+          >
+            <SelectTrigger className="flex items-center justify-center p-0 px-1 border border-2 border-dashed border-gray-400 shadow-none focus:ring-0 focus:border-blue-500 bg-transparent shrink-0 hover:border-gray-500 data-[state=open]:border-blue-500 rounded-sm transition-all outline-none">
+              <div
+                className="w-3 h-3 rounded-full"
+                style={{
+                  backgroundColor: getCategoryInfo(
+                    category ?? ExpenseCategory.OTHER,
+                  ).color,
+                }}
+              />
+            </SelectTrigger>
+            <SelectContent position="popper" sideOffset={4} align="start">
+              {EXPENSE_CATEGORIES.map((cat) => (
+                <SelectItem
+                  key={cat.value}
+                  value={cat.value.toString()}
+                  className="cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="w-3 h-3 rounded-full shrink-0"
+                      style={{ backgroundColor: cat.color }}
+                    />
+                    <span className="font-medium text-sm">{cat.label}</span>
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
           <div className="flex flex-col gap-2 w-full min-w-0">
             {/* Name Input */}
@@ -74,7 +115,7 @@ export default function ExpenseCard({
               onChange={(e) => onNameChange(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Expense name..."
-              className="font-medium text-sm bg-transparent rounded-sm p-1 border border-2 border-dashed border-gray-400 focus:border-blue-500 outline-none placeholder:text-gray-400 w-full min-w-0"
+              className="font-medium text-sm bg-transparent rounded-sm p-1 border border-2 border-dashed border-gray-400 focus:border-blue-500 outline-none placeholder:text-gray-400 w-full min-w-0 h-9"
             />
           </div>
         </div>
@@ -95,7 +136,7 @@ export default function ExpenseCard({
               }}
               onKeyDown={handleKeyDown}
               placeholder="0"
-              className="w-30 text-sm font-semibold text-gray-800 bg-transparent p-1 rounded-sm border border-2 border-dashed border-gray-400 focus:border-blue-500 outline-none placeholder:text-gray-400"
+              className="w-30 text-sm font-semibold text-gray-800 bg-transparent p-1 rounded-sm border border-2 border-dashed border-gray-400 focus:border-blue-500 outline-none placeholder:text-gray-400 h-9"
             />
           </div>
 

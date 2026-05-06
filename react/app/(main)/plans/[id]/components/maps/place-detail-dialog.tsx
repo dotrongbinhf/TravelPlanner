@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CustomDialog } from "@/components/custom-dialog";
 import { Plan } from "@/types/plan";
@@ -21,14 +22,26 @@ import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { useMapsLibrary } from "@vis.gl/react-google-maps";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 import { createItineraryItem } from "@/api/itineraryItem/itineraryItem";
 import { ItineraryItem } from "@/types/itineraryItem";
 import { AxiosError } from "axios";
-import toast from "react-hot-toast";
 import ItineraryItemEditor from "../sections/itinerary-item-editor";
 import { updateItineraryItem } from "@/api/itineraryItem/itineraryItem";
 import { getDayColor } from "@/constants/day-colors";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { calcEndTime } from "../sections/cross-day-utils";
 
 interface PlaceDetailDialogProps {
   placeId: string;
@@ -131,16 +144,14 @@ export default function PlaceDetailDialog({
     }
   };
 
-  // Get items that have no place assigned (candidates for replace)
-  const unplacedItemsByDay = plan?.itineraryDays
+  // Get items to display as options for replacement
+  const allItemsByDay = plan?.itineraryDays
     ?.slice()
     .sort((a, b) => a.order - b.order)
     .map((day, dayIdx) => ({
       day,
       dayIdx,
-      items: (day.itineraryItems || []).filter(
-        (item) => !item.place?.placeId,
-      ),
+      items: day.itineraryItems || [],
     }))
     .filter((d) => d.items.length > 0) ?? [];
 
@@ -599,75 +610,101 @@ export default function PlaceDetailDialog({
                   </div>
 
                   {/* Footer Action */}
-                  <div className="p-3 flex justify-end gap-2 shrink-0">
-                    <Button variant="outline" onClick={onClose}>
+                  <div className="p-3 flex items-center justify-end gap-2 shrink-0">
+                    <Button variant="outline" onClick={onClose} className="h-10">
                       Close
                     </Button>
 
                     {/* Replace Place Button */}
-                    {!hideAddButton && onReplaceItem && unplacedItemsByDay.length > 0 && (
+                    {!hideAddButton && onReplaceItem && allItemsByDay.length > 0 && (
                       <div className="relative">
                         <Button
                           variant="outline"
                           onClick={() => setIsReplaceOpen(!isReplaceOpen)}
-                          className="border-amber-200 text-amber-700 hover:bg-amber-50"
+                          className="border-amber-200 text-amber-700 hover:bg-amber-50 h-10"
                         >
                           <Replace className="w-4 h-4 mr-1.5" />
-                          Set as Place
+                          Assign to Item
                         </Button>
 
                         {isReplaceOpen && (
-                          <div className="absolute bottom-full mb-1 right-0 bg-white rounded-xl shadow-xl border border-gray-200 p-2 min-w-[220px] max-h-[260px] overflow-y-auto custom-scrollbar z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                          <div className="absolute bottom-full mb-1 right-0 bg-white rounded-xl shadow-xl border border-gray-200 p-2 min-w-[280px] max-w-[320px] max-h-[260px] overflow-y-auto custom-scrollbar z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
                             <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider px-2 pt-1 pb-1.5">
                               Assign to item
                             </div>
-                            {unplacedItemsByDay.map(({ day, dayIdx, items }) => (
-                              <div key={day.id} className="mb-1">
-                                <div className="flex items-center gap-1.5 px-2 py-0.5">
-                                  <div
-                                    className="w-2 h-2 rounded-full"
-                                    style={{ backgroundColor: getDayColor(dayIdx) }}
-                                  />
-                                  <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
-                                    Day {dayIdx + 1}
-                                  </span>
-                                </div>
-                                {items.map((item, idx) => (
-                                  <button
-                                    key={item.id}
-                                    disabled={replacingItemId === item.id}
-                                    onClick={() => handleReplacePlace(item.id, day.id)}
-                                    className="cursor-pointer w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-amber-50 transition-colors text-left disabled:opacity-50"
-                                  >
-                                    {replacingItemId === item.id ? (
-                                      <Loader2 size={12} className="animate-spin text-amber-500" />
-                                    ) : (
-                                      <div
-                                        className="w-4 h-4 rounded-full flex items-center justify-center text-white text-[9px] font-bold"
-                                        style={{ backgroundColor: getDayColor(dayIdx) }}
-                                      >
-                                        {idx + 1}
+                            <TooltipProvider>
+                              <Accordion type="single" collapsible>
+                                {allItemsByDay.map(({ day, dayIdx, items }) => (
+                                  <AccordionItem key={day.id} value={`day-${day.id}`} className="border-none mb-1">
+                                    <AccordionTrigger className="flex items-center justify-between gap-1.5 px-2 py-1.5 rounded hover:bg-gray-50 hover:no-underline transition-colors [&[data-state=open]]:bg-gray-50 text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                                      <div className="flex items-center gap-1.5">
+                                        <div
+                                          className="w-2 h-2 rounded-full"
+                                          style={{ backgroundColor: getDayColor(dayIdx) }}
+                                        />
+                                        <span>Day {dayIdx + 1}</span>
                                       </div>
-                                    )}
-                                    <span className="text-xs text-gray-700 truncate">
-                                      {item.note || "Empty item"}
-                                    </span>
-                                  </button>
+                                    </AccordionTrigger>
+                                    <AccordionContent className="pb-1">
+                                      <div className="space-y-1 mt-1 pl-2">
+                                        {items.map((item, idx) => {
+                                          const startTimeStr = item.startTime ? item.startTime.substring(0, 5) : "--:--";
+                                          const endTimeStr = item.startTime && item.duration ? calcEndTime(item.startTime, item.duration) : "--:--";
+                                          const timeDisplay = `${startTimeStr} - ${endTimeStr}`;
+                                          
+                                          return (
+                                            <Tooltip key={item.id} delayDuration={300}>
+                                              <TooltipTrigger asChild>
+                                                <button
+                                                  disabled={replacingItemId === item.id}
+                                                  onClick={() => handleReplacePlace(item.id, day.id)}
+                                                  className="cursor-pointer w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-amber-50 transition-colors text-left disabled:opacity-50"
+                                                >
+                                                  {replacingItemId === item.id ? (
+                                                    <Loader2 size={12} className="animate-spin text-amber-500 shrink-0" />
+                                                  ) : (
+                                                    <div
+                                                      className="w-4 h-4 rounded-full flex items-center justify-center text-white text-[9px] font-bold shrink-0"
+                                                      style={{ backgroundColor: getDayColor(dayIdx) }}
+                                                    >
+                                                      {idx + 1}
+                                                    </div>
+                                                  )}
+                                                  <span className="text-[10px] font-medium text-gray-500 shrink-0">
+                                                    {timeDisplay}
+                                                  </span>
+                                                  <span className="text-xs text-gray-700 truncate flex-1">
+                                                    {item.place?.title || <span className="italic text-gray-400">Unplaced</span>}
+                                                  </span>
+                                                </button>
+                                              </TooltipTrigger>
+                                              {item.note && (
+                                                <TooltipContent className="max-w-[250px] whitespace-normal z-[60]">
+                                                  <p className="text-xs">{item.note}</p>
+                                                </TooltipContent>
+                                              )}
+                                            </Tooltip>
+                                          );
+                                        })}
+                                      </div>
+                                    </AccordionContent>
+                                  </AccordionItem>
                                 ))}
-                              </div>
-                            ))}
+                              </Accordion>
+                            </TooltipProvider>
                           </div>
                         )}
                       </div>
                     )}
 
                     {!hideAddButton && (
-                      <Button
+                      <button
                         onClick={() => setIsOpenDialog(true)}
-                        className="bg-primary hover:bg-primary/90 text-white shadow-lg shadow-primary/20"
+                        className="cursor-pointer px-4 flex items-center justify-center gap-2 bg-green-400 hover:bg-green-500 text-white rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed h-10"
                       >
-                        <Plus className="w-4 h-4 mr-2" /> Add to Itinerary
-                      </Button>
+                        <Plus size={16} strokeWidth={3} />
+                        <span className="text-sm font-medium">Add New Item</span>
+                      </button>
                     )}
 
                     {plan?.startTime && plan?.itineraryDays && (

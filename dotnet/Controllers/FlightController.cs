@@ -45,14 +45,14 @@ namespace dotnet.Controllers
         }
 
         [HttpGet("airports")]
-        public async Task<IActionResult> SearchAirports([FromQuery] AirportSearchByLocationRequestDto request)
+        public async Task<IActionResult> SearchAirports([FromQuery] AirportAutocompleteRequestDto request)
         {
             if (!ModelState.IsValid)
             {
                 return BadRequest(ModelState);
             }
 
-            var response = await _externalApiService.SearchAirportsAsync(request);
+            var response = await _externalApiService.SearchAirportAutocompleteAsync(request);
 
             if (!string.IsNullOrEmpty(response.Error))
             {

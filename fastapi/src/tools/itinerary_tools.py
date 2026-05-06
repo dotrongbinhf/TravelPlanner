@@ -22,9 +22,17 @@ logger = logging.getLogger(__name__)
 # DISTANCE MATRIX (uses maps_tools.compute_route_matrix)
 # ============================================================================
 
-def _deduplicate_locations(nodes: list[dict]) -> tuple[list[tuple], dict, list]:
-    """Deduplicate coordinates. Nodes with lat=0,lng=0 are generic (flat distance)."""
+def _deduplicate_locations(nodes: list[dict]) -> tuple[list[tuple], list[Optional[str]], dict, list]:
+    """Deduplicate coordinates. Nodes with lat=0,lng=0 are generic (flat distance).
+    
+    Returns:
+        unique_locs: List of (lat, lng) tuples.
+        unique_place_ids: Parallel list of placeIds (None if unavailable).
+        node_to_unique: Mapping from node index to unique location index.
+        generic_nodes: List of node indices with lat=0, lng=0.
+    """
     unique_locs = []
+    unique_place_ids: list[Optional[str]] = []
     coord_to_idx = {}
     node_to_unique = {}
     generic_nodes = []
@@ -37,9 +45,10 @@ def _deduplicate_locations(nodes: list[dict]) -> tuple[list[tuple], dict, list]:
         if coord_key not in coord_to_idx:
             coord_to_idx[coord_key] = len(unique_locs)
             unique_locs.append(coord_key)
+            unique_place_ids.append(node.get("place_id"))
         node_to_unique[i] = coord_to_idx[coord_key]
     
-    return unique_locs, node_to_unique, generic_nodes
+    return unique_locs, unique_place_ids, node_to_unique, generic_nodes
 
 
 def _euclidean_matrix(locations: list[tuple]) -> list[list[int]]:
@@ -71,12 +80,12 @@ async def _build_distance_matrix(
     - Uses Routes API with travelMode when use_api=True.
     """
     n = len(nodes)
-    unique_locs, node_to_unique, generic_nodes = _deduplicate_locations(nodes)
+    unique_locs, unique_place_ids, node_to_unique, generic_nodes = _deduplicate_locations(nodes)
     
     # Fetch matrix for unique real locations
     if use_api and len(unique_locs) > 0:
         unique_matrix = await compute_route_matrix(
-            unique_locs, travel_mode=travel_mode
+            unique_locs, travel_mode=travel_mode, place_ids=unique_place_ids
         )
     else:
         unique_matrix = _euclidean_matrix(unique_locs)

@@ -10,7 +10,6 @@ import {
 } from "react";
 import {
   Calendar,
-  Users,
   Wallet,
   MapPin,
   Camera,
@@ -22,8 +21,18 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import toast from "react-hot-toast";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { CustomDialog } from "@/components/custom-dialog";
 import { AxiosError } from "axios";
-import { updatePlanBasicInfo, updatePlanCoverImage } from "@/api/plan/plan";
+import {
+  updatePlanBasicInfo,
+  updatePlanCoverImage,
+  clonePlan,
+} from "@/api/plan/plan";
+import ActionMenu from "@/components/action-menu";
+import { Copy } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { Plan } from "@/types/plan";
 import { getLocaleFromCurrencyCode } from "@/utils/curency";
 import {
@@ -42,7 +51,6 @@ interface OverviewProps {
   coverImageUrl?: string;
   startTime: Date;
   endTime: Date;
-  participantCount: number;
   placesCount: number;
   budget: number;
   currencyCode: string;
@@ -58,7 +66,6 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
       coverImageUrl,
       startTime,
       endTime,
-      participantCount,
       placesCount,
       budget,
       currencyCode,
@@ -77,6 +84,12 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
     const [editedName, setEditedName] = useState(name);
     const nameInputRef = useRef<HTMLInputElement>(null);
     const nameContainerRef = useRef<HTMLDivElement>(null);
+
+    // Cloning states
+    const [cloneModalOpen, setCloneModalOpen] = useState(false);
+    const [cloneName, setCloneName] = useState("");
+    const [isCloning, setIsCloning] = useState(false);
+    const router = useRouter();
 
     const cld = new Cloudinary({
       cloud: {
@@ -235,6 +248,29 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
       setEditedName(name);
     };
 
+    const handleConfirmClone = async () => {
+      if (!cloneName.trim()) {
+        toast.error("Plan name cannot be empty");
+        return;
+      }
+
+      setIsCloning(true);
+      try {
+        const response = await clonePlan(planId, cloneName.trim());
+        toast.success("Plan cloned successfully!");
+        setCloneModalOpen(false);
+        setCloneName("");
+        // Redirect to the cloned plan
+        router.push(`/plans/${response.id}`);
+      } catch (error) {
+        if (error instanceof AxiosError) {
+          toast.error(error.response?.data ?? "Failed to clone plan");
+        }
+      } finally {
+        setIsCloning(false);
+      }
+    };
+
     useEffect(() => {
       return () => {
         if (previewUrl) {
@@ -375,17 +411,33 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
             </div>
           </div>
         ) : (
-          <div className="group flex justify-between items-center gap-2">
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
+          <div className="group flex justify-between items-start gap-2">
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-900 leading-tight pt-1">
               {name}
             </h1>
-            <button
-              onClick={handleEditName}
-              className="cursor-pointer p-2 rounded-md bg-yellow-400 hover:bg-yellow-500 text-white opacity-0 group-hover:opacity-100 transition-opacity"
-              title="Edit"
-            >
-              <Pencil size={16} />
-            </button>
+            <div className="opacity-0 group-hover:opacity-100 has-[[data-state=open]]:opacity-100 transition-opacity">
+              <ActionMenu
+                options={[
+                  {
+                    label: "Edit",
+                    icon: Pencil,
+                    onClick: handleEditName,
+                    variant: "edit",
+                  },
+                  {
+                    label: "Clone",
+                    icon: Copy,
+                    onClick: () => {
+                      setCloneName(`Copy of "${name}"`);
+                      setCloneModalOpen(true);
+                    },
+                    variant: "clone",
+                  },
+                ]}
+                iconSize={16}
+                ellipsisSize={20}
+              />
+            </div>
           </div>
         )}
 
@@ -399,15 +451,6 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
               {/* <span className="text-gray-500 ml-1">
                 ({calculateDays(startTime, endTime)} days)
               </span> */}
-            </span>
-          </div>
-
-          {/* Members */}
-          <div className="flex items-center gap-2">
-            <Users size={20} className="text-green-600 flex-shrink-0" />
-            <span className="text-sm">
-              <span className="font-semibold">{participantCount}</span>{" "}
-              {participantCount > 1 ? "participants" : "participant"}
             </span>
           </div>
 
@@ -431,6 +474,51 @@ const Overview = forwardRef<HTMLDivElement, OverviewProps>(
             </span>
           </div>
         </div>
+
+        {/* Clone Plan Dialog */}
+        <CustomDialog
+          open={cloneModalOpen}
+          onOpenChange={(open) => {
+            setCloneModalOpen(open);
+            if (!open) {
+              setCloneName("");
+            }
+          }}
+          title="Clone Plan"
+          description={`Create a copy of "${name}". The new plan will include itinerary, budget, packing lists, and notes, but not conversations or shared members.`}
+          confirmLabel={
+            isCloning ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Cloning...
+              </>
+            ) : (
+              "Clone Plan"
+            )
+          }
+          isDisabled={isCloning || !cloneName.trim()}
+          onCancel={() => {
+            setCloneModalOpen(false);
+            setCloneName("");
+          }}
+          onConfirm={handleConfirmClone}
+          confirmClassName="bg-blue-600 hover:bg-blue-700"
+        >
+          <div className="flex flex-col gap-2 py-2">
+            <Label htmlFor="clone-name">Plan Name</Label>
+            <Input
+              id="clone-name"
+              value={cloneName}
+              onChange={(e) => setCloneName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !isCloning && cloneName.trim()) {
+                  handleConfirmClone();
+                }
+              }}
+              placeholder="Enter a name for the cloned plan"
+            />
+          </div>
+        </CustomDialog>
       </div>
     );
   },

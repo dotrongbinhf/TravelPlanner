@@ -21,14 +21,6 @@ namespace dotnet.Services
             PropertyNameCaseInsensitive = true,
         };
 
-        /// <summary>
-        /// JSON options for AeroDataBox / RapidAPI responses (camelCase).
-        /// </summary>
-        private static readonly JsonSerializerOptions _camelCaseOptions = new()
-        {
-            PropertyNameCaseInsensitive = true,
-        };
-
         public ExternalApiService(HttpClient httpClient, IConfiguration configuration)
         {
             _httpClient = httpClient;
@@ -152,42 +144,30 @@ namespace dotnet.Services
             return result;
         }
 
-        // ======================== AIRPORT (AeroDataBox / RapidAPI) ========================
+        // ======================== AIRPORT AUTOCOMPLETE (SerpApi — Google Flights Autocomplete) ========================
 
-        public async Task<AirportSearchResponseDto> SearchAirportsAsync(AirportSearchByLocationRequestDto request)
+        public async Task<AirportAutocompleteResponseDto> SearchAirportAutocompleteAsync(AirportAutocompleteRequestDto request)
         {
-            var apiKey = _configuration["ExternalApis:RapidApi:ApiKey"];
-            var apiHost = _configuration["ExternalApis:RapidApi:ApiHost"];
+            var apiKey = _configuration["ExternalApis:SerpApi:ApiKey"];
 
-            var lat = request.Lat.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var lon = request.Lon.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var qb = HttpUtility.ParseQueryString(string.Empty);
+            qb["engine"] = "google_flights_autocomplete";
+            qb["api_key"] = apiKey;
+            qb["q"] = request.Q;
+            qb["hl"] = request.Hl;
+            qb["gl"] = request.Gl;
 
-            var url = $"https://aerodatabox.p.rapidapi.com/airports/search/location/{lat}/{lon}/km/{request.RadiusKm}/{request.Limit}?withFlightInfoOnly={request.WithFlightInfoOnly.ToString().ToLower()}";
-
-            var requestMessage = new HttpRequestMessage
-            {
-                Method = HttpMethod.Get,
-                RequestUri = new Uri(url),
-                Headers =
-                {
-                    { "x-rapidapi-key", apiKey },
-                    { "x-rapidapi-host", apiHost },
-                },
-            };
-
-            var response = await _httpClient.SendAsync(requestMessage);
+            var response = await _httpClient.GetAsync($"https://serpapi.com/search.json?{qb}");
 
             if (!response.IsSuccessStatusCode)
             {
                 var errorContent = await response.Content.ReadAsStringAsync();
-                return new AirportSearchResponseDto { Error = $"External API Error: {errorContent}" };
+                return new AirportAutocompleteResponseDto { Error = $"External API Error: {errorContent}" };
             }
 
             var content = await response.Content.ReadAsStringAsync();
-
-            // AeroDataBox location search returns { "items": [ ... ] }
-            var result = JsonSerializer.Deserialize<AirportSearchResponseDto>(content, _camelCaseOptions);
-            return result ?? new AirportSearchResponseDto();
+            return JsonSerializer.Deserialize<AirportAutocompleteResponseDto>(content, _snakeCaseOptions)
+                   ?? new AirportAutocompleteResponseDto();
         }
 
         // ======================== WEATHER (OpenWeatherMap 2.5 - Daily Forecast 16 Days) ========================

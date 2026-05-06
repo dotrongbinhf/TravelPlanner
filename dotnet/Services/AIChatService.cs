@@ -26,7 +26,8 @@ namespace dotnet.Services
         {
             var userId = _currentUser.Id;
             
-            var hasAccess = await _context.Participants.AnyAsync(p => p.PlanId == planId && p.UserId == userId);
+            var plan = await _context.Plans.FindAsync(planId);
+            var hasAccess = plan?.OwnerId == userId || await _context.Collaborators.AnyAsync(c => c.PlanId == planId && c.UserId == userId && c.Status == Enums.InvitationStatus.Accepted);
             if (!hasAccess) return new List<ConversationDto>();
 
             var conversations = await _context.Conversations
@@ -48,7 +49,8 @@ namespace dotnet.Services
         public async Task<ConversationDto> CreateConversation(CreateConversationDto createDto)
         {
             var userId = _currentUser.Id;
-            var hasAccess = await _context.Participants.AnyAsync(p => p.PlanId == createDto.PlanId && p.UserId == userId);
+            var plan = await _context.Plans.FindAsync(createDto.PlanId);
+            var hasAccess = plan?.OwnerId == userId || await _context.Collaborators.AnyAsync(c => c.PlanId == createDto.PlanId && c.UserId == userId && c.Status == Enums.InvitationStatus.Accepted);
             if (!hasAccess) throw new UnauthorizedAccessException("You don't have access to this plan");
 
             var conversation = new Conversation
@@ -75,13 +77,13 @@ namespace dotnet.Services
         {
             var conversation = await _context.Conversations
                 .Include(c => c.Plan)
-                .ThenInclude(p => p.Participants)
+                .ThenInclude(p => p.Collaborators)
                 .FirstOrDefaultAsync(c => c.Id == conversationId);
 
             if (conversation == null) throw new KeyNotFoundException("Conversation not found");
 
             var userId = _currentUser.Id;
-            if (!conversation.Plan.Participants.Any(p => p.UserId == userId))
+            if (conversation.Plan.OwnerId != userId && !conversation.Plan.Collaborators.Any(c => c.UserId == userId && c.Status == Enums.InvitationStatus.Accepted))
                 throw new UnauthorizedAccessException("You don't have access to this conversation");
 
             conversation.Title = updateDto.Title;
@@ -103,11 +105,11 @@ namespace dotnet.Services
             var userId = _currentUser.Id;
             var conversation = await _context.Conversations
                 .Include(c => c.Plan)
-                .ThenInclude(p => p.Participants)
+                .ThenInclude(p => p.Collaborators)
                 .FirstOrDefaultAsync(c => c.Id == conversationId);
 
             if (conversation == null) return new List<MessageDto>();
-            if (!conversation.Plan.Participants.Any(p => p.UserId == userId))
+            if (conversation.Plan.OwnerId != userId && !conversation.Plan.Collaborators.Any(c => c.UserId == userId && c.Status == Enums.InvitationStatus.Accepted))
                 throw new UnauthorizedAccessException("You don't have access to this conversation");
 
             var messages = await _context.Messages
@@ -133,11 +135,11 @@ namespace dotnet.Services
             var userId = _currentUser.Id;
             var conversation = await _context.Conversations
                 .Include(c => c.Plan)
-                .ThenInclude(p => p.Participants)
+                .ThenInclude(p => p.Collaborators)
                 .FirstOrDefaultAsync(c => c.Id == createMessageDto.ConversationId);
 
             if (conversation == null) throw new KeyNotFoundException("Conversation not found");
-            if (!conversation.Plan.Participants.Any(p => p.UserId == userId))
+            if (conversation.Plan.OwnerId != userId && !conversation.Plan.Collaborators.Any(c => c.UserId == userId && c.Status == Enums.InvitationStatus.Accepted))
                 throw new UnauthorizedAccessException("You don't have access to this conversation");
 
             var message = new Message
@@ -173,11 +175,11 @@ namespace dotnet.Services
             var message = await _context.Messages
                 .Include(m => m.Conversation)
                 .ThenInclude(c => c.Plan)
-                .ThenInclude(p => p.Participants)
+                .ThenInclude(p => p.Collaborators)
                 .FirstOrDefaultAsync(m => m.Id == messageId);
 
             if (message == null) throw new KeyNotFoundException("Message not found");
-            if (!message.Conversation.Plan.Participants.Any(p => p.UserId == userId))
+            if (message.Conversation.Plan.OwnerId != userId && !message.Conversation.Plan.Collaborators.Any(c => c.UserId == userId && c.Status == Enums.InvitationStatus.Accepted))
                 throw new UnauthorizedAccessException("You don't have access to this message");
 
             message.ApplyGeneratedPlanAt = DateTimeOffset.UtcNow;

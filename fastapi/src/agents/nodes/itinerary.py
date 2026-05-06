@@ -310,14 +310,7 @@ Add a `"note"` field (string, 1-2 short sentences) to provide extra context. **W
                 }
             ]
         }
-    ],
-    "dropped": ["Attraction name that could not fit"],
-    "more_attractions": [
-        {"name": "Vietnam Museum of Ethnology", "source": "attraction_agent", "reason": "Not enough time on this trip"},
-        {"name": "Ho Chi Minh Museum", "source": "includes", "parent": "Ho Chi Minh Mausoleum", "reason": "Skipped from includes due to time"},
-        {"name": "Explore Dong Xuan Market", "source": "itinerary_agent", "reason": "Great for local shopping and street food"}
-    ],
-    "notes": "Brief explanation of scheduling decisions"
+    ]
 }
 
 ## Critical Rules
@@ -334,8 +327,154 @@ Add a `"note"` field (string, 1-2 short sentences) to provide extra context. **W
 - NEVER exceed an attraction's closing time with your departure
 - must_visit = true → attraction MUST be in the schedule
 - Every attraction stop MUST have an "includes" field (list of sub-attraction names visited at that stop, or empty list [])
-- The "more_attractions" list MUST include: (1) attractions from the input that were dropped, (2) sub-attractions from "includes" that were skipped, and (3) your own suggestions of interesting places near the destination that weren't in the input. For each entry, specify "source" ("attraction_agent", "includes", or "itinerary_agent"), optionally "parent" (if source is "includes"), and "reason" (brief explanation why it's worth considering)
+
 """
+
+# ============================================================================
+# AGENT NODE
+# ============================================================================
+
+async def itinerary_agent_node(state: GraphState) -> dict[str, Any]:
+    """Itinerary Agent — Uses LLM to schedule attractions.
+
+    Flow:
+        1. Pipeline: extract → resolve → distance matrix → opening hours → constraints
+        2. Prompt LLM with all data
+        3. Validate schedule against opening hours
+        4. Re-prompt if violations (max 2 retries)
+        5. Return schedule
+    """
+    logger.info("=" * 60)
+    logger.info("\U0001f4c5 [ITINERARY_AGENT] Node entered")
+
+    # Check for modify mode (including selection-triggered rerange)
+    intent = (state.get("intent_output") or {}).get("intent", "")
+    if intent in ("modify_itinerary", "select_hotel", "select_flight"):
+        return await _itinerary_modify_mode(state)
+
+    agent_outputs = state.get("agent_outputs", {})
+    plan = state.get("macro_plan", {})
+    current_plan = state.get("current_plan", {})
+    plan_context = current_plan.get("plan_context", {})
+    mobility_plan = plan.get("mobility_plan", {})
+
+    itinerary_result = {}
+
+    try:
+        # Phase 1: Build scheduling input
+        logger.info("📅 [ITINERARY_AGENT] Phase 1: Building scheduling input...")
+        pipeline_data = await run_itinerary_pipeline(agent_outputs, plan, plan_context, useRouteMatrix)
+
+        if pipeline_data.get("error"):
+            itinerary_result = {
+                "error": True,
+                "message": pipeline_data.get("message", "Pipeline failed"),
+                "days": [], "dropped": [],
+            }
+        else:
+            # Apply constraint overrides if user provided flight/hotel times
+            constraint_overrides = state.get("constraint_overrides", {})
+            if constraint_overrides:
+                logger.info(f"📅 [ITINERARY_AGENT] Applying constraint overrides: {constraint_overrides}")
+                pipeline_data["schedule_constraints"] = _apply_constraint_overrides(
+                    pipeline_data["schedule_constraints"], constraint_overrides
+                )
+
+            # Phase 2: LLM scheduling
+            logger.info("📅 [ITINERARY_AGENT] Phase 2: LLM scheduling...")
+            weather_data = agent_outputs.get("weather", {})
+            human_content = _build_scheduling_prompt(pipeline_data, plan_context, mobility_plan, weather_data)
+
+            # Inject language into system prompt for note generation
+            language = plan_context.get("language", "en")
+            system_content = ITINERARY_SCHEDULER_SYSTEM.replace("{language}", language)
+
+            messages = [
+                SystemMessage(content=system_content),
+                HumanMessage(content=human_content),
+            ]
+
+            max_retries = 3
+            best_schedule = None
+            violations = []
+
+            for attempt in range(max_retries + 1):
+                logger.info(f"   Attempt {attempt + 1}/{max_retries + 1}: Invoking LLM...")
+                result = await llm_itinerary.ainvoke(messages)
+                schedule = _extract_json(result.content)
+
+
+                _auto_correct_schedule(schedule, pipeline_data["schedule_constraints"])
+                violations = _validate_schedule(schedule, pipeline_data["attractions_info"], pipeline_data["schedule_constraints"], pipeline_data["distance_pairs"])
+
+                if not violations:
+                    logger.info(f"   ✅ Valid on attempt {attempt + 1}")
+                    best_schedule = schedule
+                    break
+
+                logger.warning(f"   ⚠️ {len(violations)} violations on attempt {attempt + 1}")
+                for v in violations:
+                    logger.warning(f"      Day {v['day']}: {v['stop_name']} — {v['issue']}")
+
+                best_schedule = schedule
+
+                if attempt < max_retries:
+                    violation_text = "\n".join(
+                        f"- Day {v['day']}: {v['stop_name']} — {v['issue']}" for v in violations
+                    )
+                    messages.append(AIMessage(content=result.content))
+                    messages.append(HumanMessage(content=(
+                        f"Your schedule has {len(violations)} violations:\n{violation_text}\n\n"
+                        f"Fix these and return the COMPLETE corrected JSON schedule."
+                    )))
+
+            itinerary_result = best_schedule or {"days": []}
+            itinerary_result["error"] = False
+
+            if violations:
+                itinerary_result["has_violations"] = True
+                itinerary_result["violations"] = violations
+
+            itinerary_result["plan_context"] = {
+                "start_date": plan_context.get("start_date", ""),
+                "end_date": plan_context.get("end_date", ""),
+                "num_days": plan_context.get("num_days", 0),
+                "destination": plan_context.get("destination", ""),
+            }
+            itinerary_result["resolved_places_count"] = pipeline_data.get("resolved_places_count", 0)
+            itinerary_result["total_places_count"] = pipeline_data.get("total_places_count", 0)
+            itinerary_result["resolved_places"] = pipeline_data.get("resolved_places", {})
+
+            # Prune cached data to only include locations in the current schedule
+            if not itinerary_result.get("error") and itinerary_result.get("days"):
+                p_distance = pipeline_data.get("distance_pairs", [])
+                p_attractions = pipeline_data.get("attractions_info", [])
+                p_resolved = itinerary_result.get("resolved_places", {})
+                p_distance, p_attractions, p_resolved = _prune_pipeline_data(
+                    p_distance, p_attractions, itinerary_result["days"], p_resolved
+                )
+                itinerary_result["resolved_places"] = p_resolved
+                pipeline_data["distance_pairs"] = p_distance
+                pipeline_data["attractions_info"] = p_attractions
+
+            itinerary_result["_cached_pipeline"] = {
+                "attractions_info": pipeline_data.get("attractions_info", []),
+                "distance_pairs": pipeline_data.get("distance_pairs", []),
+                "schedule_constraints": pipeline_data.get("schedule_constraints", {}),
+            }
+
+    except Exception as e:
+        logger.error(f"   ❌ Itinerary Agent error: {e}", exc_info=True)
+        itinerary_result = {"error": True, "message": str(e), "days": []}
+
+    num_days = len(itinerary_result.get("days", []))
+    logger.info(f"📅 [ITINERARY_AGENT] Completed: {num_days} days")
+    logger.info("=" * 60)
+
+    return {
+        "agent_outputs": {"itinerary_agent": itinerary_result},
+
+    }
 
 # ============================================================================
 # VALIDATION
@@ -416,37 +555,80 @@ def _auto_correct_schedule(
     """Auto-correct common LLM mistakes IN-PLACE before validation.
 
     Current corrections:
-    - If a non-first day starts with check_out (without start_day),
-      prepend a start_day stop so the day structure is valid.
-      The LLM frequently starts the last day with check_out because it
-      thinks that's the logical first action, forgetting that every day
-      must begin with start_day.
+    1. Missing start_day on check-out days: If a non-first day starts
+       with check_out (without start_day), inject start_day role so
+       the day structure is valid.
+    2. Consecutive stops with same name: Merge them into a single stop
+       with combined roles, extended time span, and merged notes/includes.
     """
     constraints = schedule_constraints or {}
 
     for day_data in schedule.get("days", []):
         day_idx = day_data.get("day", 1)
         stops = day_data.get("stops", [])
-        if not stops or day_idx == 1:
+        if not stops:
             continue
 
-        first_stop = stops[0]
-        first_roles = first_stop.get("role", [])
-        if isinstance(first_roles, str):
-            first_roles = [first_roles]
+        # --- Correction 1: Missing start_day on check-out days ---
+        if day_idx != 1:
+            first_stop = stops[0]
+            first_roles = first_stop.get("role", [])
+            if isinstance(first_roles, str):
+                first_roles = [first_roles]
 
-        # Only fix if first stop has check_out but NOT start_day
-        has_checkout = "check_out" in first_roles
-        has_start_day = "start_day" in first_roles
+            has_checkout = "check_out" in first_roles
+            has_start_day = "start_day" in first_roles
 
-        if has_checkout and not has_start_day:
-            # Add start_day role to the existing check_out stop
-            first_roles.insert(0, "start_day")
-            first_stop["role"] = first_roles
-            logger.info(
-                f"   🔧 [AUTO-CORRECT] Day {day_idx}: added 'start_day' role "
-                f"to check_out stop '{first_stop.get('name', '')}'"
-            )
+            if has_checkout and not has_start_day:
+                first_roles.insert(0, "start_day")
+                first_stop["role"] = first_roles
+                logger.info(
+                    f"   🔧 [AUTO-CORRECT] Day {day_idx}: added 'start_day' role "
+                    f"to check_out stop '{first_stop.get('name', '')}'"
+                )
+
+        # --- Correction 2: Merge consecutive stops with the same name ---
+        merged_stops: list[dict] = []
+        for stop in stops:
+            if merged_stops and stop.get("name") == merged_stops[-1].get("name"):
+                prev = merged_stops[-1]
+                # Combine roles (preserve order, deduplicate)
+                prev_roles = prev.get("role", [])
+                if isinstance(prev_roles, str):
+                    prev_roles = [prev_roles]
+                new_roles = stop.get("role", [])
+                if isinstance(new_roles, str):
+                    new_roles = [new_roles]
+                for r in new_roles:
+                    if r not in prev_roles:
+                        prev_roles.append(r)
+                prev["role"] = prev_roles
+
+                # Extend departure to the later stop's departure
+                if stop.get("departure"):
+                    prev["departure"] = stop["departure"]
+
+                # Merge includes lists
+                prev_inc = prev.get("includes", [])
+                new_inc = stop.get("includes", [])
+                if new_inc:
+                    prev["includes"] = list(dict.fromkeys(prev_inc + new_inc))
+
+                # Merge notes
+                prev_note = prev.get("note", "")
+                new_note = stop.get("note", "")
+                if new_note and new_note != prev_note:
+                    prev["note"] = f"{prev_note} {new_note}".strip()
+
+                logger.info(
+                    f"   🔧 [AUTO-CORRECT] Day {day_idx}: merged consecutive "
+                    f"stop '{stop.get('name', '')}' → roles {prev['role']}"
+                )
+            else:
+                merged_stops.append(stop)
+
+        if len(merged_stops) < len(stops):
+            day_data["stops"] = merged_stops
 
 
 def _validate_schedule(
@@ -465,13 +647,12 @@ def _validate_schedule(
     2. Opening hours (attractions only)
     3. Hotel check-out timing (check_out role must be before hotel checkout time)
     4. Last day deadline
-    5. Must-visit attractions present
     6. Check-in timing (check_in role must be at/after hotel check-in time)
     7. Intermediate stops: departure > arrival (positive duration)
-    8. Mandatory meals (lunch/dinner)
+    8. Mandatory meals (Dinner required if activity continues past 19:30)
     9. Mandatory daily start/end structure
-    10. Reasonable duration (attraction >= 30min, meal >= 45min)
-    11. Rest only after check_in (room must be available)
+    11. Rest only after check_in (unless accommodation is 'home')
+    13. No consecutive meals without activity in between
 
     Returns list of violation dicts.
     """
@@ -502,17 +683,18 @@ def _validate_schedule(
 
 
     # --- Build hotel check-out/check-in lookup ---
-    hotel_checkout_map = {}  # day_idx -> (hotel_name, co_time_min)
-    hotel_checkin_map = {}   # day_idx -> (hotel_name, ci_time_min)
+    hotel_checkout_map = {}  # day_idx -> (hotel_name, co_time_min, is_estimated)
+    hotel_checkin_map = {}   # day_idx -> (hotel_name, ci_time_min, is_estimated)
     for h in constraints.get("hotels", []):
+        is_estimated = h.get("estimated", False)
         co_day = h.get("check_out_day")
         co_time = h.get("check_out_time", "12:00")
         if co_day is not None:
-            hotel_checkout_map[co_day] = (h["name"], _time_to_minutes(co_time))
+            hotel_checkout_map[co_day] = (h["name"], _time_to_minutes(co_time), is_estimated)
         ci_day = h.get("check_in_day")
         ci_time = h.get("check_in_time", "14:00")
         if ci_day is not None:
-            hotel_checkin_map[ci_day] = (h["name"], _time_to_minutes(ci_time))
+            hotel_checkin_map[ci_day] = (h["name"], _time_to_minutes(ci_time), is_estimated)
 
     # --- Last day deadline ---
     deadline = constraints.get("last_day_deadline", {})
@@ -617,9 +799,10 @@ def _validate_schedule(
                                     })
 
             # --- Check 3: Hotel check-out timing ---
+            # Skip validation for estimated hotels (default times are soft guidance only)
             if "check_out" in roles and day_idx in hotel_checkout_map:
-                co_hotel_name, co_time_min = hotel_checkout_map[day_idx]
-                if departure_min > co_time_min:
+                co_hotel_name, co_time_min, co_estimated = hotel_checkout_map[day_idx]
+                if not co_estimated and departure_min > co_time_min:
                     violations.append({
                         "day": day_idx, "stop_name": name,
                         "issue": f"Check-out departure at {departure_str} but hotel check-out deadline is {co_time_min//60:02d}:{co_time_min%60:02d}",
@@ -627,19 +810,20 @@ def _validate_schedule(
 
             # Legacy: start_day on check-out day must also respect checkout time
             if "start_day" in roles and "check_out" not in roles and day_idx in hotel_checkout_map:
-                co_hotel_name, co_time_min = hotel_checkout_map[day_idx]
-                if departure_min > co_time_min:
+                co_hotel_name, co_time_min, co_estimated = hotel_checkout_map[day_idx]
+                if not co_estimated and departure_min > co_time_min:
                     violations.append({
                         "day": day_idx, "stop_name": name,
                         "issue": f"Departs hotel at {departure_str} but check-out time is {co_time_min//60:02d}:{co_time_min%60:02d}",
                     })
 
             # --- Check 6: Check-in timing ---
+            # Skip validation for estimated hotels
             if "check_in" in roles:
                 checked_in = True
                 if day_idx in hotel_checkin_map:
-                    ci_hotel_name, ci_time_min = hotel_checkin_map[day_idx]
-                    if arrival_min < ci_time_min:
+                    ci_hotel_name, ci_time_min, ci_estimated = hotel_checkin_map[day_idx]
+                    if not ci_estimated and arrival_min < ci_time_min:
                         violations.append({
                             "day": day_idx, "stop_name": name,
                             "issue": f"Check-in at {arrival_str} but hotel check-in time is {ci_time_min//60:02d}:{ci_time_min%60:02d}. Room not available yet.",
@@ -653,17 +837,9 @@ def _validate_schedule(
                     "issue": f"Rest at hotel but no check_in has occurred yet. Room not available.",
                 })
 
-            # --- Check 12: Consecutive stops with same name must be merged ---
+            # --- Check 13: No consecutive meals without activity in between ---
             if stop_idx > 0:
                 prev_stop = stops[stop_idx - 1]
-                prev_name = prev_stop.get("name", "")
-                if prev_name == name:
-                    violations.append({
-                        "day": day_idx, "stop_name": name,
-                        "issue": f"Consecutive stops at '{name}' must be MERGED into one stop with combined roles. Merge the roles into a single stop.",
-                    })
-                    
-                # --- Check 13: No consecutive meals without activity in between ---
                 prev_roles = _get_roles(prev_stop)
                 if (roles & {"lunch", "dinner"}) and (prev_roles & {"lunch", "dinner"}):
                     violations.append({
@@ -892,8 +1068,7 @@ When the user's request involves ANY new places (either they named it, or they a
 - Use this format:
 {{
     "mode": "resolve_first",
-    "places_to_resolve": ["Place Name 1", "Place Name 2"],
-    "action_summary": "User wants to add Place Name 1 to afternoon of day 2 and replace X with Place Name 2 on day 3"
+    "places_to_resolve": ["Place Name 1", "Place Name 2"]
 }}
 
 When the user's request requires NO NEW PLACES (only removing, reordering, or minor time changes):
@@ -902,7 +1077,6 @@ When the user's request requires NO NEW PLACES (only removing, reordering, or mi
 {{
     "mode": "direct_schedule",
     "days": [...],
-    "dropped": [...],
     ...
 }}
 
@@ -951,8 +1125,7 @@ For direct_schedule mode, return ALL days (even unchanged ones) in this format:
             ]
         }}
     ],
-    "dropped": ["..."],
-    "more_attractions": [],
+
     "fulfilled_user_request": true,
     "modification_notes": "I moved X to the morning exactly as you asked."
 }}
@@ -1189,7 +1362,7 @@ async def _itinerary_modify_mode(state: GraphState) -> dict[str, Any]:
             "agent_outputs": {"itinerary_agent": {
                 "error": True,
                 "message": "No existing itinerary to modify",
-                "days": [], "dropped": [], "method": "llm_modify",
+                "days": [],
             }},
 
         }
@@ -1260,89 +1433,104 @@ async def _itinerary_modify_mode(state: GraphState) -> dict[str, Any]:
         if output_mode == "resolve_first":
             # ── resolve_first mode: LLM returned place names only ──
             resolve_first_places = parsed.get("places_to_resolve", [])
-            action_summary = parsed.get("action_summary", "")
             logger.info(f"📅 [ITINERARY_AGENT_MODIFY] resolve_first mode: {resolve_first_places}")
-            logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Action: {action_summary}")
-            # Will be handled in Step 2 below
         else:
-            # ── direct_schedule mode: normal full schedule ──
             logger.info(f"📅 [ITINERARY_AGENT_MODIFY] direct_schedule mode")
-            _auto_correct_schedule(parsed, schedule_constraints)
-            violations = _validate_schedule(
-                parsed, attractions_info, schedule_constraints, distance_pairs
-            )
 
-            if not violations:
-                logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Valid on attempt 1")
-                best_result = parsed
+            # ── Check fulfilled BEFORE validation ──
+            if parsed.get("fulfilled_user_request") is False:
+                logger.info("📅 [ITINERARY_AGENT_MODIFY] LLM reports request cannot be fulfilled on attempt 1 — keeping original schedule")
+                itinerary_result = existing_itinerary.copy()
+                itinerary_result["error"] = False
+                itinerary_result["fulfilled_user_request"] = False
+                itinerary_result["modification_notes"] = parsed.get("modification_notes", "")
             else:
-                logger.warning(f"📅 [ITINERARY_AGENT_MODIFY] {len(violations)} violations on attempt 1")
-                for v in violations:
-                    logger.warning(f"      Day {v['day']}: {v['stop_name']} — {v['issue']}")
-                best_result = parsed
+                # fulfilled=true (or not present) → validate the schedule
+                _auto_correct_schedule(parsed, schedule_constraints)
+                violations = _validate_schedule(
+                    parsed, attractions_info, schedule_constraints, distance_pairs
+                )
 
-                for v in violations:
-                    if any(kw in v["issue"] for kw in ["Closed", "opens at", "closes at"]):
-                        note = f"{v['stop_name']}: {v['issue']}"
-                        if note not in encountered_violations:
-                            encountered_violations.append(note)
-
-                # Retry loop (only for direct_schedule mode)
-                for attempt in range(1, max_retries + 1):
-                    violation_text = "\n".join(
-                        f"- Day {v['day']}: {v['stop_name']} — {v['issue']}" for v in violations
-                    )
-                    messages.append(AIMessage(content=result.content))
-                    retry_msg = f"Your modified schedule has {len(violations)} violations:\n{violation_text}\n\n"
-                    retry_msg += (
-                        "CRITICAL INSTRUCTION: If these violations mean you CANNOT fulfill the user's specific request "
-                        "(e.g., they asked to visit a place at a time when it is closed, or in an order that violates opening hours), "
-                        "YOU MUST FIX THE SCHEDULE TO BE VALID (e.g., move it to a time when it is open).\n"
-                        "BUT you MUST set `\"fulfilled_user_request\": false` at the root of your JSON, and explicitly explain "
-                        "your compromise in `\"modification_notes\"`.\n\n"
-                        "If the violations are just minor scheduling mistakes (like overlapping times) that CAN be fixed while still "
-                        "respecting the user's wishes, fix them and return the COMPLETE corrected JSON schedule with `\"fulfilled_user_request\": true`."
-                    )
-                    messages.append(HumanMessage(content=retry_msg))
-
-                    logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Retry attempt {attempt + 1}/{max_retries + 1}")
-                    result = await llm_itinerary.ainvoke(messages)
-                    parsed = _extract_json(result.content)
-                    _auto_correct_schedule(parsed, schedule_constraints)
-                    violations = _validate_schedule(
-                        parsed, attractions_info, schedule_constraints, distance_pairs
-                    )
-
-                    if not violations:
-                        logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Valid on attempt {attempt + 1}")
-                        best_result = parsed
-                        break
-
-                    logger.warning(f"📅 [ITINERARY_AGENT_MODIFY] {len(violations)} violations on attempt {attempt + 1}")
+                if not violations:
+                    logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Valid on attempt 1")
                     best_result = parsed
+                else:
+                    logger.warning(f"📅 [ITINERARY_AGENT_MODIFY] {len(violations)} violations on attempt 1")
+                    for v in violations:
+                        logger.warning(f"      Day {v['day']}: {v['stop_name']} — {v['issue']}")
+                    best_result = parsed
+
                     for v in violations:
                         if any(kw in v["issue"] for kw in ["Closed", "opens at", "closes at"]):
                             note = f"{v['stop_name']}: {v['issue']}"
                             if note not in encountered_violations:
                                 encountered_violations.append(note)
 
-            # Post-retry: build itinerary_result
+                    # Retry loop (only for direct_schedule mode)
+                    for attempt in range(1, max_retries + 1):
+                        violation_text = "\n".join(
+                            f"- Day {v['day']}: {v['stop_name']} — {v['issue']}" for v in violations
+                        )
+                        messages.append(AIMessage(content=result.content))
+                        retry_msg = f"Your modified schedule has {len(violations)} violations:\n{violation_text}\n\n"
+                        retry_msg += (
+                            "CRITICAL INSTRUCTION: If these violations mean you CANNOT fulfill the user's specific request "
+                            "(e.g., they asked to visit a place at a time when it is closed, or in an order that violates opening hours), "
+                            "YOU MUST FIX THE SCHEDULE TO BE VALID (e.g., move it to a time when it is open).\n"
+                            "BUT you MUST set `\"fulfilled_user_request\": false` at the root of your JSON, and explicitly explain "
+                            "your compromise in `\"modification_notes\"`.\n\n"
+                            "If the violations are just minor scheduling mistakes (like overlapping times) that CAN be fixed while still "
+                            "respecting the user's wishes, fix them and return the COMPLETE corrected JSON schedule with `\"fulfilled_user_request\": true`."
+                        )
+                        messages.append(HumanMessage(content=retry_msg))
+
+                        logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Retry attempt {attempt + 1}/{max_retries + 1}")
+                        result = await llm_itinerary.ainvoke(messages)
+                        parsed = _extract_json(result.content)
+
+                        # Check fulfilled BEFORE validation
+                        if parsed.get("fulfilled_user_request") is False:
+                            logger.info("📅 [ITINERARY_AGENT_MODIFY] LLM reports request cannot be fulfilled — stopping retry")
+                            itinerary_result = existing_itinerary.copy()
+                            itinerary_result["error"] = False
+                            itinerary_result["fulfilled_user_request"] = False
+                            ai_notes = parsed.get("modification_notes", "")
+                            if encountered_violations:
+                                combo_notes = f"{ai_notes}\n\nConstraints encountered:\n" + "\n".join(f"- {v}" for v in encountered_violations)
+                                itinerary_result["modification_notes"] = combo_notes.strip()
+                            else:
+                                itinerary_result["modification_notes"] = ai_notes
+                            break
+
+                        # fulfilled=true → validate
+                        _auto_correct_schedule(parsed, schedule_constraints)
+                        violations = _validate_schedule(
+                            parsed, attractions_info, schedule_constraints, distance_pairs
+                        )
+
+                        if not violations:
+                            logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Valid on attempt {attempt + 1}")
+                            best_result = parsed
+                            break
+
+                        logger.warning(f"📅 [ITINERARY_AGENT_MODIFY] {len(violations)} violations on attempt {attempt + 1}")
+                        best_result = parsed
+                        for v in violations:
+                            if any(kw in v["issue"] for kw in ["Closed", "opens at", "closes at"]):
+                                note = f"{v['stop_name']}: {v['issue']}"
+                                if note not in encountered_violations:
+                                    encountered_violations.append(note)
+
+            # Post-retry: build itinerary_result (only if not already set by fulfilled=false)
             if not itinerary_result:
-                itinerary_result = best_result or {"days": [], "dropped": []}
-                itinerary_result["method"] = "llm_modify"
+                itinerary_result = best_result or {"days": []}
                 itinerary_result["error"] = False
                 itinerary_result["fulfilled_user_request"] = best_result.get("fulfilled_user_request", True)
-
-                ai_notes = best_result.get("modification_notes", "")
-                if encountered_violations and not itinerary_result["fulfilled_user_request"]:
-                    combo_notes = f"{ai_notes}\n\nConstraints encountered during adjustments:\n" + "\n".join(f"- {v}" for v in encountered_violations)
-                    itinerary_result["modification_notes"] = combo_notes.strip()
-                    logger.info(f"📅 [MODIFY] Request compromise notes:\n{itinerary_result['modification_notes']}")
-                else:
-                    itinerary_result["modification_notes"] = ai_notes
+                itinerary_result["modification_notes"] = best_result.get("modification_notes", "")
 
                 if violations:
-                    itinerary_result["warnings"] = violations
+                    itinerary_result["has_violations"] = True
+                    itinerary_result["violations"] = violations
 
     except Exception as e:
         logger.error(f"📅 [ITINERARY_AGENT_MODIFY] Error: {e}", exc_info=True)
@@ -1350,8 +1538,7 @@ async def _itinerary_modify_mode(state: GraphState) -> dict[str, Any]:
             "error": True,
             "message": str(e),
             "days": existing_itinerary.get("days", []),
-            "dropped": existing_itinerary.get("dropped", []),
-            "method": "llm_modify",
+
         }
 
     # ── Step 2: Resolve + Pass 2 ──
@@ -1443,7 +1630,7 @@ async def _itinerary_modify_mode(state: GraphState) -> dict[str, Any]:
                     try:
                         transport = plan_context.get("local_transportation", "car")
                         travel_mode = LOCAL_TRANSPORT_MAP.get(transport, "DRIVE")
-                        dm = await _build_distance_matrix(all_locs, travel_mode=travel_mode)
+                        dm = await _build_distance_matrix(all_locs, use_api=useRouteMatrix, travel_mode=travel_mode)
                         if dm:
                             all_pairs = build_symmetric_distance_pairs(all_locs, dm)
                             new_loc_names = {loc["name"] for loc in new_locations}
@@ -1482,12 +1669,12 @@ async def _itinerary_modify_mode(state: GraphState) -> dict[str, Any]:
 
                 violations = _validate_schedule(pass2_parsed, enriched_attractions, schedule_constraints, enriched_distances)
                 itinerary_result = pass2_parsed
-                itinerary_result["method"] = "llm_modify"
                 itinerary_result["error"] = False
                 itinerary_result["fulfilled_user_request"] = pass2_parsed.get("fulfilled_user_request", True)
                 itinerary_result["modification_notes"] = pass2_parsed.get("modification_notes", "")
                 if violations:
-                    itinerary_result["warnings"] = violations
+                    itinerary_result["has_violations"] = True
+                    itinerary_result["violations"] = violations
                 attractions_info = enriched_attractions
                 distance_pairs = enriched_distances
                 logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Pass 2 complete ({len(violations)} violations)")
@@ -1496,8 +1683,7 @@ async def _itinerary_modify_mode(state: GraphState) -> dict[str, Any]:
                 itinerary_result = {
                     "error": True, "message": f"Pass 2 failed: {e}",
                     "days": existing_itinerary.get("days", []),
-                    "dropped": existing_itinerary.get("dropped", []),
-                    "method": "llm_modify",
+
                 }
         else:
             logger.warning("📅 [MODIFY_RESOLVE] None of the places could be resolved — falling back to direct schedule")
@@ -1513,16 +1699,16 @@ async def _itinerary_modify_mode(state: GraphState) -> dict[str, Any]:
                 _auto_correct_schedule(fallback_parsed, schedule_constraints)
                 violations = _validate_schedule(fallback_parsed, attractions_info, schedule_constraints, distance_pairs)
                 itinerary_result = fallback_parsed
-                itinerary_result["method"] = "llm_modify"
                 itinerary_result["error"] = False
                 if violations:
-                    itinerary_result["warnings"] = violations
+                    itinerary_result["has_violations"] = True
+                    itinerary_result["violations"] = violations
             except Exception as e:
                 logger.error(f"📅 [ITINERARY_AGENT_MODIFY] Fallback failed: {e}")
                 itinerary_result = {
                     "error": True, "message": str(e),
                     "days": existing_itinerary.get("days", []),
-                    "dropped": [], "method": "llm_modify",
+
                 }
 
     # Preserve metadata from existing itinerary
@@ -1534,6 +1720,15 @@ async def _itinerary_modify_mode(state: GraphState) -> dict[str, Any]:
     }
     if "resolved_places" not in itinerary_result:
         itinerary_result["resolved_places"] = existing_itinerary.get("resolved_places", {})
+
+    # Prune cached data to only include locations in the current schedule
+    if not itinerary_result.get("error") and itinerary_result.get("days"):
+        resolved_places_ref = itinerary_result.get("resolved_places") or existing_itinerary.get("resolved_places", {})
+        distance_pairs, attractions_info, resolved_places_ref = _prune_pipeline_data(
+            distance_pairs, attractions_info, itinerary_result["days"], resolved_places_ref
+        )
+        itinerary_result["resolved_places"] = resolved_places_ref
+
     itinerary_result["_cached_pipeline"] = {
         "attractions_info": attractions_info,
         "distance_pairs": distance_pairs,
@@ -1551,142 +1746,74 @@ async def _itinerary_modify_mode(state: GraphState) -> dict[str, Any]:
 
     }
 
-
 # ============================================================================
-# AGENT NODE
+# PIPELINE DATA PRUNING
 # ============================================================================
 
-async def itinerary_agent_node(state: GraphState) -> dict[str, Any]:
-    """Itinerary Agent — Uses LLM to schedule attractions.
+def _prune_pipeline_data(
+    distance_pairs: list[dict],
+    attractions_info: list[dict],
+    itinerary_days: list[dict],
+    resolved_places: dict,
+) -> tuple[list[dict], list[dict], dict]:
+    """Prune distance_pairs, attractions_info, and resolved_places to only
+    include locations currently referenced in the itinerary schedule.
 
-    Flow:
-        1. Pipeline: extract → resolve → distance matrix → opening hours → constraints
-        2. Prompt LLM with all data
-        3. Validate schedule against opening hours
-        4. Re-prompt if violations (max 2 retries)
-        5. Return schedule
+    This prevents data bloat after multiple modify rounds where places are
+    added/removed, keeping the LLM prompt lean.
+
+    Structural locations (airports, hotels) are always retained since they
+    serve as schedule constraints regardless of explicit stop references.
     """
-    logger.info("=" * 60)
-    logger.info("\U0001f4c5 [ITINERARY_AGENT] Node entered")
+    import copy as _copy
 
-    # Check for modify mode (including selection-triggered rerange)
-    intent = (state.get("intent_output") or {}).get("intent", "")
-    if intent in ("modify_itinerary", "select_hotel", "select_flight"):
-        return await _itinerary_modify_mode(state)
+    # 1. Collect all stop names from the current schedule
+    active_names: set[str] = set()
+    for day in itinerary_days:
+        for stop in day.get("stops", []):
+            name = stop.get("name", "").strip()
+            if name:
+                active_names.add(name)
 
-    agent_outputs = state.get("agent_outputs", {})
-    plan = state.get("macro_plan", {})
-    current_plan = state.get("current_plan", {})
-    plan_context = current_plan.get("plan_context", {})
-    mobility_plan = plan.get("mobility_plan", {})
+    # 2. Always keep structural locations (airports + hotels)
+    for ap in resolved_places.get("airports", []):
+        resolved = ap.get("resolved")
+        if resolved:
+            active_names.add(resolved.get("title", ap.get("name", "")))
+        elif ap.get("name"):
+            active_names.add(ap["name"])
+    for h in resolved_places.get("hotels", []):
+        resolved = h.get("resolved")
+        if resolved:
+            active_names.add(resolved.get("title", h.get("name", "")))
+        elif h.get("name"):
+            active_names.add(h["name"])
 
-    itinerary_result = {}
+    # 3. Prune distance_pairs — keep only pairs where BOTH endpoints are active
+    pruned_pairs = [p for p in distance_pairs
+                    if p.get("from") in active_names and p.get("to") in active_names]
 
-    try:
-        # Phase 1: Build scheduling input
-        logger.info("📅 [ITINERARY_AGENT] Phase 1: Building scheduling input...")
-        pipeline_data = await run_itinerary_pipeline(agent_outputs, plan, plan_context, useRouteMatrix)
+    # 4. Prune attractions_info — keep only attractions in the schedule
+    pruned_attractions = [a for a in attractions_info
+                          if a.get("name") in active_names]
 
-        if pipeline_data.get("error"):
-            itinerary_result = {
-                "error": True,
-                "message": pipeline_data.get("message", "Pipeline failed"),
-                "days": [], "dropped": [], "method": "llm",
-            }
-        else:
-            # Apply constraint overrides if user provided flight/hotel times
-            constraint_overrides = state.get("constraint_overrides", {})
-            if constraint_overrides:
-                logger.info(f"📅 [ITINERARY_AGENT] Applying constraint overrides: {constraint_overrides}")
-                pipeline_data["schedule_constraints"] = _apply_constraint_overrides(
-                    pipeline_data["schedule_constraints"], constraint_overrides
-                )
+    # 5. Prune resolved_places.attractions (airports & hotels untouched)
+    pruned_resolved = _copy.deepcopy(resolved_places)
+    pruned_resolved["attractions"] = [
+        a for a in pruned_resolved.get("attractions", [])
+        if (a.get("resolved") or {}).get("title", a.get("name", "")) in active_names
+    ]
 
-            # Phase 2: LLM scheduling
-            logger.info("📅 [ITINERARY_AGENT] Phase 2: LLM scheduling...")
-            weather_data = agent_outputs.get("weather", {})
-            human_content = _build_scheduling_prompt(pipeline_data, plan_context, mobility_plan, weather_data)
+    removed_pairs = len(distance_pairs) - len(pruned_pairs)
+    removed_attrs = len(attractions_info) - len(pruned_attractions)
+    removed_resolved = len(resolved_places.get("attractions", [])) - len(pruned_resolved["attractions"])
+    if removed_pairs or removed_attrs or removed_resolved:
+        logger.info(
+            f"📅 [PRUNE] Removed {removed_pairs} distance pairs, "
+            f"{removed_attrs} attractions_info, {removed_resolved} resolved attractions"
+        )
 
-            # Inject language into system prompt for note generation
-            language = plan_context.get("language", "en")
-            system_content = ITINERARY_SCHEDULER_SYSTEM.replace("{language}", language)
-
-            messages = [
-                SystemMessage(content=system_content),
-                HumanMessage(content=human_content),
-            ]
-
-            max_retries = 3
-            best_schedule = None
-            violations = []
-
-            for attempt in range(max_retries + 1):
-                logger.info(f"   Attempt {attempt + 1}/{max_retries + 1}: Invoking LLM...")
-                result = await llm_itinerary.ainvoke(messages)
-                schedule = _extract_json(result.content)
-
-
-                _auto_correct_schedule(schedule, pipeline_data["schedule_constraints"])
-                violations = _validate_schedule(schedule, pipeline_data["attractions_info"], pipeline_data["schedule_constraints"], pipeline_data["distance_pairs"])
-
-                if not violations:
-                    logger.info(f"   ✅ Valid on attempt {attempt + 1}")
-                    best_schedule = schedule
-                    break
-
-                logger.warning(f"   ⚠️ {len(violations)} violations on attempt {attempt + 1}")
-                for v in violations:
-                    logger.warning(f"      Day {v['day']}: {v['stop_name']} — {v['issue']}")
-
-                best_schedule = schedule
-
-                if attempt < max_retries:
-                    violation_text = "\n".join(
-                        f"- Day {v['day']}: {v['stop_name']} — {v['issue']}" for v in violations
-                    )
-                    messages.append(AIMessage(content=result.content))
-                    messages.append(HumanMessage(content=(
-                        f"Your schedule has {len(violations)} violations:\n{violation_text}\n\n"
-                        f"Fix these and return the COMPLETE corrected JSON schedule."
-                    )))
-
-            itinerary_result = best_schedule or {"days": [], "dropped": []}
-            itinerary_result["method"] = "llm"
-            itinerary_result["error"] = False
-
-            if violations:
-                itinerary_result["has_violations"] = True
-                itinerary_result["violations"] = violations
-
-            itinerary_result["plan_context"] = {
-                "start_date": plan_context.get("start_date", ""),
-                "end_date": plan_context.get("end_date", ""),
-                "num_days": plan_context.get("num_days", 0),
-                "destination": plan_context.get("destination", ""),
-            }
-            itinerary_result["resolved_places_count"] = pipeline_data.get("resolved_places_count", 0)
-            itinerary_result["total_places_count"] = pipeline_data.get("total_places_count", 0)
-            itinerary_result["resolved_places"] = pipeline_data.get("resolved_places", {})
-            itinerary_result["_cached_pipeline"] = {
-                "attractions_info": pipeline_data.get("attractions_info", []),
-                "distance_pairs": pipeline_data.get("distance_pairs", []),
-                "schedule_constraints": pipeline_data.get("schedule_constraints", {}),
-            }
-
-    except Exception as e:
-        logger.error(f"   ❌ Itinerary Agent error: {e}", exc_info=True)
-        itinerary_result = {"error": True, "message": str(e), "days": [], "dropped": [], "method": "llm"}
-
-    num_days = len(itinerary_result.get("days", []))
-    dropped = len(itinerary_result.get("dropped", []))
-
-    logger.info(f"📅 [ITINERARY_AGENT] Completed: {num_days} days, {dropped} dropped")
-    logger.info("=" * 60)
-
-    return {
-        "agent_outputs": {"itinerary_agent": itinerary_result},
-
-    }
+    return pruned_pairs, pruned_attractions, pruned_resolved
 
 
 # ============================================================================

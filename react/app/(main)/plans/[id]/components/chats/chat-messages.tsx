@@ -263,8 +263,8 @@ export default function ChatMessages({
     }
 
     if (latestWidgetData) {
-      import('@/contexts/ItineraryContext').then(({ ChatPlace }) => {
-        const places: typeof ChatPlace[] = [];
+      import('@/contexts/ItineraryContext').then((mod) => {
+        const places: import('@/contexts/ItineraryContext').ChatPlace[] = [];
         
         // Extract Hotels
         if (latestWidgetData.hotel_agent?.segments) {

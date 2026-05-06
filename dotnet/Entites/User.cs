@@ -1,4 +1,4 @@
-﻿namespace dotnet.Entites
+namespace dotnet.Entites
 {
     public class User : BaseAuditableEntity
     {
@@ -14,6 +14,6 @@
         public string? GoogleAvatarUrl { get; set; }
         
         public ICollection<Plan> Plans { get; set; } = new List<Plan>();
-        public ICollection<Participant> Participants { get; set; } = new List<Participant>();
+        public ICollection<Collaborator> Collaborators { get; set; } = new List<Collaborator>();
     }
 }

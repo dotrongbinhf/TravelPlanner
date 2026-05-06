@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PaginatedResult } from "@/types/paginated";
 import PlanCardSkeleton from "./plan-card-skeleton";
+import PlansToolbar, { ToolbarState } from "./plans-toolbar";
 
 interface PlanSectionProps {
   title: string;
@@ -19,6 +20,11 @@ interface PlanSectionProps {
   onDecline?: (plan: Plan) => void;
   onDelete?: (plan: Plan) => void;
   onLeave?: (plan: Plan) => void;
+  onClone?: (plan: Plan) => void;
+  toolbarState: ToolbarState;
+  onToolbarChange: (state: ToolbarState) => void;
+  currentPage: number;
+  pageSize?: number;
 }
 
 export default function PlanSection({
@@ -33,16 +39,100 @@ export default function PlanSection({
   onDecline,
   onDelete,
   onLeave,
+  onClone,
+  toolbarState,
+  onToolbarChange,
+  currentPage,
+  pageSize = 8,
 }: PlanSectionProps) {
+  const renderHeader = () => (
+    <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center gap-3">
+        {icon}
+        <h2 className="text-xl font-bold text-gray-800">{title}</h2>
+        {data && (
+          <span className="text-sm text-gray-400 font-medium">
+            {data.totalCount}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+
+  const isDefaultFilters =
+    toolbarState.search === "" &&
+    toolbarState.status === "all" &&
+    toolbarState.dateFrom === null &&
+    toolbarState.dateTo === null;
+
+  const isTrulyEmpty =
+    !isLoading && data && data.totalCount === 0 && isDefaultFilters;
+
+  const renderToolbar = () => {
+    if (isTrulyEmpty && (variant === "pending" || variant === "shared")) {
+      return null;
+    }
+    return (
+      <div className="mb-4">
+        <PlansToolbar state={toolbarState} onChange={onToolbarChange} />
+      </div>
+    );
+  };
+
+  const renderPagination = () => {
+    if (!data || data.totalPages <= 1) return null;
+    return (
+      <div className="flex items-center justify-center mt-4">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500">
+            Page {data.page} of {data.totalPages}
+          </span>
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => onPageChange(data.page - 1)}
+            disabled={data.page <= 1}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => onPageChange(data.page + 1)}
+            disabled={data.page >= data.totalPages}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   if (isLoading) {
+    // Calculate how many skeletons to show to fill full rows based on target page
+    let skeletonsToShow = pageSize;
+    if (data) {
+      if (currentPage === 1) {
+        skeletonsToShow = pageSize;
+      } else {
+        const remaining = data.totalCount - (currentPage - 1) * pageSize;
+        const expected = Math.max(0, Math.min(pageSize, remaining));
+        if (expected > 0) {
+          // Assume 4 columns per row for calculation
+          const rows = Math.ceil(expected / 4);
+          skeletonsToShow = rows * 4;
+        }
+      }
+    }
+
     return (
       <div className="mb-8">
-        <div className="flex items-center gap-3 mb-4">
-          {icon}
-          <h2 className="text-xl font-bold text-gray-800">{title}</h2>
-        </div>
+        {renderHeader()}
+        {renderToolbar()}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {[...Array(4)].map((_, i) => (
+          {[...Array(skeletonsToShow)].map((_, i) => (
             <PlanCardSkeleton key={i} variant={variant} />
           ))}
         </div>
@@ -53,10 +143,8 @@ export default function PlanSection({
   if (!data || data.items.length === 0) {
     return (
       <div className="mb-8">
-        <div className="flex items-center gap-3 mb-4">
-          {icon}
-          <h2 className="text-xl font-bold text-gray-800">{title}</h2>
-        </div>
+        {renderHeader()}
+        {renderToolbar()}
         <div className="bg-gray-50 border border-gray-200 rounded-xl p-8 text-center">
           <p className="text-gray-500">{emptyMessage}</p>
         </div>
@@ -66,14 +154,10 @@ export default function PlanSection({
 
   return (
     <div className="mb-8">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          {icon}
-          <h2 className="text-xl font-bold text-gray-800">{title}</h2>
-        </div>
-      </div>
+      {renderHeader()}
+      {renderToolbar()}
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         {data.items.map((plan) => (
           <PlanCard
             key={plan.id}
@@ -83,37 +167,12 @@ export default function PlanSection({
             onDecline={onDecline ? () => onDecline(plan) : undefined}
             onDelete={onDelete ? () => onDelete(plan) : undefined}
             onLeave={onLeave ? () => onLeave(plan) : undefined}
+            onClone={onClone ? () => onClone(plan) : undefined}
           />
         ))}
       </div>
 
-      <div className="flex items-center justify-center">
-        {data.totalPages > 1 && (
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500">
-              Page {data.page} of {data.totalPages}
-            </span>
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => onPageChange(data.page - 1)}
-              disabled={data.page <= 1}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => onPageChange(data.page + 1)}
-              disabled={data.page >= data.totalPages}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-        )}
-      </div>
+      {renderPagination()}
     </div>
   );
 }

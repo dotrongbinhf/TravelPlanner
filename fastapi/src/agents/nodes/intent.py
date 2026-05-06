@@ -65,25 +65,24 @@ Your job:
 - `search_hotels` — User wants to find hotels OR correct/adjust hotel results
 - `suggest_attractions` — User wants attraction suggestions OR adjust attraction list
 - `search_restaurants` — User wants restaurant recommendations OR adjust restaurant choices
-- `preparation_inquiry` — User asks about budget, costs, packing, travel tips, notes, OR corrects/adjusts a previous budget/packing/notes answer
+- `preparation_inquiry` — User asks about budget, costs, packing, travel tips, or notes for the FIRST TIME or wants a complete refresh
 
 ### Selection (user picks from previous search results)
 - `select_flight` — User selects/chooses a specific flight from previous search_flights results. REQUIRES: "flight_search" in Available search results. Examples: "Lấy chuyến VN240", "Chọn chuyến bay đầu tiên", "I'll take the Vietnam Airlines flight"
 - `select_hotel` — User selects/chooses a specific hotel from previous search_hotels results. REQUIRES: "hotel_search" in Available search results. Examples: "Chọn khách sạn Oriental Jade", "I want the first hotel", "Lấy khách sạn thứ 2"
 - `select_restaurant` — User selects/chooses a specific restaurant from previous search_restaurants results to add to their itinerary. REQUIRES: "restaurant_search" in Available search results. Examples: "Thêm quán phở thìn vào lịch trình", "Chọn quán đầu tiên cho bữa trưa"
 
-### Itinerary modification (requires existing itinerary in current_plan)
+### Modification (requires existing data in current_plan)
 - `modify_itinerary` — User wants to modify the EXISTING itinerary schedule: swap/add/remove specific attractions, change visit times or order, rearrange daily schedule, reduce visit duration, replace attractions with new ones, etc. REQUIRES: current_plan must have an itinerary section (Built sections includes "itinerary"). The Itinerary Agent will handle everything including suggesting new attractions if needed.
+- `modify_preparation` — User wants to modify/correct EXISTING budget, packing list, or travel notes. REQUIRES: current_plan has budget/packing/notes sections (Built sections includes "budget", "packing", or "notes"). Examples: "Sửa tiền khách sạn thành 2 triệu", "Thêm mục dự phòng 500k", "Bỏ mục shopping"
 
-### Plan structural change (Orchestrator needed)
-- `modify_plan` — User wants STRUCTURAL changes to the trip plan: add/remove travel days, change the route structure, add a new city/destination to an existing multi-city plan. ONLY use this for changes that affect the overall trip structure — NOT for correcting individual agent outputs.
 
 ## IMPORTANT — Correction vs Structural Change vs Itinerary Modification
 
 When user comments on or corrects a previous chatbot response about a SPECIFIC topic:
-- Budget/cost correction (e.g., "3 nights not 4", "too expensive, reduce it") → `preparation_inquiry` (NOT `modify_plan`)
-- Flight preference (e.g., "find an earlier morning flight") → `search_flights` (NOT `modify_plan`)
-- Hotel adjustment (e.g., "I want a cheaper hotel") → `search_hotels` (NOT `modify_plan`)
+- Budget/cost correction (e.g., "3 nights not 4", "too expensive, reduce it") → `modify_preparation` (if budget/packing/notes already in Built sections)
+- Flight preference (e.g., "find an earlier morning flight") → `search_flights`
+- Hotel adjustment (e.g., "I want a cheaper hotel") → `search_hotels`
 - Attraction suggestion (e.g., "suggest more fun places") → `suggest_attractions` (standalone search, NOT modifying itinerary)
 
 When user wants to change the EXISTING ITINERARY (requires "itinerary" in Built sections):
@@ -92,10 +91,9 @@ When user wants to change the EXISTING ITINERARY (requires "itinerary" in Built 
 - Swap/replace with new (e.g., "replace the Mausoleum with something else") → `modify_itinerary`
 - Add new place (e.g., "add a place in the afternoon of day 2") → `modify_itinerary`
 - Adjust timing (e.g., "reduce time at Temple of Literature") → `modify_itinerary`
-- Change daily start time (e.g., "start each day at 8am", "I want to start earlier") → `modify_itinerary` (NOT `modify_plan` — this is a schedule adjustment, not a structural change)
+- Change daily start time (e.g., "start each day at 8am", "I want to start earlier") → `modify_itinerary`
 - Change pace/rhythm (e.g., "make it more relaxed", "pack in more activities") → `modify_itinerary`
 
-Only use `modify_plan` for STRUCTURAL changes that affect the trip skeleton: "add one more day", "change route to HCM→Da Nang→Hue". Do NOT use `modify_plan` for timing, pace, or schedule rearrangements within the same trip structure.
 
 ## Selection vs Search
 - If user says "chọn/lấy/dùng hotel X" or "I'll take flight Y" AND the plan already has search results ("flight_search", "hotel_search", or "restaurant_search" in Available search results) → use `select_flight` / `select_hotel` / `select_restaurant`
@@ -107,8 +105,8 @@ Only use `modify_plan` for STRUCTURAL changes that affect the trip skeleton: "ad
 1. Check `last_suggestions` — if user says "okay", "yes", "sure", "do it", map to the suggested action.
    If multiple suggestions exist and user's response is ambiguous, set intent to `clarification_needed`.
 
-2. Check `current_plan` — if user already has a plan and asks to "plan a trip" again for the SAME destination, 
-   this is likely `modify_plan`, not a new `draft_plan`.
+2. Check `current_plan` — if user already has a plan and asks to "plan a trip" again for the SAME destination,
+   this is likely a modification of what they already have. Route to the appropriate agent.
 
 3. For `draft_plan`: user describes a trip WITHOUT specifying flight/hotel details.
    Example: "I want to go to Da Nang for 3 days", "Plan a trip to Tokyo"
@@ -156,7 +154,6 @@ Only use `modify_plan` for STRUCTURAL changes that affect the trip skeleton: "ad
 8. **Follow-up / Correction detection**: Check `Built sections` in the current plan context.
    If the plan already has a section (budget, itinerary, etc.) and the user comments on or corrects it:
    - Route to the CORRECT specific agent intent based on WHAT they're talking about
-   - Do NOT use `modify_plan` for single-agent corrections
    - Do NOT blindly repeat `last_intent` — determine the topic from the user's message
 
 ## Response Format
@@ -175,16 +172,18 @@ CRITICAL: Your response must be one valid JSON object. No text before or after.
 - `intent`: one of the intent strings above
 - `context_updates`: dict of changed fields (empty {} if no changes). MUST ALWAYS include `language` and `currency`.
 - `direct_response`: text response for greeting/clarification/general (null otherwise). MUST be in the user's language.
-- `constraint_overrides`: For ANY intent. Extract user-provided flight/hotel time constraints whenever the user explicitly mentions them. null if user does not mention any. Possible keys:
-  - `outbound_departure_time` — "HH:MM" when user says their outbound flight DEPARTS from origin
-  - `outbound_arrival_time` — "HH:MM" when user says their outbound flight ARRIVES at destination
-  - `return_departure_time` — "HH:MM" when user says their return flight DEPARTS from destination
-  - `return_arrival_time` — "HH:MM" when user says their return flight ARRIVES back at origin
+- `constraint_overrides`: ONLY for confirmed/existing flight or hotel times. null in most cases. Use this ONLY when the user states they ALREADY HAVE a specific flight or hotel booking with fixed times (e.g., "I already booked a flight departing at 8:00 AM", "my flight arrives at 10:00"). Do NOT use this for search preferences (e.g., "find me a flight around 8-10 AM" — that goes into user_request_rewrite instead).
+  Possible keys (only when user ALREADY HAS confirmed times):
+  - `outbound_departure_time` — "HH:MM" confirmed outbound flight departure
+  - `outbound_arrival_time` — "HH:MM" confirmed outbound flight arrival
+  - `return_departure_time` — "HH:MM" confirmed return flight departure
+  - `return_arrival_time` — "HH:MM" confirmed return flight arrival
   - `hotels` — list of per-segment hotel overrides: `[{"nights": [1,2,3], "check_in_time": "HH:MM", "check_out_time": "HH:MM"}]`
-    - `nights`: which nights this override applies to (1-indexed)
-    - Only include `check_in_time` and/or `check_out_time` if user explicitly mentions them
-  Only include keys that user EXPLICITLY mentions.
-- `user_request_rewrite`: Required for ALL planning and modification intents (`draft_plan`, `full_plan`, `modify_plan`, `modify_itinerary` AND all standalone agents like `search_flights`, `search_hotels`). null otherwise.
+  Examples:
+  - "I have a flight at 8 AM" → constraint_overrides: {"outbound_departure_time": "08:00"}
+  - "Find flights around 8-10 AM" → constraint_overrides: null (put time preference in user_request_rewrite)
+  - "I want to depart in the afternoon" → constraint_overrides: null (put in user_request_rewrite)
+- `user_request_rewrite`: Required for ALL planning and modification intents (`draft_plan`, `full_plan`, `modify_itinerary`, `modify_preparation` AND all standalone agents like `search_flights`, `search_hotels`). null otherwise.
   A focused, 1-2 sentence description of what the user wants RIGHT NOW — their current request analyzed, disambiguated, and rewritten from their perspective. Include any new context or specific constraints they just mentioned (e.g. area, budget, style) so downstream agents know EXACTLY what goal to accomplish.
   Write in the SAME language as the user.
 """
@@ -218,11 +217,6 @@ def _summarize_plan(current_plan: dict) -> str:
             trip_info += f" + {children} children"
         parts.append(trip_info)
 
-    # Plan status
-    if current_plan.get("is_draft"):
-        parts.append("Status: DRAFT (estimated costs)")
-    elif current_plan.get("itinerary"):
-        parts.append("Status: Full plan with real data")
 
     # What sections exist
     sections = []
@@ -271,6 +265,7 @@ async def intent_agent_node(state: GraphState) -> dict[str, Any]:
     plan_summary = _summarize_plan(current_plan)
     last_suggestions = current_plan.get("last_suggestions", [])
     last_intent = current_plan.get("last_intent", "")
+    last_user_request = current_plan.get("last_user_request", "")
     plan_ctx_clean = current_plan.get("plan_context", {})
 
     from datetime import datetime
@@ -280,6 +275,8 @@ async def intent_agent_node(state: GraphState) -> dict[str, Any]:
     context_msg += f"Current plan: {plan_summary}"
     if last_intent:
         context_msg += f"\nLast intent (previous turn): {last_intent}"
+    if last_user_request:
+        context_msg += f"\nLast user request (previous turn): {last_user_request}"
     if last_suggestions:
         context_msg += f"\nLast suggestions: {json.dumps(last_suggestions, ensure_ascii=False)}"
     context_msg += f"\nCurrent Plan Context:\n{json.dumps(plan_ctx_clean, ensure_ascii=False, indent=2)}\n"
@@ -307,8 +304,10 @@ async def intent_agent_node(state: GraphState) -> dict[str, Any]:
         if context_updates:
             logger.info(f"   📝 Context updates: {context_updates}")
 
-        # Save last_intent for next turn context
+        # Save context for next turn
         current_plan["last_intent"] = intent
+        if user_request_rewrite:
+            current_plan["last_user_request"] = user_request_rewrite
 
         # Apply context updates to current_plan
         if context_updates:
@@ -339,7 +338,7 @@ async def intent_agent_node(state: GraphState) -> dict[str, Any]:
                 "current_plan": current_plan,
                 "intent_output": output,
                 "final_response": direct_response,
-                "agent_outputs": {"clear_all": True, "intent": {"intent": intent, "response": direct_response}},
+                "agent_outputs": {"intent": {"intent": intent, "response": direct_response}},
             }
 
         # Routing intents — pass to next node
@@ -348,11 +347,11 @@ async def intent_agent_node(state: GraphState) -> dict[str, Any]:
         state_update = {
             "current_plan": current_plan,
             "intent_output": output,
-            "agent_outputs": {"clear_all": True, "intent": {"intent": intent, "context_updates": context_updates}},
+            "agent_outputs": {"intent": {"intent": intent, "context_updates": context_updates}},
         }
 
-        # For standalone agent intents: set macro_plan with user_request_rewrite
-        # This keeps isolation, as the standalone agents expect macro_plan["agent_requests"]
+        # For standalone search intents: set macro_plan with user_request_rewrite
+        # Search agents (flight, hotel, attraction, restaurant) read from macro_plan["agent_requests"]
         if intent in STANDALONE_INTENTS and user_request_rewrite:
             agent_key_map = {
                 "search_flights": "flight",
@@ -386,5 +385,5 @@ async def intent_agent_node(state: GraphState) -> dict[str, Any]:
             "current_plan": current_plan,
             "intent_output": {"intent": "general"},
             "final_response": fallback,
-            "agent_outputs": {"clear_all": True, "intent": {"error": str(e), "code": error_code}},
+            "agent_outputs": {"intent": {"error": str(e), "code": error_code}},
         }

@@ -153,6 +153,22 @@ namespace dotnet.Controllers
             }
             else
             {
+                // Clean up routes referencing this item
+                var relatedRoutes = await dbContext.ItineraryItemsRoutes
+                    .Where(r => r.StartItineraryItemId == id || r.EndItineraryItemId == id)
+                    .ToListAsync();
+
+                if (relatedRoutes.Any())
+                {
+                    // delete waypoints for these routes
+                    var routeIds = relatedRoutes.Select(r => r.Id).ToList();
+                    await dbContext.RouteWaypoints
+                        .Where(w => routeIds.Contains(w.ItineraryItemsRouteId))
+                        .ExecuteDeleteAsync();
+                    
+                    dbContext.ItineraryItemsRoutes.RemoveRange(relatedRoutes);
+                }
+
                 dbContext.ItineraryItems.Remove(itineraryItem);
             }
 

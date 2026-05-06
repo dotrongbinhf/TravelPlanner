@@ -396,16 +396,16 @@ def build_location_list(
 ) -> list[dict]:
     """
     Build a flat list of unique locations for distance matrix calculation.
-    Returns list of dicts with: name, lat, lng, type.
+    Returns list of dicts with: name, lat, lng, type, place_id.
     """
     locations = []
     seen_coords = set()
 
-    def _add_if_unique(name, lat, lng, loc_type):
+    def _add_if_unique(name, lat, lng, loc_type, place_id=None):
         coord_key = (round(lat, 5), round(lng, 5))
         if coord_key not in seen_coords:
             seen_coords.add(coord_key)
-            locations.append({"name": name, "lat": lat, "lng": lng, "type": loc_type})
+            locations.append({"name": name, "lat": lat, "lng": lng, "type": loc_type, "place_id": place_id})
 
     # --- Transport hubs: only DESTINATION-side (outbound_arrival, return_departure) ---
     # Origin-side hubs (outbound_departure, return_arrival) are in a different city
@@ -415,17 +415,21 @@ def build_location_list(
         role = ap.get("role", "")
         if role not in destination_roles:
             continue
-        coords = _get_location_coords(ap.get("resolved"))
+        resolved = ap.get("resolved")
+        coords = _get_location_coords(resolved)
         if coords:
-            hub_name = (ap.get("resolved") or {}).get("title", ap["name"])
-            _add_if_unique(hub_name, coords["lat"], coords["lng"], role)
+            hub_name = (resolved or {}).get("title", ap["name"])
+            hub_place_id = (resolved or {}).get("placeId")
+            _add_if_unique(hub_name, coords["lat"], coords["lng"], role, place_id=hub_place_id)
 
     # --- Hotels ---
     for hotel_info in resolved_places.get("hotels", []):
-        coords = _get_location_coords(hotel_info.get("resolved"))
+        resolved = hotel_info.get("resolved")
+        coords = _get_location_coords(resolved)
         if coords:
-            hotel_name = (hotel_info.get("resolved") or {}).get("title", hotel_info["name"])
-            _add_if_unique(hotel_name, coords["lat"], coords["lng"], "hotel")
+            hotel_name = (resolved or {}).get("title", hotel_info["name"])
+            hotel_place_id = (resolved or {}).get("placeId")
+            _add_if_unique(hotel_name, coords["lat"], coords["lng"], "hotel", place_id=hotel_place_id)
 
     # --- Attractions ---
     for attr_info in resolved_places.get("attractions", []):
@@ -433,7 +437,8 @@ def build_location_list(
         coords = _get_location_coords(resolved)
         if coords:
             attr_name = resolved.get("title", attr_info["name"]) if resolved else attr_info["name"]
-            _add_if_unique(attr_name, coords["lat"], coords["lng"], "attraction")
+            attr_place_id = (resolved or {}).get("placeId") if resolved else None
+            _add_if_unique(attr_name, coords["lat"], coords["lng"], "attraction", place_id=attr_place_id)
 
     return locations
 
@@ -726,6 +731,9 @@ def build_schedule_constraints(
             "check_out_time": co_time,
             "segment_name": h.get("segment_name", ""),
         }
+        # Mark estimated hotels so validation can skip timing checks
+        if h.get("estimated"):
+            hotel_entry["estimated"] = True
         if ci_day_idx is not None:
             hotel_entry["check_in_day"] = ci_day_idx
         if co_day_idx is not None:
@@ -862,8 +870,6 @@ async def run_itinerary_pipeline(
         "attractions_info": attractions_info,
         "schedule_constraints": schedule_constraints,
         "resolved_places": resolved,
-        "resolved_places_count": resolved_count,
-        "total_places_count": total_count,
     }
 
     logger.info("🔧 [ITINERARY_BUILDER] Pipeline completed")

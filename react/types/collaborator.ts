@@ -1,7 +1,7 @@
-import { InvitationStatus, PlanRole } from "@/api/participant/types";
+import { InvitationStatus, PlanRole } from "@/api/collaborator/types";
 
-export type Participant = {
-  id: string; // ParticipantId
+export type Collaborator = {
+  id: string; // CollaboratorId
   userId: string;
   planId: string;
   role: PlanRole;

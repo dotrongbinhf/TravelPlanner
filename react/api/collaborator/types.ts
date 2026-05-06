@@ -10,7 +10,7 @@ export enum InvitationStatus {
   Declined = 2,
 }
 
-export type InviteTeammateRequest = {
+export type InviteCollaboratorRequest = {
   userId: string;
   role: PlanRole;
 };

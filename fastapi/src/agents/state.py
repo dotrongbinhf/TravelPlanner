@@ -14,17 +14,17 @@ def merge_agent_outputs(
 ) -> dict[str, Any]:
     """Reducer: merge new agent outputs into existing dict without overwriting
     other agents' results. This enables parallel agents to write concurrently.
-    If 'clear_all' is present and True in new, the existing dict is wiped first."""
+    An empty dict {} signals the start of a new turn — clears all previous outputs."""
     if existing is None:
         existing = {}
     if new is None:
         return existing
-        
+
+    # Empty dict = new turn signal → wipe previous outputs
+    if not new:
+        return {}
+
     merged = {**existing}
-    if new.get("clear_all") is True:
-        merged = {}
-        new = {k: v for k, v in new.items() if k != "clear_all"}
-        
     merged.update(new)
     return merged
 

@@ -2,14 +2,14 @@
 FastAPI Multi-Agent Application.
 
 This is the main entry point for the FastAPI application that supports
-LangGraph multi-agent workflows with WebSocket streaming and .NET API integration.
+LangGraph multi-agent workflows with SSE streaming and .NET API integration.
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.config import settings
 from src.api import api_router
-from src.api.routes.websocket import router as ws_router
+
 import logging
 import os
 import sys
@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
             await init_graph(checkpointer=checkpointer)
             
             logger.info("LangGraph multi-agent workflow ready (PostgresSaver lifespan active)")
-            logger.info("WebSocket endpoint: ws://localhost:8000/ws/agent/{conversation_id}")
+            logger.info("SSE stream endpoint: POST /api/agent/stream")
             
             # Yield to FastAPI so it works
             yield
@@ -100,7 +100,6 @@ app.add_middleware(
 
 # Include routers
 app.include_router(api_router)
-app.include_router(ws_router)
 
 @app.get("/")
 async def root():
@@ -110,7 +109,7 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs",
         "health": "/health",
-        "websocket": "ws://localhost:8000/ws/agent/{conversation_id}"
+        "stream": "POST /api/agent/stream"
     }
 
 if __name__ == "__main__":
