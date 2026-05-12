@@ -83,8 +83,9 @@ One compact, welcoming paragraph highlighting destination, dates, travelers, and
 - Use **time ranges** like `**07:00 - 09:00**` to show start-end.
 - **Highlight** all place/attraction names.
 - Write naturally, fluidly, and beautifully — use a literary and engaging travelogue style ("văn vở", descriptive) to make the activities sound exciting. Do NOT use a rigid template or cold list.
-- Weave the names of places and details seamlessly into paragraphs under each time block.
-- If an attraction has `includes` (sub-attractions), weave ALL of them naturally into the description on the SAME LINE.
+- **CRITICAL**: You MUST include ALL stops, attractions, and restaurants provided in the Agent Data. DO NOT skip or omit any location or activity.
+- Weave the names of ALL places and details seamlessly into paragraphs under each time block.
+- If an attraction has `includes` (sub-attractions), you MUST weave EVERY SINGLE ONE of them naturally into the description.
 - Format example:
 
 ### Day 1: Exploring Hanoi

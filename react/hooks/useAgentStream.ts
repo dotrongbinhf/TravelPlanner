@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef } from "react";
 import { AgentEvent, AgentStreamState } from "@/api/aiChat/types";
 import { TokenStorage } from "@/utils/tokenStorage";
+import { refreshToken } from "@/api/auth/auth";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_ENDPOINT;
 
@@ -152,20 +153,37 @@ export function useAgentStream() {
       abortControllerRef.current = abortController;
 
       try {
-        const token = TokenStorage.getAccessToken();
-
-        const response = await fetch(
-          `${API_BASE_URL}/api/aichat/conversations/${conversationId}/messages/stream`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        const makeStreamRequest = async (token: string | null) => {
+          return fetch(
+            `${API_BASE_URL}/api/aichat/conversations/${conversationId}/messages/stream`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              },
+              body: JSON.stringify({ content: message }),
+              signal: abortController.signal,
             },
-            body: JSON.stringify({ content: message }),
-            signal: abortController.signal,
-          },
-        );
+          );
+        };
+
+        let token = TokenStorage.getAccessToken();
+        let response = await makeStreamRequest(token);
+
+        // Auto-refresh
+        if (response.status === 401) {
+          try {
+            const refreshResult = await refreshToken();
+            const newToken = refreshResult.accessToken;
+            TokenStorage.setAccessToken(newToken);
+            response = await makeStreamRequest(newToken);
+          } catch {
+            TokenStorage.removeAccessToken();
+            window.location.href = "/login";
+            return;
+          }
+        }
 
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);

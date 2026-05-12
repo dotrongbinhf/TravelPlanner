@@ -228,7 +228,7 @@ async def build_agent_graph(checkpointer=None):
     graph.add_conditional_edges("flight", route_from_phase1_agent, ["itinerary", "synthesize"])
     graph.add_conditional_edges("hotel", route_from_phase1_agent, ["itinerary", "synthesize"])
     graph.add_conditional_edges("attraction", route_from_phase1_agent, ["itinerary", "synthesize"])
-    graph.add_edge("weather", "itinerary")  # Weather is always pipeline-only
+    graph.add_edge("weather", "itinerary")
 
     # ── Itinerary → conditional Phase 2 fan-out ────────────────────
     graph.add_conditional_edges(

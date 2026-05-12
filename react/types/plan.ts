@@ -2,7 +2,7 @@ import { ExpenseItem } from "./budget";
 import { ItineraryDay } from "./itineraryDay";
 import { Note } from "./note";
 import { PackingList } from "./packingList";
-import { Collaborator } from "./participant";
+import { Collaborator } from "./collaborator";
 
 export type Plan = {
   id: string;
