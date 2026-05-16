@@ -32,6 +32,7 @@ import { FlightWidget } from "./widgets/FlightWidget";
 import { AttractionWidget } from "./widgets/AttractionWidget";
 import { RestaurantWidget } from "./widgets/RestaurantWidget";
 import { useItineraryContext } from "@/contexts/ItineraryContext";
+import { ApplyScope } from "@/api/aiChat/types";
 
 export interface ChatMessage {
   id: string;
@@ -49,25 +50,24 @@ interface ChatMessagesProps {
   readonly isStreaming?: boolean;
   readonly structuredData?: Record<string, unknown> | null;
   readonly onApplyPlan?: (
-    mode: "CurrentPlan" | "NewPlan",
+    applyScope: ApplyScope,
     messageId?: string,
   ) => Promise<void>;
 }
 
 // Map agent names to display labels
 const AGENT_LABELS: Record<string, string> = {
-  planner: "🧠 Planner",
-  researcher: "🔍 Researcher",
-  dotnet_integration: "📡 Data Fetcher",
-  response: "📝 Composing Response",
-  orchestrator: "🧠 Orchestrator",
-  flight_agent: "✈️ Flight Agent",
-  hotel_agent: "🏨 Hotel Agent",
-  attraction_agent: "🎪 Attraction Agent",
-  restaurant_agent: "🍽️ Restaurant Agent",
-  preparation_agent: "🎒 Preparation Agent",
-  itinerary_agent: "📅 Itinerary Agent",
+  intent: "🎯 Recognizing Intent",
+  orchestrator: "🧠 Planning Overview",
+  flight_agent: "✈️ Searching Flights",
+  hotel_agent: "🏨 Searching Hotels",
+  attraction_agent: "🎪 Finding Attractions",
+  restaurant_agent: "🍽️ Finding Restaurants",
+  preparation_agent: "🎒 Preparing Trip Essentials",
+  itinerary_agent: "📅 Building Itinerary",
+  weather: "🌤️ Checking Weather",
   synthesize: "📝 Composing Response",
+  select_apply: "✅ Finalizing Selections",
 };
 
 // Reusable markdown components config
@@ -102,11 +102,17 @@ const markdownComponents = {
   ),
   table: ({ node, ...props }: any) => (
     <div className="overflow-x-auto my-4 w-full rounded-xl border border-sky-100 shadow-sm bg-white">
-      <table className="w-full text-sm text-left whitespace-nowrap" {...props} />
+      <table
+        className="w-full text-sm text-left whitespace-nowrap"
+        {...props}
+      />
     </div>
   ),
   thead: ({ node, ...props }: any) => (
-    <thead className="bg-sky-50 text-sky-900 border-b border-sky-100" {...props} />
+    <thead
+      className="bg-sky-50 text-sky-900 border-b border-sky-100"
+      {...props}
+    />
   ),
   th: ({ node, ...props }: any) => (
     <th className="px-4 py-3 font-semibold" {...props} />
@@ -145,25 +151,45 @@ export default function ChatMessages({
 }: ChatMessagesProps) {
   // Helper to split message and render widgets — supports MULTIPLE widgets in one message
   const WIDGET_TAGS = [
-    { tag: '[HOTEL_UI_WIDGET]', render: (sd: any) => <HotelWidget data={sd?.hotel_agent} /> },
-    { tag: '[FLIGHT_UI_WIDGET]', render: (sd: any) => <FlightWidget data={sd?.flight_agent} /> },
-    { tag: '[ATTRACTION_UI_WIDGET]', render: (sd: any) => <AttractionWidget data={sd?.attraction_agent} /> },
-    { tag: '[RESTAURANT_UI_WIDGET]', render: (sd: any) => <RestaurantWidget data={sd?.restaurant_agent} /> },
+    {
+      tag: "[HOTEL_UI_WIDGET]",
+      render: (sd: any) => <HotelWidget data={sd?.hotel_agent} />,
+    },
+    {
+      tag: "[FLIGHT_UI_WIDGET]",
+      render: (sd: any) => <FlightWidget data={sd?.flight_agent} />,
+    },
+    {
+      tag: "[ATTRACTION_UI_WIDGET]",
+      render: (sd: any) => <AttractionWidget data={sd?.attraction_agent} />,
+    },
+    {
+      tag: "[RESTAURANT_UI_WIDGET]",
+      render: (sd: any) => <RestaurantWidget data={sd?.restaurant_agent} />,
+    },
   ];
 
-  const renderMessageWithWidgets = (content: string, msgStructuredData?: Record<string, unknown> | null) => {
+  const renderMessageWithWidgets = (
+    content: string,
+    msgStructuredData?: Record<string, unknown> | null,
+  ) => {
     // Check if ANY widget tag exists
-    const hasWidget = WIDGET_TAGS.some(w => content.includes(w.tag));
+    const hasWidget = WIDGET_TAGS.some((w) => content.includes(w.tag));
     if (!hasWidget) {
       return (
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={markdownComponents}
+        >
           {content}
         </ReactMarkdown>
       );
     }
 
     // Split content by ALL widget tags, preserving order
-    type Segment = { type: 'text'; content: string } | { type: 'widget'; tagIndex: number };
+    type Segment =
+      | { type: "text"; content: string }
+      | { type: "widget"; tagIndex: number };
     const segments: Segment[] = [];
     let remaining = content;
 
@@ -181,31 +207,41 @@ export default function ChatMessages({
 
       if (earliest === -1) {
         // No more widgets, push remaining text
-        if (remaining.trim()) segments.push({ type: 'text', content: remaining });
+        if (remaining.trim())
+          segments.push({ type: "text", content: remaining });
         break;
       }
 
       // Push text before the widget
       const textBefore = remaining.substring(0, earliestPos);
-      if (textBefore.trim()) segments.push({ type: 'text', content: textBefore });
+      if (textBefore.trim())
+        segments.push({ type: "text", content: textBefore });
 
       // Push the widget
-      segments.push({ type: 'widget', tagIndex: earliest });
+      segments.push({ type: "widget", tagIndex: earliest });
 
       // Advance past the tag
-      remaining = remaining.substring(earliestPos + WIDGET_TAGS[earliest].tag.length);
+      remaining = remaining.substring(
+        earliestPos + WIDGET_TAGS[earliest].tag.length,
+      );
     }
 
     return (
       <div className="flex flex-col">
         {segments.map((seg, idx) =>
-          seg.type === 'text' ? (
-            <ReactMarkdown key={idx} remarkPlugins={[remarkGfm]} components={markdownComponents}>
+          seg.type === "text" ? (
+            <ReactMarkdown
+              key={idx}
+              remarkPlugins={[remarkGfm]}
+              components={markdownComponents}
+            >
               {seg.content}
             </ReactMarkdown>
           ) : (
-            <div key={idx}>{WIDGET_TAGS[seg.tagIndex].render(msgStructuredData)}</div>
-          )
+            <div key={idx}>
+              {WIDGET_TAGS[seg.tagIndex].render(msgStructuredData)}
+            </div>
+          ),
         )}
       </div>
     );
@@ -216,13 +252,17 @@ export default function ChatMessages({
   const isInitialLoadRef = useRef(true);
   const prevMsgCountRef = useRef(messages.length);
 
-  const [applyingMessageId, setApplyingMessageId] = useState<string | null>(null);
+  const [applyingMessageId, setApplyingMessageId] = useState<string | null>(
+    null,
+  );
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [confirmMessageId, setConfirmMessageId] = useState<string | null>(null);
 
   const { setChatPlaces } = useItineraryContext();
 
-  const lastUserMsgId = [...messages].reverse().find(m => m.role === "user")?.id;
+  const lastUserMsgId = [...messages]
+    .reverse()
+    .find((m) => m.role === "user")?.id;
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -230,7 +270,10 @@ export default function ChatMessages({
 
   const scrollToLastUserMsg = useCallback(() => {
     if (lastUserMessageRef.current) {
-      lastUserMessageRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+      lastUserMessageRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
     } else {
       scrollToBottom();
     }
@@ -239,22 +282,31 @@ export default function ChatMessages({
   // Extract places from the latest message that contains widget data
   useEffect(() => {
     let latestWidgetData: any = null;
-    
+
     // Check streaming data first
-    if (structuredData && (structuredData.hotel_agent || structuredData.attraction_agent || structuredData.restaurant_agent)) {
+    if (
+      structuredData &&
+      (structuredData.hotel_agent ||
+        structuredData.attraction_agent ||
+        structuredData.restaurant_agent)
+    ) {
       latestWidgetData = structuredData;
     } else {
       // Look for the latest message with widget data in history
-      const latestMsgWithData = [...messages].reverse().find(m => {
+      const latestMsgWithData = [...messages].reverse().find((m) => {
         if (!m.generatedPlanData) return false;
         try {
           const parsed = JSON.parse(m.generatedPlanData);
-          return parsed.hotel_agent || parsed.attraction_agent || parsed.restaurant_agent;
+          return (
+            parsed.hotel_agent ||
+            parsed.attraction_agent ||
+            parsed.restaurant_agent
+          );
         } catch {
           return false;
         }
       });
-      
+
       if (latestMsgWithData?.generatedPlanData) {
         try {
           latestWidgetData = JSON.parse(latestMsgWithData.generatedPlanData);
@@ -263,67 +315,91 @@ export default function ChatMessages({
     }
 
     if (latestWidgetData) {
-      import('@/contexts/ItineraryContext').then((mod) => {
-        const places: import('@/contexts/ItineraryContext').ChatPlace[] = [];
-        
+      import("@/contexts/ItineraryContext").then((mod) => {
+        const places: import("@/contexts/ItineraryContext").ChatPlace[] = [];
+
         // Extract Hotels
         if (latestWidgetData.hotel_agent?.segments) {
           latestWidgetData.hotel_agent.segments.forEach((seg: any) => {
             const allHotels = [
               { ...seg, id: seg.recommend_hotel_name },
-              ...(seg.alternatives || []).map((alt: any, idx: number) => ({ ...alt, id: alt.name || `alt-${idx}` }))
+              ...(seg.alternatives || []).map((alt: any, idx: number) => ({
+                ...alt,
+                id: alt.name || `alt-${idx}`,
+              })),
             ];
-            
-            allHotels.forEach(h => {
-              if (h._location && (h._location.coordinates || (h._location.lat && h._location.lng))) {
+
+            allHotels.forEach((h) => {
+              if (
+                h._location &&
+                (h._location.coordinates ||
+                  (h._location.lat && h._location.lng))
+              ) {
                 places.push({
                   id: h.id,
                   placeId: h.place_id || h.placeId,
                   name: h.name || h.recommend_hotel_name,
-                  location: h._location.coordinates 
-                    ? { lat: h._location.coordinates[1], lng: h._location.coordinates[0] }
+                  location: h._location.coordinates
+                    ? {
+                        lat: h._location.coordinates[1],
+                        lng: h._location.coordinates[0],
+                      }
                     : { lat: h._location.lat, lng: h._location.lng },
-                  source: "hotel"
+                  source: "hotel",
                 });
               }
             });
           });
         }
-        
+
         // Extract Attractions
         if (latestWidgetData.attraction_agent?.segments) {
           latestWidgetData.attraction_agent.segments.forEach((seg: any) => {
-            if (seg._location && (seg._location.coordinates || (seg._location.lat && seg._location.lng))) {
+            if (
+              seg._location &&
+              (seg._location.coordinates ||
+                (seg._location.lat && seg._location.lng))
+            ) {
               places.push({
                 id: seg.title || seg.recommend_attraction_name,
                 placeId: seg.place_id || seg.placeId,
                 name: seg.title || seg.recommend_attraction_name,
-                location: seg._location.coordinates 
-                  ? { lat: seg._location.coordinates[1], lng: seg._location.coordinates[0] }
+                location: seg._location.coordinates
+                  ? {
+                      lat: seg._location.coordinates[1],
+                      lng: seg._location.coordinates[0],
+                    }
                   : { lat: seg._location.lat, lng: seg._location.lng },
-                source: "attraction"
+                source: "attraction",
               });
             }
           });
         }
-        
+
         // Extract Restaurants
         if (latestWidgetData.restaurant_agent?.segments) {
           latestWidgetData.restaurant_agent.segments.forEach((seg: any) => {
-            if (seg._location && (seg._location.coordinates || (seg._location.lat && seg._location.lng))) {
+            if (
+              seg._location &&
+              (seg._location.coordinates ||
+                (seg._location.lat && seg._location.lng))
+            ) {
               places.push({
                 id: seg.title || seg.recommend_restaurant_name,
                 placeId: seg.place_id || seg.placeId,
                 name: seg.title || seg.recommend_restaurant_name,
-                location: seg._location.coordinates 
-                  ? { lat: seg._location.coordinates[1], lng: seg._location.coordinates[0] }
+                location: seg._location.coordinates
+                  ? {
+                      lat: seg._location.coordinates[1],
+                      lng: seg._location.coordinates[0],
+                    }
                   : { lat: seg._location.lat, lng: seg._location.lng },
-                source: "restaurant"
+                source: "restaurant",
               });
             }
           });
         }
-        
+
         setChatPlaces(places as any);
       });
     } else {
@@ -339,12 +415,22 @@ export default function ChatMessages({
       return;
     }
 
-    if (messages.length > prevMsgCountRef.current || isStreaming || (streamingContent && streamingContent.length > 0)) {
+    if (
+      messages.length > prevMsgCountRef.current ||
+      isStreaming ||
+      (streamingContent && streamingContent.length > 0)
+    ) {
       scrollToBottom();
     }
-    
+
     prevMsgCountRef.current = messages.length;
-  }, [messages.length, isStreaming, streamingContent, scrollToBottom, scrollToLastUserMsg]);
+  }, [
+    messages.length,
+    isStreaming,
+    streamingContent,
+    scrollToBottom,
+    scrollToLastUserMsg,
+  ]);
 
   // Check if any DB-loaded message already has generatedPlanData
   const hasDbApplyData = messages.some((m) => m.generatedPlanData);
@@ -355,14 +441,11 @@ export default function ChatMessages({
     (structuredData as any)?.apply_data &&
     !hasDbApplyData;
 
-  const handleApply = async (
-    mode: "CurrentPlan" | "NewPlan",
-    messageId?: string,
-  ) => {
+  const handleApply = async (applyScope: ApplyScope, messageId?: string) => {
     if (!onApplyPlan) return;
     setApplyingMessageId(messageId || "streaming");
     try {
-      await onApplyPlan(mode, messageId);
+      await onApplyPlan(applyScope, messageId);
     } catch {
       // Error handled by parent
     } finally {
@@ -370,14 +453,14 @@ export default function ChatMessages({
     }
   };
 
-  const handleCurrentPlanClick = (messageId?: string) => {
+  const handleApplyChangesClick = (messageId?: string) => {
     setConfirmMessageId(messageId || null);
     setShowConfirmDialog(true);
   };
 
   const handleConfirmReplace = () => {
     setShowConfirmDialog(false);
-    handleApply("CurrentPlan", confirmMessageId || undefined);
+    handleApply(ApplyScope.OnlyChanges, confirmMessageId || undefined);
   };
 
   const renderApplyButton = (
@@ -421,28 +504,28 @@ export default function ChatMessages({
                 )}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-52">
+            <DropdownMenuContent align="start" className="w-56">
               <DropdownMenuItem
-                onClick={() => handleCurrentPlanClick(messageId)}
+                onClick={() => handleApplyChangesClick(messageId)}
                 className="cursor-pointer"
               >
                 <CheckCircle2 className="w-4 h-4 mr-2 text-emerald-600" />
                 <div>
-                  <div className="text-sm font-medium">Apply to this plan</div>
+                  <div className="text-sm font-medium">Apply Changes Only</div>
                   <div className="text-xs text-gray-500">
-                    Replace current plan data
+                    Apply only what changed in this message
                   </div>
                 </div>
               </DropdownMenuItem>
               <DropdownMenuItem
-                onClick={() => handleApply("NewPlan", messageId)}
+                onClick={() => handleApply(ApplyScope.FullPlan, messageId)}
                 className="cursor-pointer"
               >
                 <FilePlus2 className="w-4 h-4 mr-2 text-blue-600" />
                 <div>
-                  <div className="text-sm font-medium">Create new plan</div>
+                  <div className="text-sm font-medium">Apply Full Plan</div>
                   <div className="text-xs text-gray-500">
-                    Keep current plan unchanged
+                    Apply complete plan up to this point
                   </div>
                 </div>
               </DropdownMenuItem>
@@ -462,34 +545,40 @@ export default function ChatMessages({
             parsedData = JSON.parse(msg.generatedPlanData);
           } catch (e) {}
         }
-        
-        return (
-        <div key={msg.id} ref={msg.id === lastUserMsgId ? lastUserMessageRef : null}>
-          <div
-            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            {msg.role === "assistant" && (
-              <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center flex-shrink-0 mr-2 mt-1">
-                <BotMessageSquare className="w-3 h-3 text-white" />
-              </div>
-            )}
-            <div
-              className={cn(
-                "max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words",
-                msg.role === "user"
-                  ? "bg-gradient-to-r from-sky-500 to-blue-500 text-white shadow-sm rounded-br-md"
-                  : "bg-white text-gray-800 border border-sky-100 shadow-sm rounded-bl-md",
-              )}
-            >
-              {renderMessageWithWidgets(msg.content, parsedData || structuredData)}
-            </div>
-          </div>
 
-          {/* Per-message Apply button — for messages loaded from DB */}
-          {msg.role === "assistant" &&
-            parsedData?.apply_data &&
-            renderApplyButton(msg.id, msg.applyGeneratedPlanAt)}
-        </div>
+        return (
+          <div
+            key={msg.id}
+            ref={msg.id === lastUserMsgId ? lastUserMessageRef : null}
+          >
+            <div
+              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+            >
+              {msg.role === "assistant" && (
+                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center flex-shrink-0 mr-2 mt-1">
+                  <BotMessageSquare className="w-3 h-3 text-white" />
+                </div>
+              )}
+              <div
+                className={cn(
+                  "max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words",
+                  msg.role === "user"
+                    ? "bg-gradient-to-r from-sky-500 to-blue-500 text-white shadow-sm rounded-br-md"
+                    : "bg-white text-gray-800 border border-sky-100 shadow-sm rounded-bl-md",
+                )}
+              >
+                {renderMessageWithWidgets(
+                  msg.content,
+                  parsedData || structuredData,
+                )}
+              </div>
+            </div>
+
+            {/* Per-message Apply button — for messages with plan data */}
+            {msg.role === "assistant" &&
+              msg.generatedPlanData &&
+              renderApplyButton(msg.id, msg.applyGeneratedPlanAt)}
+          </div>
         );
       })}
 
@@ -509,9 +598,7 @@ export default function ChatMessages({
                     className="flex items-center gap-1.5 text-xs text-emerald-600 font-medium"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                    <span>
-                      {AGENT_LABELS[agentName] || agentName} completed
-                    </span>
+                    <span>{AGENT_LABELS[agentName] || agentName}</span>
                   </div>
                 ))}
                 {activeAgents?.map((agentName) => (
@@ -521,7 +608,7 @@ export default function ChatMessages({
                   >
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     <span className="animate-pulse">
-                      {AGENT_LABELS[agentName] || agentName} running...
+                      {AGENT_LABELS[agentName] || agentName}
                     </span>
                   </div>
                 ))}

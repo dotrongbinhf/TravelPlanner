@@ -21,6 +21,11 @@ export enum MessageRole {
   System = 2,
 }
 
+export enum ApplyScope {
+  OnlyChanges = 0,
+  FullPlan = 1,
+}
+
 export type Message = {
   id: string;
   conversationId: string;
@@ -50,6 +55,7 @@ export type AgentEvent = {
     | "text_chunk"
     | "structured_data"
     | "workflow_complete"
+    | "message_saved"
     | "error";
   agentName?: string;
   content?: string;
@@ -60,6 +66,7 @@ export type AgentEvent = {
   finalResponse?: string;
   structuredData?: Record<string, unknown>;
   errorMessage?: string;
+  messageId?: string;
   timestamp?: string;
 };
 
@@ -71,4 +78,5 @@ export type AgentStreamState = {
   structuredData: Record<string, unknown> | null;
   isComplete: boolean;
   error: string | null;
+  savedMessageId: string | null;
 };

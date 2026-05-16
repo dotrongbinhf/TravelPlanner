@@ -59,6 +59,11 @@ namespace dotnet.Dtos.AgentEvent
 
 
         /// <summary>
+        /// Real DB message ID (for message_saved events, sent after AI response is persisted)
+        /// </summary>
+        public string? MessageId { get; set; }
+
+        /// <summary>
         /// Timestamp of the event
         /// </summary>
         public string? Timestamp { get; set; }

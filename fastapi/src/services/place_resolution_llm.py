@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 llm_verify = (
     ChatOpenAI(
-        model="google/gemini-3.1-flash-lite-preview",
+        model="google/gemini-3.1-flash-lite",
         api_key=settings.VERCEL_AI_GATEWAY_API_KEY,
         base_url="https://ai-gateway.vercel.sh/v1",
         temperature=0.3,

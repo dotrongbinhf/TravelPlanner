@@ -649,109 +649,101 @@ namespace dotnet.Controllers
         }
 
         /// <summary>
-        /// Apply AI-generated plan data to an existing plan (replace) or create a new plan.
-        /// Handles: itinerary (with PlaceId resolution for restaurants), budget, packing lists, notes.
+        /// Apply AI-generated plan data from a chat message to the current plan.
+        /// Server reads GeneratedPlanData from the Message table — frontend only sends messageId + scope.
         /// </summary>
         [HttpPost("{id:Guid}/apply-ai")]
         public async Task<IActionResult> ApplyAIPlan(Guid id, [FromBody] ApplyAIPlanRequest request)
         {
             var userId = _currentUser.Id;
-            if (userId == null)
-            {
-                return Unauthorized();
-            }
+            if (userId == null) return Unauthorized();
 
-            // Validate source plan exists and user is owner or editor
-            var sourcePlan = await dbContext.Plans.FirstOrDefaultAsync(p => p.Id == id);
-            if (sourcePlan == null)
+            // ── Validate plan + authorization ──
+            var plan = await dbContext.Plans.FirstOrDefaultAsync(p => p.Id == id);
+            if (plan == null) return NotFound("Plan not found");
+
+            if (plan.OwnerId != userId)
             {
-                return NotFound("Plan not found");
-            }
-            if (sourcePlan.OwnerId != userId)
-            {
-                var aiCollaborator = await dbContext.Collaborators
-                    .FirstOrDefaultAsync(c => c.PlanId == id && c.UserId == userId && c.Status == InvitationStatus.Accepted && c.Role == PlanRole.Editor);
-                if (aiCollaborator == null)
-                {
+                var collaborator = await dbContext.Collaborators
+                    .FirstOrDefaultAsync(c => c.PlanId == id && c.UserId == userId
+                        && c.Status == InvitationStatus.Accepted && c.Role == PlanRole.Editor);
+                if (collaborator == null)
                     return Forbid("Only the owner or editor can apply AI plan");
-                }
             }
 
-            Plan targetPlan;
+            // ── Read message from DB ──
+            var message = await dbContext.Messages
+                .FirstOrDefaultAsync(m => m.Id == request.MessageId);
+            if (message?.GeneratedPlanData == null)
+                return BadRequest("Message has no plan data");
 
-            if (request.Mode == ApplyMode.NewPlan)
+            // ── Validate message belongs to this plan's conversation ──
+            var conversation = await dbContext.Conversations
+                .FirstOrDefaultAsync(c => c.Id == message.ConversationId && c.PlanId == id);
+            if (conversation == null)
+                return BadRequest("Message does not belong to this plan");
+
+            // ── Parse GeneratedPlanData JSON ──
+            System.Text.Json.JsonElement root;
+            try
             {
-                // Create a new plan
-                targetPlan = new Plan
-                {
-                    Id = Guid.NewGuid(),
-                    OwnerId = userId.Value,
-                    Name = request.NewPlanName ?? $"{sourcePlan.Name} (AI)",
-                    StartTime = request.StartTime ?? sourcePlan.StartTime,
-                    EndTime = request.EndTime ?? sourcePlan.EndTime,
-                    Budget = sourcePlan.Budget,
-                    CurrencyCode = request.CurrencyCode ?? sourcePlan.CurrencyCode,
-                };
-                await dbContext.Plans.AddAsync(targetPlan);
+                root = System.Text.Json.JsonDocument.Parse(message.GeneratedPlanData).RootElement;
             }
-            else
+            catch
             {
-                targetPlan = sourcePlan;
-
-                // Update plan metadata
-                if (request.StartTime.HasValue)
-                    targetPlan.StartTime = request.StartTime.Value;
-                if (request.EndTime.HasValue)
-                    targetPlan.EndTime = request.EndTime.Value;
-                if (!string.IsNullOrEmpty(request.CurrencyCode))
-                    targetPlan.CurrencyCode = request.CurrencyCode;
-
-                // Delete existing data ONLY for sections that are being applied
-                // (null sections = not changed, keep existing)
-                if (request.ItineraryDays != null)
-                {
-                    var existingDays = await dbContext.ItineraryDays
-                        .Where(d => d.PlanId == targetPlan.Id)
-                        .Include(d => d.ItineraryItems)
-                        .ToListAsync();
-                    dbContext.ItineraryDays.RemoveRange(existingDays);
-                }
-
-                if (request.ExpenseItems != null)
-                {
-                    var existingExpenses = await dbContext.ExpenseItems
-                        .Where(e => e.PlanId == targetPlan.Id)
-                        .ToListAsync();
-                    dbContext.ExpenseItems.RemoveRange(existingExpenses);
-                }
-
-                if (request.PackingLists != null)
-                {
-                    var existingPackingLists = await dbContext.PackingLists
-                        .Where(p => p.PlanId == targetPlan.Id)
-                        .Include(p => p.PackingItems)
-                        .ToListAsync();
-                    dbContext.PackingLists.RemoveRange(existingPackingLists);
-                }
-
-                if (request.Notes != null)
-                {
-                    var existingNotes = await dbContext.Notes
-                        .Where(n => n.PlanId == targetPlan.Id)
-                        .ToListAsync();
-                    dbContext.Notes.RemoveRange(existingNotes);
-                }
+                return BadRequest("Invalid GeneratedPlanData JSON");
             }
 
-            // ── Apply Itinerary ──────────────────────────────────────
-            if (request.ItineraryDays != null)
+            if (!root.TryGetProperty("apply_data", out var applyData))
+                return BadRequest("No apply_data found in message");
+
+            var sections = applyData.TryGetProperty("sections", out var sec)
+                ? sec : default;
+            var planCtx = applyData.TryGetProperty("plan_context", out var ctx)
+                ? ctx : default;
+
+            bool applyAll = request.ApplyScope == ApplyScope.FullPlan;
+
+            // ── Update plan metadata ──
+            if (_tryGetString(planCtx, "startTime") is string st
+                && DateTimeOffset.TryParse(st, out var startTime))
+                plan.StartTime = startTime;
+            if (_tryGetString(planCtx, "endTime") is string et
+                && DateTimeOffset.TryParse(et, out var endTime))
+                plan.EndTime = endTime;
+            if (_tryGetString(planCtx, "currencyCode") is string cc)
+                plan.CurrencyCode = cc;
+
+            // ── Deserialize applicable sections ──
+            var jsonOptions = new System.Text.Json.JsonSerializerOptions
             {
-                foreach (var aiDay in request.ItineraryDays)
+                PropertyNameCaseInsensitive = true,
+            };
+
+            var itineraryDays = _tryDeserializeSection<List<AIItineraryDay>>(
+                sections, "itinerary", applyAll, jsonOptions);
+            var expenseItems = _tryDeserializeSection<List<AIExpenseItem>>(
+                sections, "budget", applyAll, jsonOptions);
+            var packingLists = _tryDeserializeSection<List<AIPackingList>>(
+                sections, "packing", applyAll, jsonOptions);
+            var notes = _tryDeserializeSection<List<AINote>>(
+                sections, "notes", applyAll, jsonOptions);
+
+            // ── Apply Itinerary ──
+            if (itineraryDays != null)
+            {
+                var existingDays = await dbContext.ItineraryDays
+                    .Where(d => d.PlanId == plan.Id)
+                    .Include(d => d.ItineraryItems)
+                    .ToListAsync();
+                dbContext.ItineraryDays.RemoveRange(existingDays);
+
+                foreach (var aiDay in itineraryDays)
                 {
                     var itineraryDay = new ItineraryDay
                     {
                         Id = Guid.NewGuid(),
-                        PlanId = targetPlan.Id,
+                        PlanId = plan.Id,
                         Order = aiDay.Order,
                         Title = aiDay.Title,
                     };
@@ -761,7 +753,7 @@ namespace dotnet.Controllers
                     {
                         var placeId = aiItem.PlaceId;
 
-                        // For restaurant stops (lunch/dinner) with PlaceId, ensure place exists in MongoDB
+                        // For restaurant stops with PlaceId, ensure place exists in MongoDB
                         if (!string.IsNullOrEmpty(placeId) && (aiItem.Role == "lunch" || aiItem.Role == "dinner"))
                         {
                             var existingPlace = await _placesCollection
@@ -770,117 +762,125 @@ namespace dotnet.Controllers
 
                             if (existingPlace == null)
                             {
-                                // Fetch from Google Places API and save to MongoDB
                                 var googlePlace = await _externalApiService.GetPlaceDetailsAsync(placeId);
                                 if (googlePlace != null)
                                 {
-                                    // Check for race condition
                                     var raceCheck = await _placesCollection
                                         .Find(p => p.PlaceId == placeId)
                                         .FirstOrDefaultAsync();
                                     if (raceCheck == null)
                                     {
-                                        googlePlace.Id = null; // Let MongoDB generate the Id
+                                        googlePlace.Id = null;
                                         await _placesCollection.InsertOneAsync(googlePlace);
                                     }
                                 }
                             }
                         }
 
-                        // Parse StartTime and Duration
-                        TimeOnly startTime = TimeOnly.MinValue;
+                        TimeOnly startTimeVal = TimeOnly.MinValue;
                         if (!string.IsNullOrEmpty(aiItem.StartTime))
-                        {
-                            TimeOnly.TryParse(aiItem.StartTime, out startTime);
-                        }
+                            TimeOnly.TryParse(aiItem.StartTime, out startTimeVal);
 
                         var duration = TimeSpan.FromMinutes(aiItem.Duration > 0 ? aiItem.Duration : 60);
 
-                        var itineraryItem = new ItineraryItem
+                        dbContext.ItineraryItems.Add(new ItineraryItem
                         {
                             Id = Guid.NewGuid(),
                             ItineraryDayId = itineraryDay.Id,
                             PlaceId = string.IsNullOrEmpty(placeId) ? null : placeId,
-                            StartTime = startTime,
+                            StartTime = startTimeVal,
                             Duration = duration,
                             Note = aiItem.Note,
-                        };
-                        dbContext.ItineraryItems.Add(itineraryItem);
+                        });
                     }
                 }
             }
 
-            // ── Apply Budget / Expense Items ─────────────────────────
-            if (request.ExpenseItems != null)
+            // ── Apply Budget ──
+            if (expenseItems != null)
             {
-                foreach (var aiExpense in request.ExpenseItems)
+                var existingExpenses = await dbContext.ExpenseItems
+                    .Where(e => e.PlanId == plan.Id)
+                    .ToListAsync();
+                dbContext.ExpenseItems.RemoveRange(existingExpenses);
+
+                foreach (var aiExpense in expenseItems)
                 {
                     var category = Enum.TryParse<ExpenseCategory>(aiExpense.Category, true, out var parsed)
-                        ? parsed
-                        : ExpenseCategory.Other;
+                        ? parsed : ExpenseCategory.Other;
 
-                    var expenseItem = new ExpenseItem
+                    dbContext.ExpenseItems.Add(new ExpenseItem
                     {
                         Id = Guid.NewGuid(),
-                        PlanId = targetPlan.Id,
+                        PlanId = plan.Id,
                         Category = category,
                         Name = aiExpense.Name,
                         Amount = aiExpense.Amount,
-                    };
-                    dbContext.ExpenseItems.Add(expenseItem);
-
+                    });
                 }
             }
 
-            // ── Apply Packing Lists ──────────────────────────────────
-            if (request.PackingLists != null)
+            // ── Apply Packing Lists ──
+            if (packingLists != null)
             {
-                foreach (var aiPacking in request.PackingLists)
+                var existingPackingLists = await dbContext.PackingLists
+                    .Where(p => p.PlanId == plan.Id)
+                    .Include(p => p.PackingItems)
+                    .ToListAsync();
+                dbContext.PackingLists.RemoveRange(existingPackingLists);
+
+                foreach (var aiPacking in packingLists)
                 {
                     var packingList = new PackingList
                     {
                         Id = Guid.NewGuid(),
-                        PlanId = targetPlan.Id,
+                        PlanId = plan.Id,
                         Name = aiPacking.Name,
                     };
                     await dbContext.PackingLists.AddAsync(packingList);
 
                     foreach (var itemName in aiPacking.Items)
                     {
-                        var packingItem = new PackingItem
+                        dbContext.PackingItems.Add(new PackingItem
                         {
                             Id = Guid.NewGuid(),
                             PackingListId = packingList.Id,
                             Name = itemName,
                             IsPacked = false,
-                        };
-                        dbContext.PackingItems.Add(packingItem);
+                        });
                     }
                 }
             }
 
-            // ── Apply Notes ──────────────────────────────────────────
-            if (request.Notes != null)
+            // ── Apply Notes ──
+            if (notes != null)
             {
-                foreach (var aiNote in request.Notes)
+                var existingNotes = await dbContext.Notes
+                    .Where(n => n.PlanId == plan.Id)
+                    .ToListAsync();
+                dbContext.Notes.RemoveRange(existingNotes);
+
+                foreach (var aiNote in notes)
                 {
-                    var note = new Note
+                    dbContext.Notes.Add(new Note
                     {
                         Id = Guid.NewGuid(),
-                        PlanId = targetPlan.Id,
+                        PlanId = plan.Id,
                         Title = aiNote.Title,
                         Content = aiNote.Content,
-                    };
-                    dbContext.Notes.Add(note);
+                    });
                 }
             }
 
-            // ── Save all changes ─────────────────────────────────────
+            // ── Mark message as applied ──
+            message.ApplyGeneratedPlanAt = DateTimeOffset.UtcNow;
+
+            // ── Save all changes ──
             await dbContext.SaveChangesAsync();
 
-            // ── Return full PlanDto ──────────────────────────────────
+            // ── Return full PlanDto ──
             var result = await dbContext.Plans
-                .Where(p => p.Id == targetPlan.Id)
+                .Where(p => p.Id == plan.Id)
                 .Include(p => p.Owner)
                 .Include(p => p.Notes)
                 .Include(p => p.PackingLists)
@@ -892,10 +892,7 @@ namespace dotnet.Controllers
                     .ThenInclude(iday => iday.ItineraryItems)
                 .FirstOrDefaultAsync();
 
-            if (result == null)
-            {
-                return NotFound();
-            }
+            if (result == null) return NotFound();
 
             var placeIds = result.ItineraryDays
                 .SelectMany(iday => iday.ItineraryItems)
@@ -994,6 +991,30 @@ namespace dotnet.Controllers
                     }).ToList()
             });
         }
+
+        // ── Apply helpers ─────────────────────────────────────────────
+
+        private static T? _tryDeserializeSection<T>(
+            System.Text.Json.JsonElement sections, string key, bool applyAll,
+            System.Text.Json.JsonSerializerOptions jsonOptions) where T : class
+        {
+            if (sections.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
+            if (!sections.TryGetProperty(key, out var section)) return null;
+            if (!applyAll)
+            {
+                if (!section.TryGetProperty("is_apply", out var flag) || !flag.GetBoolean())
+                    return null;
+            }
+            if (!section.TryGetProperty("data", out var data)) return null;
+            return System.Text.Json.JsonSerializer.Deserialize<T>(data.GetRawText(), jsonOptions);
+        }
+
+        private static string? _tryGetString(System.Text.Json.JsonElement el, string prop)
+        {
+            if (el.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
+            return el.TryGetProperty(prop, out var val) ? val.GetString() : null;
+        }
+
 
         [HttpDelete("{id:Guid}")]
         public async Task<IActionResult> DeletePlan(Guid id)

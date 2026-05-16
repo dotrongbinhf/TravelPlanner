@@ -154,7 +154,7 @@ export default function Login() {
           </div>
 
           {/* Social Login */}
-          <div className="space-y-3">
+          {/* <div className="space-y-3">
             <button
               type="button"
               className="cursor-pointer w-full py-3 px-4 border border-gray-300 rounded-lg flex items-center justify-center gap-3 hover:bg-gray-100 transition-all"
@@ -169,7 +169,7 @@ export default function Login() {
                 Login with Google
               </span>
             </button>
-          </div>
+          </div> */}
 
           {/* Register Link */}
           <p className="text-center text-gray-600">

@@ -2,6 +2,7 @@ import { Plan } from "@/types/plan";
 import API from "@/utils/api";
 import { CreatePlanRequest } from "./types";
 import { PaginatedResult } from "@/types/paginated";
+import { ApplyScope } from "@/api/aiChat/types";
 
 const APP_CONFIG_URL = "/api/plan";
 
@@ -83,8 +84,14 @@ export const deletePlan = async (planId: string) => {
   return response.data;
 };
 
-export const applyAIPlan = async (planId: string, applyData: Record<string, unknown>) => {
-  const response = await API.post<Plan>(`${APP_CONFIG_URL}/${planId}/apply-ai`, applyData);
+export const applyAIPlan = async (
+  planId: string,
+  request: { messageId: string; applyScope: ApplyScope },
+) => {
+  const response = await API.post<Plan>(
+    `${APP_CONFIG_URL}/${planId}/apply-ai`,
+    request,
+  );
   return response.data;
 };
 

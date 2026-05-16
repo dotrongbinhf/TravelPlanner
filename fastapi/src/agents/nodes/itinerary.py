@@ -1035,7 +1035,18 @@ def _apply_constraint_overrides(schedule_constraints: dict, overrides: dict) -> 
     return constraints
 
 
-ITINERARY_MODIFY_SYSTEM = """You are the Itinerary Scheduling Agent in MODIFY MODE.
+def _build_modify_system_prompt(language: str, allow_resolve_first: bool = True) -> str:
+    """Build the system prompt for itinerary modify mode.
+    
+    Args:
+        language: Output language for notes (e.g. "vi", "en")
+        allow_resolve_first: If True (Pass 1), includes DUAL OUTPUT MODE with
+            resolve_first option. If False (Pass 2, after places resolved),
+            only direct_schedule output is allowed.
+    """
+    parts = []
+
+    parts.append("""You are the Itinerary Scheduling Agent in MODIFY MODE.
 You are modifying an EXISTING schedule that the user has ALREADY APPROVED.
 Your job is to make ONLY the changes the user requested while keeping the rest intact.
 
@@ -1047,8 +1058,10 @@ Your job is to make ONLY the changes the user requested while keeping the rest i
    - Set the `fulfilled_user_request` field in your JSON output to `false`.
    - Write a detailed `modification_notes` string explaining WHY you couldn't fulfill their exact request and what compromise you made instead.
    - If the request WAS smoothly fulfilled without compromising their specific instructions, set `fulfilled_user_request: true`.
-4. Modify the schedule, keeping unchanged parts intact.
+4. Modify the schedule, keeping unchanged parts intact.""")
 
+    if allow_resolve_first:
+        parts.append("""
 ## Suggesting New Attractions
 If user asks to replace an attraction with something specific (e.g., "replace X with Museum of Ethnology"):
 - Use the exact name they specified.
@@ -1088,8 +1101,16 @@ Examples of "resolve_first" triggers:
 Examples of "direct_schedule" (NO new places needed):
 - "Xóa Văn Miếu khỏi ngày 2" → direct_schedule (removing only)
 - "Dời ăn trưa lên 11:30" → direct_schedule (time change only)
-- "Đổi thứ tự ngày 1 và ngày 2" → direct_schedule (reorder only)
+- "Đổi thứ tự ngày 1 và ngày 2" → direct_schedule (reorder only)""")
+    else:
+        parts.append("""
+## Resolved Places Context
+The new place(s) requested by the user have ALREADY been resolved.
+Their real opening hours and travel distances are included in the data below.
+You MUST integrate them into the schedule using this real data.
+You MUST output a direct_schedule with the full schedule. Do NOT output resolve_first.""")
 
+    parts.append(f"""
 ## Constraint Override
 If user explicitly provides new flight/hotel times (e.g., "my flight is at 15:00", "I'll check in at 13:00"):
 - Use the user's times, OVERRIDE the constraints below
@@ -1113,22 +1134,22 @@ If user explicitly provides new flight/hotel times (e.g., "my flight is at 15:00
 
 ## Response Format
 
-For direct_schedule mode, return ALL days (even unchanged ones) in this format:
-{{
+Return ALL days (even unchanged ones) in this format:
+{{{{
     "mode": "direct_schedule",
     "days": [
-        {{
+        {{{{
             "day": 1,
             "title": "...",
             "stops": [
-                {{"name": "...", "role": ["..."], "arrival": "HH:MM", "departure": "HH:MM", "includes": [], "note": "..."}}
+                {{{{"name": "...", "role": ["..."], "arrival": "HH:MM", "departure": "HH:MM", "includes": [], "note": "..."}}}}
             ]
-        }}
+        }}}}
     ],
 
     "fulfilled_user_request": true,
     "modification_notes": "I moved X to the morning exactly as you asked."
-}}
+}}}}
 
 ### CRITICAL — Exact Name Rule
 You MUST use the EXACT attraction and hotel names as provided in the input data. Do NOT modify, abbreviate, translate, add parentheses, or append alternative names. Copy the name character-for-character. If you want to add context (e.g., Vietnamese name, sub-attractions), put it in the `note` field instead.
@@ -1140,8 +1161,10 @@ You MUST use the EXACT attraction and hotel names as provided in the input data.
 - For `end_day`: departure = "" (just arrive)
 - NEVER schedule during "Closed" hours
 - Meals: lunch 11:00-13:00, dinner 18:00-20:00 — keep existing meals unless directly affected
-- Output ONLY raw JSON. No text before or after.
-"""
+- Output ONLY raw JSON. No text before or after.""")
+
+    return "\n".join(parts)
+
 
 _MODIFY_WEEKDAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
@@ -1399,7 +1422,7 @@ async def _itinerary_modify_mode(state: GraphState) -> dict[str, Any]:
 
     # Build modify prompt
     language = plan_context.get("language", "en")
-    system_content = ITINERARY_MODIFY_SYSTEM.replace("{language}", language)
+    system_content = _build_modify_system_prompt(language, allow_resolve_first=True)
     human_content = _build_modify_prompt(
         existing_schedule=existing_itinerary,
         attractions_info=attractions_info,
@@ -1653,8 +1676,8 @@ async def _itinerary_modify_mode(state: GraphState) -> dict[str, Any]:
                 weather_data=weather_data,
             )
 
-            # Force direct_schedule in Pass 2 prompt
-            pass2_system = system_content + "\n\nIMPORTANT: You MUST output a direct_schedule with the full schedule. Do NOT output resolve_first again."
+            # Use dedicated Pass 2 prompt (no resolve_first references at all)
+            pass2_system = _build_modify_system_prompt(language, allow_resolve_first=False)
 
             pass2_messages = [
                 SystemMessage(content=pass2_system),
@@ -1665,19 +1688,93 @@ async def _itinerary_modify_mode(state: GraphState) -> dict[str, Any]:
                 logger.info("📅 [ITINERARY_AGENT_MODIFY] Pass 2: Generating full schedule with resolved data")
                 pass2_raw = await llm_itinerary.ainvoke(pass2_messages)
                 pass2_parsed = _extract_json(pass2_raw.content)
-                _auto_correct_schedule(pass2_parsed, schedule_constraints)
+                
+                # Check fulfilled BEFORE validation
+                if pass2_parsed.get("fulfilled_user_request") is False:
+                    logger.info("📅 [ITINERARY_AGENT_MODIFY] Pass 2: LLM reports request cannot be fulfilled on attempt 1")
+                    itinerary_result = pass2_parsed
+                    violations = []
+                else:
+                    _auto_correct_schedule(pass2_parsed, schedule_constraints)
+                    violations = _validate_schedule(pass2_parsed, enriched_attractions, schedule_constraints, enriched_distances)
+                    itinerary_result = pass2_parsed
 
-                violations = _validate_schedule(pass2_parsed, enriched_attractions, schedule_constraints, enriched_distances)
-                itinerary_result = pass2_parsed
+                    if not violations:
+                        logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Pass 2 valid on attempt 1")
+                    else:
+                        logger.warning(f"📅 [ITINERARY_AGENT_MODIFY] Pass 2: {len(violations)} violations on attempt 1")
+                        for v in violations:
+                            logger.warning(f"      Day {v['day']}: {v['stop_name']} — {v['issue']}")
+                        
+                        # Retry loop for Pass 2
+                        for attempt in range(1, max_retries + 1):
+                            violation_text = "\n".join(
+                                f"- Day {v['day']}: {v['stop_name']} — {v['issue']}" for v in violations
+                            )
+                            pass2_messages.append(AIMessage(content=pass2_raw.content))
+                            retry_msg = f"Your modified schedule has {len(violations)} violations:\n{violation_text}\n\n"
+                            retry_msg += (
+                                "CRITICAL INSTRUCTION: If these violations mean you CANNOT fulfill the user's specific request "
+                                "(e.g., they asked to visit a place at a time when it is closed, or in an order that violates opening hours), "
+                                "YOU MUST FIX THE SCHEDULE TO BE VALID (e.g., move it to a time when it is open).\n"
+                                "BUT you MUST set `\"fulfilled_user_request\": false` at the root of your JSON, and explicitly explain "
+                                "your compromise in `\"modification_notes\"`.\n\n"
+                                "If the violations are just minor scheduling mistakes (like overlapping times) that CAN be fixed while still "
+                                "respecting the user's wishes, fix them and return the COMPLETE corrected JSON schedule with `\"fulfilled_user_request\": true`."
+                            )
+                            pass2_messages.append(HumanMessage(content=retry_msg))
+
+                            logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Pass 2 Retry attempt {attempt + 1}/{max_retries + 1}")
+                            pass2_raw = await llm_itinerary.ainvoke(pass2_messages)
+                            pass2_parsed = _extract_json(pass2_raw.content)
+
+                            if pass2_parsed.get("fulfilled_user_request") is False:
+                                logger.info("📅 [ITINERARY_AGENT_MODIFY] Pass 2: LLM reports request cannot be fulfilled — stopping retry")
+                                itinerary_result = pass2_parsed
+                                violations = []
+                                break
+
+                            _auto_correct_schedule(pass2_parsed, schedule_constraints)
+                            violations = _validate_schedule(
+                                pass2_parsed, enriched_attractions, schedule_constraints, enriched_distances
+                            )
+
+                            itinerary_result = pass2_parsed
+                            if not violations:
+                                logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Pass 2 Valid on attempt {attempt + 1}")
+                                break
+                            else:
+                                logger.warning(f"📅 [ITINERARY_AGENT_MODIFY] Pass 2 {len(violations)} violations on attempt {attempt + 1}")
+
+                # Finalize result
                 itinerary_result["error"] = False
-                itinerary_result["fulfilled_user_request"] = pass2_parsed.get("fulfilled_user_request", True)
-                itinerary_result["modification_notes"] = pass2_parsed.get("modification_notes", "")
+                itinerary_result["fulfilled_user_request"] = itinerary_result.get("fulfilled_user_request", True)
+                itinerary_result["modification_notes"] = itinerary_result.get("modification_notes", "")
                 if violations:
                     itinerary_result["has_violations"] = True
                     itinerary_result["violations"] = violations
                 attractions_info = enriched_attractions
                 distance_pairs = enriched_distances
+
+                # Inject newly resolved places into resolved_places so apply_data_builder can find their placeId
+                import copy
+                merged_resolved = copy.deepcopy(existing_itinerary.get("resolved_places", {}))
+                existing_attractions = merged_resolved.get("attractions", [])
+                for item in resolved_items:
+                    existing_attractions.append({
+                        "name": item.get("original_name", ""),
+                        "placeId": item.get("placeId", ""),
+                        "resolved": item.get("db_data", {}),
+                    })
+                merged_resolved["attractions"] = existing_attractions
+                itinerary_result["resolved_places"] = merged_resolved
+                
+                logger.info(
+                    f"📅 [ITINERARY_AGENT_MODIFY] Injected {len(resolved_items)} "
+                    f"newly resolved place(s) into resolved_places"
+                )
                 logger.info(f"📅 [ITINERARY_AGENT_MODIFY] Pass 2 complete ({len(violations)} violations)")
+
             except Exception as e:
                 logger.error(f"📅 [ITINERARY_AGENT_MODIFY] Pass 2 failed: {e}")
                 itinerary_result = {
@@ -1688,7 +1785,7 @@ async def _itinerary_modify_mode(state: GraphState) -> dict[str, Any]:
         else:
             logger.warning("📅 [MODIFY_RESOLVE] None of the places could be resolved — falling back to direct schedule")
             # Force direct_schedule mode: replace system prompt and add explicit instruction
-            fallback_system = system_content + "\n\nIMPORTANT: You MUST output a direct_schedule with the full schedule. Do NOT output resolve_first again. The places could not be found — use your best knowledge to add suitable alternatives."
+            fallback_system = _build_modify_system_prompt(language, allow_resolve_first=False)
             fallback_messages = [
                 SystemMessage(content=fallback_system),
                 HumanMessage(content=messages[-1].content if messages else "Please provide the modified schedule using direct_schedule mode."),

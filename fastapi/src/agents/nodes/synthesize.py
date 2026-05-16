@@ -522,6 +522,12 @@ Notes from Itinerary Agent:
 Example tone: "I'm sorry, but [attraction] is closed on [day]. Your schedule remains unchanged."
 """
             elif fulfilled:
+                # Always include modification_notes so Synthesize knows what changed
+                if mod_notes:
+                    modify_instructions += f"""
+## Changes Made by Itinerary Agent
+{mod_notes}
+"""
                 # Check for code-detected violations (Accept but Warn)
                 has_violations = itinerary_data.get("has_violations", False)
                 if has_violations:
@@ -545,6 +551,7 @@ You MUST:
 The schedule was updated successfully.
 At the end, suggest 1-2 next steps briefly.
 """
+
             system_content += modify_instructions
 
         # 4b. For pipeline/full_plan mode: check violations on fresh schedules
@@ -652,32 +659,13 @@ The following actions are available for the user's next step:
         language = plan_context.get("language", "en")
         final_response = "Đã xảy ra lỗi khi tạo lịch trình của bạn. Vui lòng thử lại." if language == "vi" else "Sorry, an error occurred while generating your travel plan. Please try again."
 
-    # Build structured output for frontend
-    structured_output = {"intent": intent}
+    # Build structured output for frontend — only apply_data
+    # (per-agent data is already sent via per-agent SSE events)
+    structured_output = {}
 
     if is_standalone:
-        # Standalone: include ONLY the newly generated relevant agent output to prevent DB overwrites
-        agent_key_map_standalone = {
-            "search_flights": "flight_agent",
-            "search_hotels": "hotel_agent",
-            "suggest_attractions": "attraction_agent",
-            "search_restaurants": "restaurant_agent",
-            "preparation_inquiry": "preparation_agent",
-            "modify_preparation": "preparation_agent",
-        }
-        target_agent_key = agent_key_map_standalone.get(intent)
-        
-        if target_agent_key == "flight_agent" and "flight_agent" in agent_outputs:
-            structured_output["flights"] = agent_outputs["flight_agent"]
-        elif target_agent_key == "hotel_agent" and "hotel_agent" in agent_outputs:
-            structured_output["hotels"] = agent_outputs["hotel_agent"]
-        elif target_agent_key == "attraction_agent" and "attraction_agent" in agent_outputs:
-            structured_output["attractions"] = agent_outputs["attraction_agent"]
-        elif target_agent_key == "restaurant_agent" and "restaurant_agent" in agent_outputs:
-            structured_output["restaurants"] = agent_outputs["restaurant_agent"]
-        elif target_agent_key == "preparation_agent" and "preparation_agent" in agent_outputs:
-            structured_output["preparation"] = agent_outputs["preparation_agent"]
-            # Build apply_data for preparation standalone
+        # Build apply_data for preparation standalone
+        if intent in ["preparation_inquiry", "modify_preparation"] and "preparation_agent" in agent_outputs:
             try:
                 apply_data = build_sectioned_apply_data(
                     agent_outputs, plan_context, None,
@@ -687,47 +675,23 @@ The following actions are available for the user's next step:
             except Exception as e:
                 logger.error(f"Failed to build apply_data for preparation: {e}")
 
-        if plan_context:
-            structured_output["plan_context"] = plan_context
-
     else:
-        structured_output["plan_context"] = plan_context
-        structured_output["aggregated_costs"] = aggregated_costs
-
-        if "itinerary_agent" in agent_outputs:
-            structured_output["itinerary"] = agent_outputs["itinerary_agent"]
-        if "flight_agent" in agent_outputs:
-            structured_output["flights"] = agent_outputs["flight_agent"]
-        if "hotel_agent" in agent_outputs:
-            structured_output["hotels"] = agent_outputs["hotel_agent"]
-        if "restaurant_agent" in agent_outputs:
-            structured_output["restaurants"] = agent_outputs["restaurant_agent"]
-        if "preparation_agent" in agent_outputs:
-            prep = agent_outputs["preparation_agent"]
-            structured_output["budget"] = prep.get("budget", {})
-            structured_output["packing_lists"] = prep.get("packing_lists", [])
-            structured_output["notes"] = prep.get("notes", [])
-            structured_output["preparation"] = prep
-
-        # Build normalized apply_data for frontend → .NET Apply endpoint
+        # Build normalized apply_data for .NET Apply endpoint
         try:
             if intent in ["modify_itinerary", "select_restaurant"]:
-                # Sectioned format: only apply itinerary section
                 apply_data = build_sectioned_apply_data(
                     agent_outputs, plan_context, aggregated_costs,
                     changed_sections={"itinerary"},
                 )
             elif intent in ["select_hotel", "select_flight"]:
-                # Select flow: itinerary AND budget changed
                 apply_data = build_sectioned_apply_data(
                     agent_outputs, plan_context, aggregated_costs,
                     changed_sections={"itinerary", "budget"},
                 )
             else:
-                # Full format: apply all sections
                 apply_data = build_sectioned_apply_data(
                     agent_outputs, plan_context, aggregated_costs,
-                    changed_sections=None,  # all sections
+                    changed_sections=None,
                 )
             structured_output["apply_data"] = apply_data
         except Exception as e:

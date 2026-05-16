@@ -38,9 +38,8 @@ import {
   updateConversationTitle,
   getMessagesByConversationId,
   deleteConversation,
-  markMessageApplied,
 } from "@/api/aiChat";
-import { Conversation, MessageRole } from "@/api/aiChat/types";
+import { Conversation, MessageRole, ApplyScope } from "@/api/aiChat/types";
 import { useParams } from "next/navigation";
 import toast from "react-hot-toast";
 import { useAgentStream } from "@/hooks/useAgentStream";
@@ -234,40 +233,20 @@ export default function AIChat({
 
   const hasMessages = messages.length > 0;
 
-  // When streaming completes, construct the AI message locally from streamState.
-  // The .NET Hub saves the AI response to DB in the background — no race condition.
-  // On page reload or conversation switch, messages load from DB normally.
+  // When streaming completes, add the AI message locally with a temp ID.
   useEffect(() => {
     if (
       streamState.isComplete &&
       streamState.streamedContent &&
       streamingConversationIdRef.current
     ) {
-      // Build minimal generatedPlanData from structured data (for Apply Plan feature)
-      let generatedPlanData: string | null = null;
-      if (streamState.structuredData) {
-        try {
-          const sd = streamState.structuredData as Record<string, unknown>;
-          const minimal: Record<string, unknown> = {};
-          if (sd.hotel_agent) minimal.hotel_agent = sd.hotel_agent;
-          if (sd.flight_agent) minimal.flight_agent = sd.flight_agent;
-          if (sd.preparation_agent) minimal.preparation_agent = sd.preparation_agent;
-          if (sd.attraction_agent) minimal.attraction_agent = sd.attraction_agent;
-          if (sd.restaurant_agent) minimal.restaurant_agent = sd.restaurant_agent;
-          if (sd.apply_data) minimal.apply_data = sd.apply_data;
-          if (Object.keys(minimal).length > 0) {
-            generatedPlanData = JSON.stringify(minimal);
-          }
-        } catch { /* best-effort */ }
-      }
-
       const aiMessage = {
-        id: `ai-${Date.now()}`,
+        id: streamState.savedMessageId || `ai-${Date.now()}`,
         conversationId: streamingConversationIdRef.current,
         content: streamState.streamedContent,
         messageRole: MessageRole.Assistant,
         createdAt: new Date().toISOString(),
-        generatedPlanData,
+        generatedPlanData: streamState.savedMessageId ? "saved" : null,
       };
 
       if (streamingConversationIdRef.current === activeConversationId) {
@@ -276,6 +255,24 @@ export default function AIChat({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamState.isComplete]);
+
+  // When the real DB messageId arrives (via 'message_saved' SSE event),
+  // patch the temp AI message with the real ID + flag for the Apply button.
+  useEffect(() => {
+    if (streamState.savedMessageId) {
+      setBackendMessages((prev) =>
+        prev.map((m: any) =>
+          m.id.startsWith?.("ai-")
+            ? {
+                ...m,
+                id: streamState.savedMessageId,
+                generatedPlanData: "saved",
+              }
+            : m,
+        ),
+      );
+    }
+  }, [streamState.savedMessageId]);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -462,99 +459,34 @@ export default function AIChat({
           }
           isStreaming={isStreaming}
           structuredData={streamState.structuredData}
-          onApplyPlan={async (mode, messageId) => {
-            // Resolve apply data: from specific message (DB) or from live stream
-            let applyData: any = null;
-            if (messageId && messageId !== "streaming") {
-              const msg = backendMessages.find((m: any) => m.id === messageId);
-              if (msg?.generatedPlanData) {
-                try {
-                  const parsedFullData = JSON.parse(msg.generatedPlanData);
-                  // Extract apply_data from the full structured context
-                  applyData = parsedFullData?.apply_data || parsedFullData;
-                } catch {
-                  toast.error("Invalid plan data");
-                  return;
-                }
-              }
-            }
-            if (!applyData) {
-              applyData = (streamState.structuredData as any)?.apply_data;
-            }
-            if (!applyData) {
-              toast.error("No plan data available to apply");
+          onApplyPlan={async (applyScope, messageId) => {
+            if (!messageId) {
+              toast.error("No message to apply");
               return;
             }
             try {
-              // Unwrap sectioned apply_data format into flat format for .NET
-              // Sectioned format: { plan_context: {...}, sections: { itinerary: { is_apply, data }, ... } }
-              // Flat format: { mode, startTime, endTime, currencyCode, itineraryDays, expenseItems, ... }
-              let requestBody: Record<string, unknown>;
-
-              if (applyData.sections) {
-                // New sectioned format
-                const planCtx = applyData.plan_context || {};
-                const sections = applyData.sections || {};
-
-                requestBody = {
-                  mode: mode === "CurrentPlan" ? 0 : 1,
-                  startTime: planCtx.startTime,
-                  endTime: planCtx.endTime,
-                  currencyCode: planCtx.currencyCode,
-                  // Only include sections that have is_apply = true
-                  itineraryDays: sections.itinerary?.is_apply
-                    ? sections.itinerary.data
-                    : null,
-                  expenseItems: sections.budget?.is_apply
-                    ? sections.budget.data
-                    : null,
-                  packingLists: sections.packing?.is_apply
-                    ? sections.packing.data
-                    : null,
-                  notes: sections.notes?.is_apply ? sections.notes.data : null,
-                };
-              } else {
-                // Legacy flat format (backwards compatible)
-                requestBody = {
-                  mode: mode === "CurrentPlan" ? 0 : 1,
-                  ...applyData,
-                };
-              }
-
-              const updatedPlan = await applyAIPlan(planId, requestBody);
-              toast.success(
-                mode === "CurrentPlan"
-                  ? "Plan updated successfully!"
-                  : "New plan created successfully!",
+              const updatedPlan = await applyAIPlan(planId, {
+                messageId,
+                applyScope,
+              });
+              toast.success("Plan updated successfully!");
+              // Update local state with applied timestamp
+              setBackendMessages((prev) =>
+                prev.map((m: any) =>
+                  m.id === messageId
+                    ? {
+                        ...m,
+                        applyGeneratedPlanAt: new Date().toISOString(),
+                      }
+                    : m,
+                ),
               );
-
-              // Mark the message as applied in DB
-              if (messageId && messageId !== "streaming") {
-                try {
-                  const updatedMsg = await markMessageApplied(messageId);
-                  setBackendMessages((prev) =>
-                    prev.map((m: any) =>
-                      m.id === messageId
-                        ? {
-                            ...m,
-                            applyGeneratedPlanAt:
-                              updatedMsg.applyGeneratedPlanAt,
-                          }
-                        : m,
-                    ),
-                  );
-                } catch {
-                  // Non-critical: apply succeeded, just couldn't mark timestamp
-                  console.warn("Failed to mark message as applied");
-                }
-              }
-
               if (onPlanUpdated) {
                 onPlanUpdated(updatedPlan);
               }
             } catch (error) {
               toast.error("Failed to apply plan. Please try again.");
-              throw error; // Re-throw so ChatMessages can track failure
+              throw error;
             }
           }}
         />

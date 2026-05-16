@@ -224,13 +224,23 @@ namespace dotnet.Controllers
                         }
                     }
 
-                    await _aiChatService.AddMessage(new CreateMessageDto
+                    var savedMessage = await _aiChatService.AddMessage(new CreateMessageDto
                     {
                         ConversationId = id,
                         Content = aiContent,
                         MessageRole = MessageRole.Chatbot,
                         GeneratedPlanData = generatedPlanData
                     });
+
+                    // Send real messageId back to frontend via SSE
+                    var savedEvent = new AgentEventDto
+                    {
+                        EventType = "message_saved",
+                        MessageId = savedMessage.Id.ToString(),
+                    };
+                    var savedJson = JsonSerializer.Serialize(savedEvent, _jsonOptions);
+                    await Response.WriteAsync($"data: {savedJson}\n\n");
+                    await Response.Body.FlushAsync();
                 }
             }
             catch (OperationCanceledException)

@@ -25,6 +25,7 @@ export function useAgentStream() {
     structuredData: null,
     isComplete: false,
     error: null,
+    savedMessageId: null,
   });
 
   // AbortController for cancelling in-flight requests
@@ -41,6 +42,7 @@ export function useAgentStream() {
       let streamedContent = prev.streamedContent;
       let isComplete = prev.isComplete;
       let error = prev.error;
+      let savedMessageId = prev.savedMessageId;
 
       switch (event.eventType) {
         case "agent_start":
@@ -102,6 +104,12 @@ export function useAgentStream() {
           isComplete = true;
           activeAgents = [];
           break;
+
+        case "message_saved":
+          if (event.messageId) {
+            savedMessageId = event.messageId;
+          }
+          break;
       }
 
       return {
@@ -112,6 +120,7 @@ export function useAgentStream() {
         structuredData: prev.structuredData,
         isComplete,
         error,
+        savedMessageId,
       };
     });
 
@@ -146,6 +155,7 @@ export function useAgentStream() {
         structuredData: null,
         isComplete: false,
         error: null,
+        savedMessageId: null,
       });
       setIsStreaming(true);
 
