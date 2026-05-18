@@ -4,12 +4,12 @@ namespace dotnet.Dtos.Plan
 {
     /// <summary>
     /// Request DTO for the apply-ai endpoint.
-    /// Frontend sends only messageId + scope; .NET reads plan data from DB.
+    /// Frontend sends messageId + selected sections; .NET reads plan data from DB.
     /// </summary>
     public class ApplyAIPlanRequest
     {
         public Guid MessageId { get; set; }
-        public ApplyScope ApplyScope { get; set; } = ApplyScope.OnlyChanges;
+        public List<ApplySection> Sections { get; set; } = new();
     }
 
     // ── Sub-DTOs for deserializing apply_data JSON from DB ──

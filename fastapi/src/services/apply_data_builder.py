@@ -14,6 +14,7 @@ Handles:
 """
 
 import logging
+import json
 import re
 import unicodedata
 from typing import Any
@@ -36,6 +37,65 @@ def _normalize_name(name: str) -> str:
     # NFC normalize unicode so diacritics compare consistently
     s = unicodedata.normalize('NFC', s)
     return s.lower()
+
+def _canonicalize_for_compare(value: Any) -> Any:
+    """Normalize section data before deciding whether a section changed."""
+    if isinstance(value, dict):
+        return {
+            key: _canonicalize_for_compare(value[key])
+            for key in sorted(value.keys())
+        }
+    if isinstance(value, list):
+        return [_canonicalize_for_compare(item) for item in value]
+    if isinstance(value, str):
+        return unicodedata.normalize("NFC", re.sub(r"\s+", " ", value).strip())
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _section_fingerprint(value: Any) -> str:
+    return json.dumps(
+        _canonicalize_for_compare(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _section_changed(previous: Any, current: Any) -> bool:
+    return _section_fingerprint(previous) != _section_fingerprint(current)
+
+
+def _extract_section_data(apply_data: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Extract comparable section data from sectioned or legacy apply_data."""
+    if not apply_data:
+        return None
+
+    sections = apply_data.get("sections")
+    if isinstance(sections, dict):
+        return {
+            "overview": sections.get("overview", {}).get(
+                "data",
+                apply_data.get("plan_context", {}),
+            ),
+            "itinerary": sections.get("itinerary", {}).get("data", []),
+            "budget": sections.get("budget", {}).get("data", []),
+            "packing": sections.get("packing", {}).get("data", []),
+            "notes": sections.get("notes", {}).get("data", []),
+        }
+
+    return {
+        "overview": {
+            "startTime": apply_data.get("startTime"),
+            "endTime": apply_data.get("endTime"),
+            "currencyCode": apply_data.get("currencyCode"),
+        },
+        "itinerary": apply_data.get("itineraryDays", []),
+        "budget": apply_data.get("expenseItems", []),
+        "packing": apply_data.get("packingLists", []),
+        "notes": apply_data.get("notes", []),
+    }
 
 
 def _lookup_place_id(name: str, name_to_place_id: dict[str, str]) -> str:
@@ -606,6 +666,7 @@ def build_sectioned_apply_data(
     plan_context: dict[str, Any],
     aggregated_costs: dict[str, Any] | None = None,
     changed_sections: set[str] | None = None,
+    previous_apply_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build sectioned apply_data with per-section is_apply flags.
 
@@ -617,14 +678,18 @@ def build_sectioned_apply_data(
         agent_outputs: Combined agent outputs from the pipeline
         plan_context: Plan metadata (dates, destination, currency, etc.)
         aggregated_costs: Cost aggregation result (optional)
-        changed_sections: Set of section names that were changed this turn.
+        changed_sections: Fallback set used when previous_apply_data is not available.
                           If None, all sections are marked as apply.
-                          Valid names: "itinerary", "budget", "packing", "notes"
+                          Valid names: "overview", "itinerary", "budget", "packing", "notes"
+        previous_apply_data: Previous full apply_data snapshot. When provided,
+                             all sections are diffed against it and only changed
+                             sections are marked as apply.
 
     Returns:
         {
             "plan_context": { "startTime": "...", "endTime": "...", "currencyCode": "VND" },
             "sections": {
+                "overview":  { "is_apply": false, "data": {...} },
                 "itinerary": { "is_apply": true, "data": [...] },
                 "budget":    { "is_apply": false, "data": [...] },
                 "packing":   { "is_apply": false, "data": [...] },
@@ -634,22 +699,60 @@ def build_sectioned_apply_data(
     """
     logger.info("🔨 [APPLY_DATA_BUILDER] Building sectioned apply_data...")
 
-    # If no changed_sections specified, all sections are applied
-    if changed_sections is None:
-        changed_sections = {"itinerary", "budget", "packing", "notes"}
+    use_present_sections_when_no_snapshot = changed_sections is None
 
+    # If no changed_sections specified, all available sections are applied
+    if changed_sections is None:
+        changed_sections = {"overview", "itinerary", "budget", "packing", "notes"}
+
+    overview = {
+        "startTime": plan_context.get("start_date"),
+        "endTime": plan_context.get("end_date"),
+        "currencyCode": plan_context.get("currency", "VND"),
+    }
     itinerary_days = _build_itinerary_days(agent_outputs, plan_context)
     expense_items = _build_expense_items(agent_outputs, plan_context, aggregated_costs)
     packing_lists = _build_packing_lists(agent_outputs)
     notes = _build_notes(agent_outputs)
 
+    current_sections = {
+        "overview": overview,
+        "itinerary": itinerary_days,
+        "budget": expense_items,
+        "packing": packing_lists,
+        "notes": notes,
+    }
+    previous_sections = _extract_section_data(previous_apply_data)
+
+    if previous_sections is not None:
+        detected_changed_sections = set()
+
+        for section_name, section_data in current_sections.items():
+            if _section_changed(
+                previous_sections.get(section_name),
+                section_data,
+            ):
+                detected_changed_sections.add(section_name)
+
+        logger.info(
+            "🔨 [APPLY_DATA_BUILDER] Snapshot diff: "
+            f"changed={sorted(detected_changed_sections)}"
+        )
+        changed_sections = detected_changed_sections
+    elif use_present_sections_when_no_snapshot:
+        changed_sections = {
+            section_name
+            for section_name, section_data in current_sections.items()
+            if bool(section_data)
+        }
+
     sectioned = {
-        "plan_context": {
-            "startTime": plan_context.get("start_date"),
-            "endTime": plan_context.get("end_date"),
-            "currencyCode": plan_context.get("currency", "VND"),
-        },
+        "plan_context": overview,
         "sections": {
+            "overview": {
+                "is_apply": "overview" in changed_sections,
+                "data": overview,
+            },
             "itinerary": {
                 "is_apply": "itinerary" in changed_sections,
                 "data": itinerary_days,
@@ -680,4 +783,3 @@ def build_sectioned_apply_data(
     )
 
     return sectioned
-

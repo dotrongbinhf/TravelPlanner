@@ -1,23 +1,28 @@
-import React from "react";
-import { Map, Star, ExternalLink, ArrowRight } from "lucide-react";
+import React, { useState } from "react";
+import { Map, Star, ExternalLink, ArrowRight, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PlaceCarouselWidget } from "./PlaceCarouselWidget";
 import { useItineraryContext } from "@/contexts/ItineraryContext";
+import { getPlaceImage } from "@/lib/utils";
 
 export interface AttractionWidgetProps {
   data: any;
+  mapVisible?: boolean;
+  onToggleMap?: () => void;
 }
 
-export function AttractionWidget({ data }: AttractionWidgetProps) {
+export function AttractionWidget({ data, mapVisible = false, onToggleMap }: AttractionWidgetProps) {
   if (!data?.segments || data.segments.length === 0) {
     return null;
   }
 
   const { setFocusLocation, clearPlaceSelection, setSelectedChatPlace } = useItineraryContext();
+  const [isNotesExpanded, setIsNotesExpanded] = useState(false);
 
   // Extract lat/lng from db_data (GeoJSON: [lng, lat])
   const _focusOnMap = (item: any) => {
-    const coords = item.db_data?.location?.coordinates;
+    const coords =
+      item.db_data?.location?.coordinates || item._location?.coordinates;
     const location = coords && coords.length === 2 
       ? { lat: coords[1], lng: coords[0] }
       : (item._location?.lat && item._location?.lng ? { lat: item._location.lat, lng: item._location.lng } : null);
@@ -29,7 +34,8 @@ export function AttractionWidget({ data }: AttractionWidgetProps) {
         placeId: item.place_id || item.placeId,
         name: item.name || item.recommend_attraction_name,
         location,
-        source: "attraction"
+        source: "attraction",
+        thumbnail: getImage(item)
       });
     }
   };
@@ -53,9 +59,7 @@ export function AttractionWidget({ data }: AttractionWidgetProps) {
   };
 
   const getImage = (attr: any) =>
-    attr.db_data?.imageUrl ||
-    attr.db_data?.thumbnail ||
-    "https://images.unsplash.com/photo-1499696010180-025ef6e1a8f9?w=800&q=80";
+    getPlaceImage(attr.db_data?.imageUrl || attr.db_data?.thumbnail, "/images/plans/alternative-attraction.jpg");
 
   return (
     <PlaceCarouselWidget
@@ -66,6 +70,20 @@ export function AttractionWidget({ data }: AttractionWidgetProps) {
         <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center border border-rose-100 shadow-sm">
           <Map className="w-4 h-4 text-rose-500" />
         </div>
+      }
+      headerAction={
+        onToggleMap ? (
+          <Button
+            type="button"
+            variant={mapVisible ? "default" : "outline"}
+            size="sm"
+            className="h-7 rounded-lg px-2 text-[11px] font-bold"
+            onClick={onToggleMap}
+          >
+            <MapPin className="w-3 h-3 mr-1" />
+            {mapVisible ? "Hide map" : "Show map"}
+          </Button>
+        ) : undefined
       }
       items={allAttractions}
       renderCard={(attr: any, index: number, onClick: () => void) => {
@@ -86,8 +104,9 @@ export function AttractionWidget({ data }: AttractionWidgetProps) {
                 src={getImage(attr)}
                 alt={attr.name}
                 onError={(e) => {
-                  (e.target as HTMLImageElement).src =
-                    "https://images.unsplash.com/photo-1499696010180-025ef6e1a8f9?w=800&q=80";
+                  const img = e.currentTarget;
+                  img.onerror = null;
+                  img.src = "/images/plans/alternative-place.jpg";
                 }}
                 className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
               />
@@ -122,16 +141,20 @@ export function AttractionWidget({ data }: AttractionWidgetProps) {
           </div>
         );
       }}
-      onDetailClose={() => clearPlaceSelection()}
+      onDetailClose={() => {
+        clearPlaceSelection();
+        setIsNotesExpanded(false);
+      }}
       renderDetail={(selected: any) => (
         <>
-          <div className="w-full sm:w-3/5 md:w-[60%] relative h-64 sm:h-auto min-h-[300px] shrink-0">
+          <div className="w-full sm:w-[40%] relative h-48 sm:h-auto min-h-[200px] sm:min-h-[300px] shrink-0">
             <img
               src={getImage(selected)}
               alt={selected.name}
               onError={(e) => {
-                (e.target as HTMLImageElement).src =
-                  "https://images.unsplash.com/photo-1499696010180-025ef6e1a8f9?w=800&q=80";
+                const img = e.currentTarget;
+                img.onerror = null;
+                img.src = "/images/plans/alternative-place.jpg";
               }}
               className="absolute inset-0 w-full h-full object-cover"
             />
@@ -154,9 +177,20 @@ export function AttractionWidget({ data }: AttractionWidgetProps) {
 
             {/* Notes — the engaging overview */}
             {selected.notes && (
-              <p className="text-[13px] text-slate-600 leading-relaxed mb-4">
-                {selected.notes}
-              </p>
+              <div className="mb-4">
+                <p className={`text-[13px] text-slate-600 leading-relaxed ${isNotesExpanded ? "" : "line-clamp-3"}`}>
+                  {selected.notes}
+                </p>
+                {selected.notes.length > 150 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsNotesExpanded(!isNotesExpanded)}
+                    className="text-xs font-bold text-rose-500 hover:text-rose-600 mt-1 cursor-pointer transition-colors focus:outline-none"
+                  >
+                    {isNotesExpanded ? "Show less" : "Show more"}
+                  </button>
+                )}
+              </div>
             )}
 
             {/* Includes */}
@@ -203,7 +237,9 @@ export function AttractionWidget({ data }: AttractionWidgetProps) {
 
               <Button
                 className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium h-11 rounded-xl"
-                onClick={() => handleOpenMap(selected.name, selected.placeId)}
+                onClick={() =>
+                  handleOpenMap(selected.name, selected.placeId || selected.place_id)
+                }
               >
                 <ExternalLink className="w-4 h-4 mr-2" />
                 View on Google Maps

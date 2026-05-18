@@ -101,6 +101,7 @@ After you have search results for ALL segments — return ONLY one valid JSON ob
       "check_out_time": "12:00 PM",
       "recommend_hotel_name": "Hanoi La Siesta Hotel & Spa",
       "totalRate": 4500000,
+      "totalRateEstimated": false,
       "recommend_note": "Reason for choosing this hotel"
     }
   ]
@@ -108,8 +109,10 @@ After you have search results for ALL segments — return ONLY one valid JSON ob
 
 ## Rules
 - totalRate: Total room rate for ENTIRE stay (all nights combined) in plan_context currency.
+- If the hotel search result does not provide a usable totalRate/ratePerNight, estimate a reasonable totalRate yourself from destination, hotel class, trip dates/nights, budget level, and traveler count. In that case set `"totalRateEstimated": true`; otherwise set `"totalRateEstimated": false`.
 - Always call search_hotels — do NOT make up hotel data
 - For multi-segment: run separate searches per segment
+- Do not invent hotel identity/details; the estimate rule above applies only to missing `totalRate`.
 - Choose hotels based on actual results, prioritizing: rating, location, price-to-value ratio
 - Use the EXACT hotel name as it appears in search results
 - check_in_time and check_out_time: Use the values from the search results
@@ -144,6 +147,28 @@ def _upgrade_image_url(url: str) -> str:
     if "=" in url and ("googleusercontent.com" in url or "ggpht.com" in url):
         return url.split("=")[0] + "=s800"
     return url
+
+
+def _rate_to_number(value: Any) -> float:
+    """Parse hotel rate values returned by the tool or estimated by the LLM."""
+    if isinstance(value, (int, float)):
+        return float(value) if value > 0 else 0
+    if isinstance(value, dict):
+        return _rate_to_number(value.get("lowest") or value.get("Lowest"))
+    if isinstance(value, str):
+        import re
+        digits = re.sub(r"[^\d.]", "", value)
+        if digits.count(".") > 1:
+            digits = digits.replace(".", "")
+        return float(digits) if digits else 0
+    return 0
+
+
+def _rate_from_tool(seg_data: dict) -> Any:
+    rate_obj = seg_data.get("totalRate") or seg_data.get("TotalRate") or {}
+    if isinstance(rate_obj, dict):
+        return rate_obj.get("lowest") or rate_obj.get("Lowest") or "N/A"
+    return rate_obj or "N/A"
 
 
 async def hotel_agent_node(state: GraphState) -> dict[str, Any]:
@@ -235,19 +260,27 @@ Task:
         for seg in segments:
             hotel_name = seg.get("recommend_hotel_name", "")
             seg_data = hotel_data_dict.get(hotel_name, {})
+            llm_total_rate = seg.get("totalRate")
+            llm_total_rate_estimated = bool(seg.get("totalRateEstimated"))
             # Get link, thumbnail, and details for recommended hotel
             seg["link"] = seg_data.get("link") or seg_data.get("Link") or ""
             raw_thumb = seg_data.get("thumbnail") or seg_data.get("Thumbnail") or ""
             seg["thumbnail"] = _upgrade_image_url(raw_thumb)
             
-            # totalRate might be an object or a string depending on API serialization
-            rate_obj = seg_data.get("totalRate") or seg_data.get("TotalRate") or {}
-            if isinstance(rate_obj, str):
-                seg["totalRate"] = rate_obj
-            elif isinstance(rate_obj, dict):
-                seg["totalRate"] = rate_obj.get("lowest") or rate_obj.get("Lowest") or "N/A"
+            tool_total_rate = _rate_from_tool(seg_data)
+            if _rate_to_number(tool_total_rate) > 0:
+                seg["totalRate"] = tool_total_rate
+                seg["totalRateEstimated"] = False
+            elif _rate_to_number(llm_total_rate) > 0:
+                seg["totalRate"] = llm_total_rate
+                seg["totalRateEstimated"] = True
+                logger.info(
+                    f"   [HOTEL_AGENT] Using estimated hotel rate for "
+                    f"'{hotel_name}': {llm_total_rate}"
+                )
             else:
                 seg["totalRate"] = "N/A"
+                seg["totalRateEstimated"] = llm_total_rate_estimated
             
             seg["overallRating"] = seg_data.get("overallRating") or seg_data.get("OverallRating") or "N/A"
             seg["reviews"] = seg_data.get("reviews") or seg_data.get("Reviews") or 0

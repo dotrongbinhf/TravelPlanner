@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # ── LLM for selection matching ───────────────────────────────────────────
 
 llm_select = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash-lite",
+    model=settings.MODEL_NAME,
     google_api_key=settings.GOOGLE_GEMINI_API_KEY,
     temperature=0,
     streaming=False,

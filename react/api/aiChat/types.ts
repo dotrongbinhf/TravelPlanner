@@ -21,9 +21,12 @@ export enum MessageRole {
   System = 2,
 }
 
-export enum ApplyScope {
-  OnlyChanges = 0,
-  FullPlan = 1,
+export enum ApplySection {
+  Overview = 0,
+  Itinerary = 1,
+  Budget = 2,
+  Packing = 3,
+  Notes = 4,
 }
 
 export type Message = {

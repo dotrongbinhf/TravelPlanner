@@ -650,7 +650,7 @@ namespace dotnet.Controllers
 
         /// <summary>
         /// Apply AI-generated plan data from a chat message to the current plan.
-        /// Server reads GeneratedPlanData from the Message table — frontend only sends messageId + scope.
+        /// Server reads GeneratedPlanData from the Message table — frontend only sends messageId + selected sections.
         /// </summary>
         [HttpPost("{id:Guid}/apply-ai")]
         public async Task<IActionResult> ApplyAIPlan(Guid id, [FromBody] ApplyAIPlanRequest request)
@@ -701,18 +701,37 @@ namespace dotnet.Controllers
                 ? sec : default;
             var planCtx = applyData.TryGetProperty("plan_context", out var ctx)
                 ? ctx : default;
+            if (planCtx.ValueKind != System.Text.Json.JsonValueKind.Object
+                && sections.ValueKind == System.Text.Json.JsonValueKind.Object
+                && sections.TryGetProperty("overview", out var overviewSection)
+                && overviewSection.TryGetProperty("data", out var overviewData))
+            {
+                planCtx = overviewData;
+            }
 
-            bool applyAll = request.ApplyScope == ApplyScope.FullPlan;
+            var selectedSections = (request.Sections ?? new List<ApplySection>())
+                .Select(_toApplyDataSectionKey)
+                .Where(key => key != null)
+                .Select(key => key!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            // ── Update plan metadata ──
-            if (_tryGetString(planCtx, "startTime") is string st
-                && DateTimeOffset.TryParse(st, out var startTime))
-                plan.StartTime = startTime;
-            if (_tryGetString(planCtx, "endTime") is string et
-                && DateTimeOffset.TryParse(et, out var endTime))
-                plan.EndTime = endTime;
-            if (_tryGetString(planCtx, "currencyCode") is string cc)
-                plan.CurrencyCode = cc;
+            // Always include overview
+            selectedSections.Add("overview");
+
+            if (selectedSections.Count == 0)
+                return BadRequest("No valid sections selected");
+
+            // Always apply overview
+            {
+                if (_tryGetString(planCtx, "startTime") is string st
+                    && DateTimeOffset.TryParse(st, out var startTime))
+                    plan.StartTime = startTime;
+                if (_tryGetString(planCtx, "endTime") is string et
+                    && DateTimeOffset.TryParse(et, out var endTime))
+                    plan.EndTime = endTime;
+                if (_tryGetString(planCtx, "currencyCode") is string cc)
+                    plan.CurrencyCode = cc;
+            }
 
             // ── Deserialize applicable sections ──
             var jsonOptions = new System.Text.Json.JsonSerializerOptions
@@ -721,13 +740,13 @@ namespace dotnet.Controllers
             };
 
             var itineraryDays = _tryDeserializeSection<List<AIItineraryDay>>(
-                sections, "itinerary", applyAll, jsonOptions);
+                sections, "itinerary", jsonOptions, selectedSections);
             var expenseItems = _tryDeserializeSection<List<AIExpenseItem>>(
-                sections, "budget", applyAll, jsonOptions);
+                sections, "budget", jsonOptions, selectedSections);
             var packingLists = _tryDeserializeSection<List<AIPackingList>>(
-                sections, "packing", applyAll, jsonOptions);
+                sections, "packing", jsonOptions, selectedSections);
             var notes = _tryDeserializeSection<List<AINote>>(
-                sections, "notes", applyAll, jsonOptions);
+                sections, "notes", jsonOptions, selectedSections);
 
             // ── Apply Itinerary ──
             if (itineraryDays != null)
@@ -995,18 +1014,29 @@ namespace dotnet.Controllers
         // ── Apply helpers ─────────────────────────────────────────────
 
         private static T? _tryDeserializeSection<T>(
-            System.Text.Json.JsonElement sections, string key, bool applyAll,
-            System.Text.Json.JsonSerializerOptions jsonOptions) where T : class
+            System.Text.Json.JsonElement sections, string key,
+            System.Text.Json.JsonSerializerOptions jsonOptions,
+            HashSet<string> selectedSections) where T : class
         {
             if (sections.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
             if (!sections.TryGetProperty(key, out var section)) return null;
-            if (!applyAll)
-            {
-                if (!section.TryGetProperty("is_apply", out var flag) || !flag.GetBoolean())
-                    return null;
-            }
+            if (!selectedSections.Contains(key))
+                return null;
             if (!section.TryGetProperty("data", out var data)) return null;
             return System.Text.Json.JsonSerializer.Deserialize<T>(data.GetRawText(), jsonOptions);
+        }
+
+        private static string? _toApplyDataSectionKey(ApplySection section)
+        {
+            return section switch
+            {
+                ApplySection.Overview => "overview",
+                ApplySection.Itinerary => "itinerary",
+                ApplySection.Budget => "budget",
+                ApplySection.Packing => "packing",
+                ApplySection.Notes => "notes",
+                _ => null,
+            };
         }
 
         private static string? _tryGetString(System.Text.Json.JsonElement el, string prop)

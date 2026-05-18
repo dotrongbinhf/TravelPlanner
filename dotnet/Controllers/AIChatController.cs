@@ -25,6 +25,13 @@ namespace dotnet.Controllers
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
+        private static readonly HashSet<string> _persistedWidgetAgentNames = new(StringComparer.Ordinal)
+        {
+            "hotel_agent",
+            "flight_agent",
+            "attraction_agent",
+            "restaurant_agent"
+        };
 
         public AIChatController(
             IAIChatService aiChatService,
@@ -171,8 +178,11 @@ namespace dotnet.Controllers
                     {
                         if (!string.IsNullOrEmpty(agentEvent.AgentName))
                         {
-                            // Per-agent structured data: key by agent name
-                            structuredDataAccumulator[agentEvent.AgentName] = agentEvent.StructuredData;
+                            // Per-agent structured data: persist only widget payloads.
+                            if (_persistedWidgetAgentNames.Contains(agentEvent.AgentName))
+                            {
+                                structuredDataAccumulator[agentEvent.AgentName] = agentEvent.StructuredData;
+                            }
                         }
                         else
                         {
@@ -185,7 +195,10 @@ namespace dotnet.Controllers
                                 {
                                     foreach (var kv in dict)
                                     {
-                                        structuredDataAccumulator[kv.Key] = kv.Value;
+                                        if (kv.Key == "apply_data")
+                                        {
+                                            structuredDataAccumulator[kv.Key] = kv.Value;
+                                        }
                                     }
                                 }
                             }

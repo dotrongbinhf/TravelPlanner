@@ -22,6 +22,8 @@ export interface PlaceCarouselWidgetProps<T extends PlaceCarouselItem> {
   theme?: "sky" | "rose" | "orange" | "emerald";
   /** Icon element shown left of title */
   headerIcon?: ReactNode;
+  /** Optional action shown on the right side of the header */
+  headerAction?: ReactNode;
   /** Items to display in the carousel */
   items: T[];
   /** Render a card in the carousel (receives item + isSelected) */
@@ -50,6 +52,7 @@ export function PlaceCarouselWidget<T extends PlaceCarouselItem>({
   subtitle,
   theme = "sky",
   headerIcon,
+  headerAction,
   items,
   renderCard,
   renderDetail,
@@ -78,10 +81,11 @@ export function PlaceCarouselWidget<T extends PlaceCarouselItem>({
             {headerIcon}
           </div>
         )}
-        <div>
+        <div className="min-w-0 flex-1">
           <h3 className="font-bold text-[15px] tracking-tight">{title}</h3>
           <p className={`text-[11px] ${t.text} font-medium`}>{subtitle}</p>
         </div>
+        {headerAction && <div className="shrink-0">{headerAction}</div>}
       </div>
 
       <div className="p-5 bg-white rounded-b-xl">

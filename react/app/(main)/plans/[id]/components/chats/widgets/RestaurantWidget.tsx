@@ -3,12 +3,15 @@ import { UtensilsCrossed, Star, ExternalLink, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PlaceCarouselWidget } from "./PlaceCarouselWidget";
 import { useItineraryContext } from "@/contexts/ItineraryContext";
+import { getPlaceImage } from "@/lib/utils";
 
 export interface RestaurantWidgetProps {
   data: any;
+  mapVisible?: boolean;
+  onToggleMap?: () => void;
 }
 
-export function RestaurantWidget({ data }: RestaurantWidgetProps) {
+export function RestaurantWidget({ data, mapVisible = false, onToggleMap }: RestaurantWidgetProps) {
   if (!data?.meals || data.meals.length === 0) {
     return null;
   }
@@ -17,7 +20,8 @@ export function RestaurantWidget({ data }: RestaurantWidgetProps) {
 
   // Extract lat/lng from db_data (GeoJSON: [lng, lat])
   const _focusOnMap = (item: any) => {
-    const coords = item.db_data?.location?.coordinates;
+    const coords =
+      item.db_data?.location?.coordinates || item._location?.coordinates;
     const location = coords && coords.length === 2 
       ? { lat: coords[1], lng: coords[0] }
       : (item._location?.lat && item._location?.lng ? { lat: item._location.lat, lng: item._location.lng } : null);
@@ -29,7 +33,8 @@ export function RestaurantWidget({ data }: RestaurantWidgetProps) {
         placeId: item.place_id || item.placeId,
         name: item.name || item.recommend_restaurant_name,
         location,
-        source: "restaurant"
+        source: "restaurant",
+        thumbnail: getImage(item)
       });
     }
   };
@@ -43,9 +48,7 @@ export function RestaurantWidget({ data }: RestaurantWidgetProps) {
   };
 
   const getImage = (item: any) =>
-    item.db_data?.imageUrl ||
-    item.db_data?.thumbnail ||
-    "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80";
+    getPlaceImage(item.db_data?.imageUrl || item.db_data?.thumbnail, "/images/plans/alternative-restaurant.jpg");
 
   // Build a flat list of all restaurants (recommended + alternatives) across all meals
   const allRestaurants: any[] = [];
@@ -101,6 +104,20 @@ export function RestaurantWidget({ data }: RestaurantWidgetProps) {
           <UtensilsCrossed className="w-4 h-4 text-orange-500" />
         </div>
       }
+      headerAction={
+        onToggleMap ? (
+          <Button
+            type="button"
+            variant={mapVisible ? "default" : "outline"}
+            size="sm"
+            className="h-7 rounded-lg px-2 text-[11px] font-bold"
+            onClick={onToggleMap}
+          >
+            <MapPin className="w-3 h-3 mr-1" />
+            {mapVisible ? "Hide map" : "Show map"}
+          </Button>
+        ) : undefined
+      }
       items={allRestaurants}
       renderCard={(rest: any, index: number, onClick: () => void) => (
         <div
@@ -116,8 +133,9 @@ export function RestaurantWidget({ data }: RestaurantWidgetProps) {
               src={getImage(rest)}
               alt={rest.name}
               onError={(e) => {
-                (e.target as HTMLImageElement).src =
-                  "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80";
+                const img = e.currentTarget;
+                img.onerror = null;
+                img.src = "/images/plans/alternative-place.jpg";
               }}
               className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
             />
@@ -137,13 +155,20 @@ export function RestaurantWidget({ data }: RestaurantWidgetProps) {
               </h4>
 
               <div className="flex items-center gap-1.5 text-[11px] font-medium drop-shadow-sm opacity-90">
-                {(rest.rating || rest.db_data?.reviewRating) && (
+                {(rest.rating || rest.db_data?.reviewRating) ? (
                   <>
                     <Star className="w-3 h-3 fill-white text-white" />
                     <span>
-                      {(rest.rating || rest.db_data?.reviewRating)?.toFixed?.(1) || rest.rating || "-"}
+                      {(rest.rating || rest.db_data?.reviewRating)?.toFixed?.(1) || rest.rating}
                     </span>
+                    {(rest.user_ratings_total || rest.db_data?.reviewCount) > 0 && (
+                      <span className="opacity-80">
+                        · {(rest.user_ratings_total || rest.db_data?.reviewCount)?.toLocaleString()}
+                      </span>
+                    )}
                   </>
+                ) : (
+                  <span>No rating</span>
                 )}
                 {rest._mealLabel && (
                   <span className="opacity-80">· {rest._mealLabel}</span>
@@ -156,13 +181,14 @@ export function RestaurantWidget({ data }: RestaurantWidgetProps) {
       onDetailClose={() => clearPlaceSelection()}
       renderDetail={(selected: any) => (
         <>
-          <div className="w-full sm:w-3/5 md:w-[60%] relative h-64 sm:h-auto min-h-[300px] shrink-0">
+          <div className="w-full sm:w-[40%] relative h-48 sm:h-auto min-h-[200px] sm:min-h-[300px] shrink-0">
             <img
               src={getImage(selected)}
               alt={selected.name}
               onError={(e) => {
-                (e.target as HTMLImageElement).src =
-                  "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80";
+                const img = e.currentTarget;
+                img.onerror = null;
+                img.src = "/images/plans/alternative-place.jpg";
               }}
               className="absolute inset-0 w-full h-full object-cover"
             />
@@ -215,17 +241,7 @@ export function RestaurantWidget({ data }: RestaurantWidgetProps) {
               </div>
             )}
 
-            {/* Note / Why here */}
-            {(selected.note || selected.justification) && (
-              <div className="mb-4 pt-3 border-t border-slate-100">
-                <p className="text-[13px] text-slate-600 leading-relaxed">
-                  <span className="text-orange-500 font-bold mr-1.5">
-                    Why here?
-                  </span>
-                  {selected.note || selected.justification}
-                </p>
-              </div>
-            )}
+
 
             <div className="mt-auto flex flex-col gap-4">
               {/* Meal label */}

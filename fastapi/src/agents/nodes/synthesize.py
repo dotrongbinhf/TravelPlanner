@@ -5,7 +5,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from src.agents.state import GraphState
 from src.services.cost_aggregator import aggregate_all_costs
-from src.services.apply_data_builder import build_apply_data, build_sectioned_apply_data
+from src.services.apply_data_builder import build_sectioned_apply_data
 from src.config import settings
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
@@ -63,8 +63,8 @@ One compact, welcoming paragraph highlighting destination, dates, travelers, and
 ### Flights
 - CRITICAL: If there is no `--- FLIGHTS ---` data provided in the Agent Data block, you MUST NOT create a Flights section at all, and DO NOT output the `[FLIGHT_UI_WIDGET]` tag.
 - If data exists, create a dedicated **Flights** section.
-- Briefly explain WHY you recommend this flight (timing advantages, price, airline quality, etc.).
-- Mention that alternatives are available in the interactive cards below and the user can ask you to switch.
+- Briefly explain WHY you recommend this flight (mention timing advantages like early arrival maximizes sightseeing time, price, airline quality, etc.).
+- Remind the user they can view alternatives in the interactive cards below and ask you to switch.
 - CRITICAL: Do NOT generate Markdown tables or bulleted lists for flight details.
 - Instead, you MUST output exactly this placeholder tag on a new line: `[FLIGHT_UI_WIDGET]`
 - The system will automatically inject beautiful Interactive Flight Cards in place of that tag.
@@ -72,8 +72,8 @@ One compact, welcoming paragraph highlighting destination, dates, travelers, and
 ### Accommodation
 - CRITICAL: If there is no `--- HOTELS ---` data provided in the Agent Data block, you MUST NOT create an Accommodation section at all, and DO NOT output the `[HOTEL_UI_WIDGET]` tag.
 - If data exists, create a dedicated **Accommodation** section.
-- Briefly explain WHY you recommend this hotel (location, price, rating, proximity to attractions, etc.).
-- Mention that alternatives are available in the interactive cards below and the user can ask you to switch.
+- Briefly explain WHY you recommend this hotel (mention why it's suitable such as location, price, rating, proximity to attractions, etc.).
+- Remind the user they can view alternatives in the interactive cards below and ask you to switch.
 - CRITICAL: Do NOT generate Markdown tables or bulleted lists for hotel details.
 - Instead, you MUST output exactly this placeholder tag on a new line: `[HOTEL_UI_WIDGET]`
 - The system will automatically inject beautiful Interactive Hotel Cards in place of that tag.
@@ -108,11 +108,6 @@ One compact, welcoming paragraph highlighting destination, dates, travelers, and
 - Suggest next steps using ONLY the items from the "Suggested Next Steps" section (injected below), but rephrase them as friendly, natural sentences — do NOT list them as raw action labels.
 - Do NOT suggest actions like "book a hotel", "reserve a table", "buy tickets", "set up notifications", or any feature not in the suggested list.
 
-### Full Plan — Hotel & Flight Recommendations
-- If this is a Full Plan (flights + hotels + itinerary generated together), include a brief paragraph explaining WHY you chose the recommended hotel and flight.
-  - For hotel: mention why it's suitable (location, price, rating, proximity to attractions).
-  - For flight: mention timing advantage (e.g., early arrival maximizes sightseeing time).
-  - Remind the user they can view alternatives in the interactive cards below and ask you to switch.
 
 ## Section Order (skip missing sections)
 1. Trip Overview → 2. Weather → 3. Budget → 4. Daily Itinerary → 5. Packing List → 6. Travel Notes → 7. Accommodation → 8. Flights
@@ -349,7 +344,11 @@ async def synthesize_agent_node(state: GraphState) -> dict[str, Any]:
         agent_outputs["restaurant_agent"] = current_plan["restaurant_search"]
     if "attraction_agent" not in agent_outputs and "attraction_search" in current_plan:
         agent_outputs["attraction_agent"] = current_plan["attraction_search"]
-    if "preparation_agent" not in agent_outputs and ("budget" in current_plan or "packing" in current_plan):
+    if "preparation_agent" not in agent_outputs and (
+        "budget" in current_plan
+        or "packing" in current_plan
+        or "notes" in current_plan
+    ):
         agent_outputs["preparation_agent"] = {
             "budget": current_plan.get("budget", {}),
             "packing_lists": current_plan.get("packing", []),
@@ -667,9 +666,13 @@ The following actions are available for the user's next step:
         # Build apply_data for preparation standalone
         if intent in ["preparation_inquiry", "modify_preparation"] and "preparation_agent" in agent_outputs:
             try:
+                apply_aggregated_costs = aggregate_all_costs(agent_outputs, plan_context)
                 apply_data = build_sectioned_apply_data(
-                    agent_outputs, plan_context, None,
-                    changed_sections={"budget", "packing", "notes"},
+                    agent_outputs,
+                    plan_context,
+                    apply_aggregated_costs,
+                    changed_sections=None,
+                    previous_apply_data=current_plan.get("last_apply_data"),
                 )
                 structured_output["apply_data"] = apply_data
             except Exception as e:
@@ -678,21 +681,13 @@ The following actions are available for the user's next step:
     else:
         # Build normalized apply_data for .NET Apply endpoint
         try:
-            if intent in ["modify_itinerary", "select_restaurant"]:
-                apply_data = build_sectioned_apply_data(
-                    agent_outputs, plan_context, aggregated_costs,
-                    changed_sections={"itinerary"},
-                )
-            elif intent in ["select_hotel", "select_flight"]:
-                apply_data = build_sectioned_apply_data(
-                    agent_outputs, plan_context, aggregated_costs,
-                    changed_sections={"itinerary", "budget"},
-                )
-            else:
-                apply_data = build_sectioned_apply_data(
-                    agent_outputs, plan_context, aggregated_costs,
-                    changed_sections=None,
-                )
+            apply_data = build_sectioned_apply_data(
+                agent_outputs,
+                plan_context,
+                aggregated_costs,
+                changed_sections=None,
+                previous_apply_data=current_plan.get("last_apply_data"),
+            )
             structured_output["apply_data"] = apply_data
         except Exception as e:
             logger.error(f"   ❌ Failed to build apply_data: {e}", exc_info=True)
@@ -738,6 +733,9 @@ The following actions are available for the user's next step:
             current_plan["attraction_search"] = agent_outputs["attraction_agent"]
 
     # ── Save pre-computed suggestions ──────────────────────────────
+    if structured_output.get("apply_data"):
+        current_plan["last_apply_data"] = structured_output["apply_data"]
+
     current_plan["last_suggestions"] = last_suggestions
     logger.info(f"   💡 Suggestions: {[s['label'] for s in last_suggestions]}")
 

@@ -12,7 +12,7 @@ import {
   StickyNote,
 } from "lucide-react";
 import ActionMenu from "@/components/action-menu";
-import { cn } from "@/lib/utils";
+import { cn, getPlaceImage, getCategoryFallback } from "@/lib/utils";
 import MarkerPin from "../maps/marker-pin";
 import { useMemo } from "react";
 import { DisplayType } from "./cross-day-utils";
@@ -223,20 +223,15 @@ export default function ItineraryItemCard({
           <div className="flex gap-2 mt-auto">
             {/* Thumbnail */}
             <div className="w-20 h-20 rounded-md overflow-hidden bg-gray-100 shrink-0 relative">
-              {place.thumbnail ? (
-                <img
-                  src={place.thumbnail}
-                  alt={place.title}
-                  className="w-full h-full object-cover"
-                  onError={(e) => {
-                    e.currentTarget.src = "/images/plans/alternative-place.jpg";
-                  }}
-                />
-              ) : (
-                <div className="absolute inset-0 flex items-center justify-center text-gray-400">
-                  <MapPin size={24} />
-                </div>
-              )}
+              <img
+                src={getPlaceImage(place.thumbnail, getCategoryFallback(place.category))}
+                alt={place.title}
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  e.currentTarget.onerror = null;
+                  e.currentTarget.src = "/images/plans/alternative-place.jpg";
+                }}
+              />
             </div>
 
             {/* Content */}

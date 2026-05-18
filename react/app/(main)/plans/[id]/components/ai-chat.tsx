@@ -39,7 +39,10 @@ import {
   getMessagesByConversationId,
   deleteConversation,
 } from "@/api/aiChat";
-import { Conversation, MessageRole, ApplyScope } from "@/api/aiChat/types";
+import {
+  Conversation,
+  MessageRole,
+} from "@/api/aiChat/types";
 import { useParams } from "next/navigation";
 import toast from "react-hot-toast";
 import { useAgentStream } from "@/hooks/useAgentStream";
@@ -240,13 +243,23 @@ export default function AIChat({
       streamState.streamedContent &&
       streamingConversationIdRef.current
     ) {
+      // Serialize the actual structuredData so chat-messages can parse apply_data
+      let serializedData: string | null = null;
+      if (streamState.structuredData) {
+        try {
+          serializedData = JSON.stringify(streamState.structuredData);
+        } catch {
+          serializedData = null;
+        }
+      }
+
       const aiMessage = {
         id: streamState.savedMessageId || `ai-${Date.now()}`,
         conversationId: streamingConversationIdRef.current,
         content: streamState.streamedContent,
         messageRole: MessageRole.Assistant,
         createdAt: new Date().toISOString(),
-        generatedPlanData: streamState.savedMessageId ? "saved" : null,
+        generatedPlanData: serializedData,
       };
 
       if (streamingConversationIdRef.current === activeConversationId) {
@@ -257,7 +270,7 @@ export default function AIChat({
   }, [streamState.isComplete]);
 
   // When the real DB messageId arrives (via 'message_saved' SSE event),
-  // patch the temp AI message with the real ID + flag for the Apply button.
+  // patch the temp AI message with the real ID.
   useEffect(() => {
     if (streamState.savedMessageId) {
       setBackendMessages((prev) =>
@@ -266,7 +279,6 @@ export default function AIChat({
             ? {
                 ...m,
                 id: streamState.savedMessageId,
-                generatedPlanData: "saved",
               }
             : m,
         ),
@@ -459,7 +471,7 @@ export default function AIChat({
           }
           isStreaming={isStreaming}
           structuredData={streamState.structuredData}
-          onApplyPlan={async (applyScope, messageId) => {
+          onApplyPlan={async (messageId, sections) => {
             if (!messageId) {
               toast.error("No message to apply");
               return;
@@ -467,7 +479,7 @@ export default function AIChat({
             try {
               const updatedPlan = await applyAIPlan(planId, {
                 messageId,
-                applyScope,
+                sections,
               });
               toast.success("Plan updated successfully!");
               // Update local state with applied timestamp

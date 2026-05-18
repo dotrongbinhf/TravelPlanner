@@ -36,7 +36,7 @@ llm_verify = (
     )
     if settings.USE_VERCEL_AI_GATEWAY
     else ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash-lite",
+        model=settings.MODEL_NAME,
         google_api_key=settings.GOOGLE_GEMINI_API_KEY_PAID,
         temperature=0.3,
         streaming=False,

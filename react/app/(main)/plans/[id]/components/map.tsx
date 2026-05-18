@@ -869,6 +869,7 @@ export default function GoogleMapIntegration({
         <PlaceDetailDialog
           placeId={(selectedPlace.placeId || selectedChatPlace?.placeId)!}
           existingPlace={selectedPlace.place}
+          fallbackThumbnail={selectedChatPlace?.thumbnail}
           hideAddButton={selectedPlace.isFromItinerary}
           onClose={() => {
             handlePlaceDialogClose();

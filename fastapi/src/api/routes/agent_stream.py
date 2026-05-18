@@ -35,6 +35,265 @@ NODE_TO_AGENT = {
     "synthesize": "synthesize",
 }
 
+WIDGET_AGENT_NAMES = {
+    "hotel_agent",
+    "flight_agent",
+    "attraction_agent",
+    "restaurant_agent",
+}
+
+
+def _pick(source: dict, keys: list[str]) -> dict:
+    """Return only present, non-empty fields used by chat widgets."""
+    result = {}
+    for key in keys:
+        value = source.get(key)
+        if value is not None and value != "":
+            result[key] = value
+    return result
+
+
+def _compact_location(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    coordinates = value.get("coordinates")
+    if isinstance(coordinates, list) and len(coordinates) == 2:
+        return {"coordinates": coordinates}
+    lat = value.get("lat")
+    lng = value.get("lng")
+    if lat is not None and lng is not None:
+        return {"lat": lat, "lng": lng}
+    return None
+
+
+def _compact_db_data(value: object, include_address: bool = False) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    compact = _pick(
+        value,
+        [
+            "imageUrl",
+            "thumbnail",
+            "reviewRating",
+            "reviewCount",
+            "category",
+        ],
+    )
+    if include_address and value.get("address"):
+        compact["address"] = value["address"]
+
+    location = _compact_location(value.get("location"))
+    if location:
+        compact["location"] = location
+    return compact
+
+
+def _compact_flight_item(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    return _pick(
+        value,
+        [
+            "departure_time",
+            "arrival_time",
+            "departure_airport_id",
+            "arrival_airport_id",
+            "flight_number",
+            "airline",
+            "airline_logo",
+            "total_duration_min",
+            "stops",
+            "price",
+            "google_flights_url",
+            "direction",
+        ],
+    )
+
+
+def _compact_hotel_item(value: object, recommended: bool = False) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    keys = [
+        "name",
+        "recommend_hotel_name",
+        "place_id",
+        "placeId",
+        "recommend_hotel_placeId",
+        "thumbnail",
+        "link",
+        "totalRate",
+        "hotel_class",
+        "overallRating",
+        "reviews",
+        "checkInTime",
+        "checkOutTime",
+    ]
+    compact = _pick(value, keys)
+    location = _compact_location(value.get("_location"))
+    if location:
+        compact["_location"] = location
+    if recommended and compact.get("recommend_hotel_placeId") and not compact.get("placeId"):
+        compact["placeId"] = compact["recommend_hotel_placeId"]
+    return compact
+
+
+def _compact_attraction_item(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    compact = _pick(
+        value,
+        [
+            "name",
+            "place_id",
+            "placeId",
+            "must_visit",
+            "notes",
+            "rating",
+            "user_ratings_total",
+            "estimated_entrance_fee",
+        ],
+    )
+    includes = value.get("includes")
+    if isinstance(includes, list):
+        compact["includes"] = [
+            {"name": item.get("name")}
+            for item in includes
+            if isinstance(item, dict) and item.get("name")
+        ]
+    db_data = _compact_db_data(value.get("db_data"))
+    if db_data:
+        compact["db_data"] = db_data
+    location = _compact_location(value.get("_location"))
+    if location:
+        compact["_location"] = location
+    return compact
+
+
+def _compact_restaurant_item(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    compact = _pick(
+        value,
+        [
+            "day",
+            "meal_type",
+            "name",
+            "place_id",
+            "placeId",
+            "rating",
+            "user_ratings_total",
+            "price_level",
+            "note",
+            "justification",
+            "estimated_cost_total",
+        ],
+    )
+    db_data = _compact_db_data(value.get("db_data"), include_address=True)
+    if db_data:
+        compact["db_data"] = db_data
+    location = _compact_location(value.get("_location"))
+    if location:
+        compact["_location"] = location
+    return compact
+
+
+def _curate_widget_agent_data(agent_name: str, agent_data: object) -> dict | None:
+    """Keep only fields consumed by the React chat widgets and map markers."""
+    if agent_name not in WIDGET_AGENT_NAMES or not isinstance(agent_data, dict):
+        return None
+
+    if agent_name == "flight_agent":
+        curated = _pick(
+            agent_data,
+            [
+                "type",
+                "totalPrice",
+                "google_flights_url",
+                "passengers",
+                "outbound_date",
+                "return_date",
+            ],
+        )
+        outbound = _compact_flight_item(agent_data.get("recommend_outbound_flight"))
+        if outbound:
+            curated["recommend_outbound_flight"] = outbound
+        return_flight = _compact_flight_item(agent_data.get("recommend_return_flight"))
+        if return_flight:
+            curated["recommend_return_flight"] = return_flight
+        alternatives = [
+            item
+            for item in (
+                _compact_flight_item(alt)
+                for alt in agent_data.get("alternatives", [])
+            )
+            if item
+        ]
+        if alternatives:
+            curated["alternatives"] = alternatives
+        return curated if curated else None
+
+    if agent_name == "hotel_agent":
+        segments = []
+        for segment in agent_data.get("segments", []):
+            if not isinstance(segment, dict):
+                continue
+            compact_segment = _compact_hotel_item(segment, recommended=True)
+            alternatives = [
+                item
+                for item in (
+                    _compact_hotel_item(alt)
+                    for alt in segment.get("alternatives", [])
+                )
+                if item
+            ]
+            if alternatives:
+                compact_segment["alternatives"] = alternatives
+            if compact_segment:
+                segments.append(compact_segment)
+        return {"segments": segments} if segments else None
+
+    if agent_name == "attraction_agent":
+        segments = []
+        for segment in agent_data.get("segments", []):
+            if not isinstance(segment, dict):
+                continue
+            attractions = [
+                item
+                for item in (
+                    _compact_attraction_item(attr)
+                    for attr in segment.get("attractions", [])
+                )
+                if item
+            ]
+            if attractions:
+                segments.append({
+                    "segment_name": segment.get("segment_name"),
+                    "attractions": attractions,
+                })
+        return {"segments": segments} if segments else None
+
+    if agent_name == "restaurant_agent":
+        meals = []
+        for meal in agent_data.get("meals", []):
+            compact_meal = _compact_restaurant_item(meal)
+            if not compact_meal:
+                continue
+            alternatives = []
+            if isinstance(meal, dict):
+                for alt in meal.get("alternatives", []):
+                    if isinstance(alt, str):
+                        alternatives.append(alt)
+                    else:
+                        compact_alt = _compact_restaurant_item(alt)
+                        if compact_alt:
+                            alternatives.append(compact_alt)
+            if alternatives:
+                compact_meal["alternatives"] = alternatives
+            meals.append(compact_meal)
+        return {"meals": meals} if meals else None
+
+    return None
+
 
 class AgentStreamRequest(BaseModel):
     """Request body for the agent stream endpoint."""
@@ -214,12 +473,14 @@ async def stream_agent(request_body: AgentStreamRequest, request: Request):
                                     agent_data.get("status",
                                     agent_data.get("search_summary", "")))
 
-                                # --- Emit raw Agent Data for Generative UI injection ---
-                                yield format_sse(AgentEvent(
-                                    event_type=EventType.STRUCTURED_DATA,
-                                    agent_name=agent_name,
-                                    structured_data=agent_data,
-                                ))
+                                # Emit only the compact data needed by chat widgets.
+                                widget_data = _curate_widget_agent_data(agent_name, agent_data)
+                                if widget_data:
+                                    yield format_sse(AgentEvent(
+                                        event_type=EventType.STRUCTURED_DATA,
+                                        agent_name=agent_name,
+                                        structured_data=widget_data,
+                                    ))
 
                     logger.info(f"⏹️  Agent ended: {agent_name}")
                     yield format_sse(AgentEvent(

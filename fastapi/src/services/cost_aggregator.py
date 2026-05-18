@@ -12,6 +12,22 @@ Sources:
 import logging
 from typing import Any
 logger = logging.getLogger(__name__)
+
+
+def _to_positive_number(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return float(value) if value > 0 else 0
+    if isinstance(value, dict):
+        return _to_positive_number(value.get("lowest") or value.get("Lowest"))
+    if isinstance(value, str):
+        import re
+        digits = re.sub(r"[^\d.]", "", value)
+        if digits.count(".") > 1:
+            digits = digits.replace(".", "")
+        return float(digits) if digits else 0
+    return 0
+
+
 def _get_scheduled_attractions(itinerary_data: dict) -> dict[str, list[str]]:
     """Extract attraction names and their scheduled includes from itinerary output.
     Returns:
@@ -98,12 +114,12 @@ def aggregate_all_costs(
     if hotel_data and not hotel_data.get("skipped"):
         for seg in hotel_data.get("segments", []):
             name = seg.get("recommend_hotel_name", "Hotel")
-            total_rate = seg.get("totalRate", 0)
-            # Ensure total_rate is numeric (it might be a string like "$120" or "1,200,000 VND")
-            if isinstance(total_rate, str):
-                import re
-                digits = re.sub(r"[^\d.]", "", total_rate)
-                total_rate = float(digits) if digits else 0
+            total_rate = _to_positive_number(seg.get("totalRate", 0))
+            if total_rate <= 0:
+                logger.info(
+                    f"💰 [COST_AGGREGATOR] Skipping hotel cost for {name}: no usable rate"
+                )
+                continue
             ci = seg.get("check_in", "")
             co = seg.get("check_out", "")
             seg_name = seg.get("segment_name", "")
@@ -112,10 +128,13 @@ def aggregate_all_costs(
                 note_parts.append(seg_name)
             if ci and co:
                 note_parts.append(f"{ci} → {co}")
+            if seg.get("totalRateEstimated"):
+                note_parts.append("estimated")
             hotel_items.append({
                 "name": name,
                 "amount": total_rate,
                 "note": ", ".join(note_parts) if note_parts else "",
+                "estimated": bool(seg.get("totalRateEstimated")),
             })
             hotel_subtotal += total_rate
     if hotel_items:

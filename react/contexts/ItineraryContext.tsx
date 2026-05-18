@@ -25,6 +25,7 @@ export interface ChatPlace {
   name: string;
   location: { lat: number; lng: number };
   source: "hotel" | "attraction" | "restaurant";
+  thumbnail?: string; // widget image thumbnail URL
 }
 
 interface ItineraryContextValue {

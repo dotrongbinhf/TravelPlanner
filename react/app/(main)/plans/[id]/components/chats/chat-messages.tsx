@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useCallback, useMemo, useState } from "react";
 import {
   BotMessageSquare,
   Loader2,
   CheckCircle2,
   FilePlus2,
   AlertTriangle,
+  Circle,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -18,12 +20,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { CheckIcon } from "@/components/ui/check";
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -31,8 +35,8 @@ import { HotelWidget } from "./widgets/HotelWidget";
 import { FlightWidget } from "./widgets/FlightWidget";
 import { AttractionWidget } from "./widgets/AttractionWidget";
 import { RestaurantWidget } from "./widgets/RestaurantWidget";
-import { useItineraryContext } from "@/contexts/ItineraryContext";
-import { ApplyScope } from "@/api/aiChat/types";
+import { useItineraryContext, type ChatPlace } from "@/contexts/ItineraryContext";
+import { ApplySection } from "@/api/aiChat/types";
 
 export interface ChatMessage {
   id: string;
@@ -50,10 +54,289 @@ interface ChatMessagesProps {
   readonly isStreaming?: boolean;
   readonly structuredData?: Record<string, unknown> | null;
   readonly onApplyPlan?: (
-    applyScope: ApplyScope,
-    messageId?: string,
+    messageId: string,
+    sections: ApplySection[],
   ) => Promise<void>;
 }
+
+type ApplySectionKey = "itinerary" | "budget" | "packing" | "notes";
+type MapWidgetSource = "hotel" | "attraction" | "restaurant";
+type ChatWidgetKind = MapWidgetSource | "flight";
+
+const CHAT_WIDGETS: Array<{
+  tag: string;
+  kind: ChatWidgetKind;
+  dataKey: string;
+  source?: MapWidgetSource;
+}> = [
+  {
+    tag: "[HOTEL_UI_WIDGET]",
+    kind: "hotel",
+    dataKey: "hotel_agent",
+    source: "hotel",
+  },
+  {
+    tag: "[FLIGHT_UI_WIDGET]",
+    kind: "flight",
+    dataKey: "flight_agent",
+  },
+  {
+    tag: "[ATTRACTION_UI_WIDGET]",
+    kind: "attraction",
+    dataKey: "attraction_agent",
+    source: "attraction",
+  },
+  {
+    tag: "[RESTAURANT_UI_WIDGET]",
+    kind: "restaurant",
+    dataKey: "restaurant_agent",
+    source: "restaurant",
+  },
+];
+
+type WidgetOccurrence = {
+  configIndex: number;
+  widgetIndex: number;
+};
+
+type MapWidgetEntry = {
+  key: string;
+  source: MapWidgetSource;
+  places: ChatPlace[];
+};
+
+const getWidgetOccurrences = (content: string): WidgetOccurrence[] => {
+  const occurrences: WidgetOccurrence[] = [];
+  const counters = new Map<string, number>();
+  let remaining = content;
+
+  while (remaining.length > 0) {
+    let earliest = -1;
+    let earliestPos = Infinity;
+
+    for (let i = 0; i < CHAT_WIDGETS.length; i++) {
+      const pos = remaining.indexOf(CHAT_WIDGETS[i].tag);
+      if (pos !== -1 && pos < earliestPos) {
+        earliest = i;
+        earliestPos = pos;
+      }
+    }
+
+    if (earliest === -1) break;
+
+    const kind = CHAT_WIDGETS[earliest].kind;
+    const widgetIndex = counters.get(kind) || 0;
+    counters.set(kind, widgetIndex + 1);
+    occurrences.push({ configIndex: earliest, widgetIndex });
+    remaining = remaining.substring(
+      earliestPos + CHAT_WIDGETS[earliest].tag.length,
+    );
+  }
+
+  return occurrences;
+};
+
+const getLocation = (item: any): ChatPlace["location"] | null => {
+  const coordinates =
+    item?.db_data?.location?.coordinates ||
+    item?._location?.coordinates ||
+    item?.location?.coordinates;
+  if (Array.isArray(coordinates) && coordinates.length === 2) {
+    return { lat: coordinates[1], lng: coordinates[0] };
+  }
+
+  const lat = item?._location?.lat ?? item?.location?.lat;
+  const lng = item?._location?.lng ?? item?.location?.lng;
+  if (lat != null && lng != null) {
+    return { lat, lng };
+  }
+
+  return null;
+};
+
+const extractHotelPlaces = (data: any): ChatPlace[] => {
+  const places: ChatPlace[] = [];
+  data?.segments?.forEach((segment: any) => {
+    const hotels = [
+      {
+        ...segment,
+        id: segment.recommend_hotel_name,
+        name: segment.recommend_hotel_name,
+        placeId:
+          segment.recommend_hotel_placeId ||
+          segment.placeId ||
+          segment.place_id,
+      },
+      ...(segment.alternatives || []).map((alt: any, idx: number) => ({
+        ...alt,
+        id: alt.id || alt.name || `hotel-alt-${idx}`,
+      })),
+    ];
+
+    hotels.forEach((hotel: any) => {
+      const location = getLocation(hotel);
+      const name = hotel.name || hotel.recommend_hotel_name;
+      if (!location || !name) return;
+      places.push({
+        id: String(hotel.id || name),
+        placeId:
+          hotel.placeId ||
+          hotel.place_id ||
+          hotel.recommend_hotel_placeId,
+        name,
+        location,
+        source: "hotel",
+      });
+    });
+  });
+  return places;
+};
+
+const extractAttractionPlaces = (data: any): ChatPlace[] => {
+  const places: ChatPlace[] = [];
+  data?.segments?.forEach((segment: any) => {
+    (segment.attractions || []).forEach((attraction: any, idx: number) => {
+      const location = getLocation(attraction);
+      const name = attraction.name || attraction.recommend_attraction_name;
+      if (!location || !name) return;
+      places.push({
+        id: String(
+          attraction.id ||
+            attraction.place_id ||
+            attraction.placeId ||
+            name ||
+            `attraction-${idx}`,
+        ),
+        placeId: attraction.place_id || attraction.placeId,
+        name,
+        location,
+        source: "attraction",
+      });
+    });
+  });
+  return places;
+};
+
+const extractRestaurantPlaces = (data: any): ChatPlace[] => {
+  const places: ChatPlace[] = [];
+  data?.meals?.forEach((meal: any, mealIdx: number) => {
+    const restaurants = [
+      { ...meal, id: meal.id || meal.place_id || meal.name || `meal-${mealIdx}` },
+      ...(meal.alternatives || [])
+        .filter((alt: any) => typeof alt !== "string")
+        .map((alt: any, altIdx: number) => ({
+          ...alt,
+          id: alt.id || alt.place_id || alt.name || `restaurant-alt-${mealIdx}-${altIdx}`,
+        })),
+    ];
+
+    restaurants.forEach((restaurant: any) => {
+      const location = getLocation(restaurant);
+      const name = restaurant.name || restaurant.recommend_restaurant_name;
+      if (!location || !name) return;
+      places.push({
+        id: String(restaurant.id || name),
+        placeId: restaurant.place_id || restaurant.placeId,
+        name,
+        location,
+        source: "restaurant",
+      });
+    });
+  });
+  return places;
+};
+
+const extractWidgetPlaces = (
+  source: MapWidgetSource,
+  data: any,
+): ChatPlace[] => {
+  if (source === "hotel") return extractHotelPlaces(data);
+  if (source === "attraction") return extractAttractionPlaces(data);
+  return extractRestaurantPlaces(data);
+};
+
+const buildMapWidgetEntries = (
+  content: string,
+  ownerId: string,
+  structuredData?: Record<string, unknown> | null,
+): MapWidgetEntry[] => {
+  if (!structuredData) return [];
+  return getWidgetOccurrences(content)
+    .map((occurrence) => {
+      const config = CHAT_WIDGETS[occurrence.configIndex];
+      if (!config.source) return null;
+      const data = (structuredData as any)?.[config.dataKey];
+      const places = extractWidgetPlaces(config.source, data);
+      if (places.length === 0) return null;
+      return {
+        key: `${ownerId}:${config.kind}:${occurrence.widgetIndex}`,
+        source: config.source,
+        places,
+      };
+    })
+    .filter(Boolean) as MapWidgetEntry[];
+};
+
+const OVERVIEW_SECTION_META = {
+  key: "overview",
+  enumValue: ApplySection.Overview,
+  label: "Overview",
+};
+
+const APPLY_SECTION_META: Array<{
+  key: ApplySectionKey;
+  enumValue: ApplySection;
+  label: string;
+}> = [
+  { key: "itinerary", enumValue: ApplySection.Itinerary, label: "Itinerary" },
+  { key: "budget", enumValue: ApplySection.Budget, label: "Budget" },
+  { key: "packing", enumValue: ApplySection.Packing, label: "Packing" },
+  { key: "notes", enumValue: ApplySection.Notes, label: "Notes" },
+];
+
+const hasSectionData = (section: any) => {
+  const data = section?.data;
+  if (Array.isArray(data)) return data.length > 0;
+  if (data && typeof data === "object") return Object.keys(data).length > 0;
+  return Boolean(data);
+};
+
+const getAvailableApplySections = (applyData: any) =>
+  APPLY_SECTION_META.filter((section) =>
+    hasSectionData(applyData?.sections?.[section.key]),
+  );
+
+const getChangedApplySections = (applyData: any) =>
+  getAvailableApplySections(applyData).filter(
+    (section) => applyData?.sections?.[section.key]?.is_apply,
+  );
+
+const hasOverviewData = (applyData: any) =>
+  hasSectionData(applyData?.sections?.overview) ||
+  hasSectionData({ data: applyData?.plan_context });
+
+const formatApplySectionEnums = (
+  sections: ApplySection[],
+  fallback: string,
+) => {
+  const labels = [
+    ...(sections.includes(ApplySection.Overview)
+      ? [OVERVIEW_SECTION_META]
+      : []),
+    ...APPLY_SECTION_META.filter((section) =>
+      sections.includes(section.enumValue),
+    ),
+  ];
+  return formatSectionLabels(labels, fallback);
+};
+
+const formatSectionLabels = (
+  sections: Array<{ label: string }>,
+  fallback: string,
+) =>
+  sections.length
+    ? sections.map((section) => section.label).join(", ")
+    : fallback;
 
 // Map agent names to display labels
 const AGENT_LABELS: Record<string, string> = {
@@ -149,32 +432,58 @@ export default function ChatMessages({
   structuredData,
   onApplyPlan,
 }: ChatMessagesProps) {
+  const [activeMapWidgets, setActiveMapWidgets] = useState<
+    Partial<Record<MapWidgetSource, string>>
+  >({});
+
+  const toggleMapWidget = useCallback(
+    (source: MapWidgetSource, widgetKey: string) => {
+      setActiveMapWidgets((prev) => ({
+        ...prev,
+        [source]: prev[source] === widgetKey ? undefined : widgetKey,
+      }));
+    },
+    [],
+  );
+
   // Helper to split message and render widgets — supports MULTIPLE widgets in one message
-  const WIDGET_TAGS = [
-    {
-      tag: "[HOTEL_UI_WIDGET]",
-      render: (sd: any) => <HotelWidget data={sd?.hotel_agent} />,
-    },
-    {
-      tag: "[FLIGHT_UI_WIDGET]",
-      render: (sd: any) => <FlightWidget data={sd?.flight_agent} />,
-    },
-    {
-      tag: "[ATTRACTION_UI_WIDGET]",
-      render: (sd: any) => <AttractionWidget data={sd?.attraction_agent} />,
-    },
-    {
-      tag: "[RESTAURANT_UI_WIDGET]",
-      render: (sd: any) => <RestaurantWidget data={sd?.restaurant_agent} />,
-    },
-  ];
+  const renderWidget = (
+    configIndex: number,
+    sd: any,
+    widgetKey: string,
+  ) => {
+    const config = CHAT_WIDGETS[configIndex];
+    const data = sd?.[config.dataKey];
+    const mapPlaces = config.source
+      ? extractWidgetPlaces(config.source, data)
+      : [];
+    const mapProps =
+      config.source && mapPlaces.length > 0
+        ? {
+            mapVisible: activeMapWidgets[config.source] === widgetKey,
+            onToggleMap: () => toggleMapWidget(config.source!, widgetKey),
+          }
+        : {};
+
+    if (config.kind === "hotel") {
+      return <HotelWidget data={data} {...mapProps} />;
+    }
+    if (config.kind === "flight") {
+      return <FlightWidget data={data} />;
+    }
+    if (config.kind === "attraction") {
+      return <AttractionWidget data={data} {...mapProps} />;
+    }
+    return <RestaurantWidget data={data} {...mapProps} />;
+  };
 
   const renderMessageWithWidgets = (
     content: string,
     msgStructuredData?: Record<string, unknown> | null,
+    messageId = "streaming",
   ) => {
     // Check if ANY widget tag exists
-    const hasWidget = WIDGET_TAGS.some((w) => content.includes(w.tag));
+    const hasWidget = CHAT_WIDGETS.some((w) => content.includes(w.tag));
     if (!hasWidget) {
       return (
         <ReactMarkdown
@@ -189,16 +498,17 @@ export default function ChatMessages({
     // Split content by ALL widget tags, preserving order
     type Segment =
       | { type: "text"; content: string }
-      | { type: "widget"; tagIndex: number };
+      | { type: "widget"; tagIndex: number; widgetIndex: number };
     const segments: Segment[] = [];
+    const widgetCounters = new Map<ChatWidgetKind, number>();
     let remaining = content;
 
     while (remaining.length > 0) {
       // Find the earliest widget tag in remaining
       let earliest = -1;
       let earliestPos = Infinity;
-      for (let i = 0; i < WIDGET_TAGS.length; i++) {
-        const pos = remaining.indexOf(WIDGET_TAGS[i].tag);
+      for (let i = 0; i < CHAT_WIDGETS.length; i++) {
+        const pos = remaining.indexOf(CHAT_WIDGETS[i].tag);
         if (pos !== -1 && pos < earliestPos) {
           earliestPos = pos;
           earliest = i;
@@ -218,11 +528,14 @@ export default function ChatMessages({
         segments.push({ type: "text", content: textBefore });
 
       // Push the widget
-      segments.push({ type: "widget", tagIndex: earliest });
+      const widgetKind = CHAT_WIDGETS[earliest].kind;
+      const widgetIndex = widgetCounters.get(widgetKind) || 0;
+      widgetCounters.set(widgetKind, widgetIndex + 1);
+      segments.push({ type: "widget", tagIndex: earliest, widgetIndex });
 
       // Advance past the tag
       remaining = remaining.substring(
-        earliestPos + WIDGET_TAGS[earliest].tag.length,
+        earliestPos + CHAT_WIDGETS[earliest].tag.length,
       );
     }
 
@@ -239,7 +552,11 @@ export default function ChatMessages({
             </ReactMarkdown>
           ) : (
             <div key={idx}>
-              {WIDGET_TAGS[seg.tagIndex].render(msgStructuredData)}
+              {renderWidget(
+                seg.tagIndex,
+                msgStructuredData,
+                `${messageId}:${CHAT_WIDGETS[seg.tagIndex].kind}:${seg.widgetIndex}`,
+              )}
             </div>
           ),
         )}
@@ -257,8 +574,41 @@ export default function ChatMessages({
   );
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [confirmMessageId, setConfirmMessageId] = useState<string | null>(null);
+  const [confirmSections, setConfirmSections] = useState<ApplySection[]>([]);
+  const [showCustomDialog, setShowCustomDialog] = useState(false);
+  const [customMessageId, setCustomMessageId] = useState<string | null>(null);
+  const [customSections, setCustomSections] = useState<ApplySection[]>([]);
+  const [customAvailableSections, setCustomAvailableSections] = useState<
+    ReturnType<typeof getAvailableApplySections>
+  >([]);
 
   const { setChatPlaces } = useItineraryContext();
+
+  const persistedWidgetEntries = useMemo(() => {
+    return messages.flatMap((message) => {
+      if (!message.generatedPlanData) return [];
+      try {
+        const parsed = JSON.parse(message.generatedPlanData);
+        return buildMapWidgetEntries(message.content, message.id, parsed);
+      } catch {
+        return [];
+      }
+    });
+  }, [messages]);
+
+  const streamingWidgetEntries = useMemo(() => {
+    if (!isStreaming || !streamingContent || !structuredData) return [];
+    return buildMapWidgetEntries(
+      streamingContent,
+      "streaming",
+      structuredData,
+    );
+  }, [isStreaming, streamingContent, structuredData]);
+
+  const allMapWidgetEntries = useMemo(
+    () => [...persistedWidgetEntries, ...streamingWidgetEntries],
+    [persistedWidgetEntries, streamingWidgetEntries],
+  );
 
   const lastUserMsgId = [...messages]
     .reverse()
@@ -279,133 +629,12 @@ export default function ChatMessages({
     }
   }, [scrollToBottom]);
 
-  // Extract places from the latest message that contains widget data
   useEffect(() => {
-    let latestWidgetData: any = null;
-
-    // Check streaming data first
-    if (
-      structuredData &&
-      (structuredData.hotel_agent ||
-        structuredData.attraction_agent ||
-        structuredData.restaurant_agent)
-    ) {
-      latestWidgetData = structuredData;
-    } else {
-      // Look for the latest message with widget data in history
-      const latestMsgWithData = [...messages].reverse().find((m) => {
-        if (!m.generatedPlanData) return false;
-        try {
-          const parsed = JSON.parse(m.generatedPlanData);
-          return (
-            parsed.hotel_agent ||
-            parsed.attraction_agent ||
-            parsed.restaurant_agent
-          );
-        } catch {
-          return false;
-        }
-      });
-
-      if (latestMsgWithData?.generatedPlanData) {
-        try {
-          latestWidgetData = JSON.parse(latestMsgWithData.generatedPlanData);
-        } catch {}
-      }
-    }
-
-    if (latestWidgetData) {
-      import("@/contexts/ItineraryContext").then((mod) => {
-        const places: import("@/contexts/ItineraryContext").ChatPlace[] = [];
-
-        // Extract Hotels
-        if (latestWidgetData.hotel_agent?.segments) {
-          latestWidgetData.hotel_agent.segments.forEach((seg: any) => {
-            const allHotels = [
-              { ...seg, id: seg.recommend_hotel_name },
-              ...(seg.alternatives || []).map((alt: any, idx: number) => ({
-                ...alt,
-                id: alt.name || `alt-${idx}`,
-              })),
-            ];
-
-            allHotels.forEach((h) => {
-              if (
-                h._location &&
-                (h._location.coordinates ||
-                  (h._location.lat && h._location.lng))
-              ) {
-                places.push({
-                  id: h.id,
-                  placeId: h.place_id || h.placeId,
-                  name: h.name || h.recommend_hotel_name,
-                  location: h._location.coordinates
-                    ? {
-                        lat: h._location.coordinates[1],
-                        lng: h._location.coordinates[0],
-                      }
-                    : { lat: h._location.lat, lng: h._location.lng },
-                  source: "hotel",
-                });
-              }
-            });
-          });
-        }
-
-        // Extract Attractions
-        if (latestWidgetData.attraction_agent?.segments) {
-          latestWidgetData.attraction_agent.segments.forEach((seg: any) => {
-            if (
-              seg._location &&
-              (seg._location.coordinates ||
-                (seg._location.lat && seg._location.lng))
-            ) {
-              places.push({
-                id: seg.title || seg.recommend_attraction_name,
-                placeId: seg.place_id || seg.placeId,
-                name: seg.title || seg.recommend_attraction_name,
-                location: seg._location.coordinates
-                  ? {
-                      lat: seg._location.coordinates[1],
-                      lng: seg._location.coordinates[0],
-                    }
-                  : { lat: seg._location.lat, lng: seg._location.lng },
-                source: "attraction",
-              });
-            }
-          });
-        }
-
-        // Extract Restaurants
-        if (latestWidgetData.restaurant_agent?.segments) {
-          latestWidgetData.restaurant_agent.segments.forEach((seg: any) => {
-            if (
-              seg._location &&
-              (seg._location.coordinates ||
-                (seg._location.lat && seg._location.lng))
-            ) {
-              places.push({
-                id: seg.title || seg.recommend_restaurant_name,
-                placeId: seg.place_id || seg.placeId,
-                name: seg.title || seg.recommend_restaurant_name,
-                location: seg._location.coordinates
-                  ? {
-                      lat: seg._location.coordinates[1],
-                      lng: seg._location.coordinates[0],
-                    }
-                  : { lat: seg._location.lat, lng: seg._location.lng },
-                source: "restaurant",
-              });
-            }
-          });
-        }
-
-        setChatPlaces(places as any);
-      });
-    } else {
-      setChatPlaces([]);
-    }
-  }, [messages, structuredData, setChatPlaces]);
+    const visiblePlaces = allMapWidgetEntries
+      .filter((entry) => activeMapWidgets[entry.source] === entry.key)
+      .flatMap((entry) => entry.places);
+    setChatPlaces(visiblePlaces);
+  }, [activeMapWidgets, allMapWidgetEntries, setChatPlaces]);
 
   useEffect(() => {
     if (isInitialLoadRef.current && messages.length > 0) {
@@ -432,20 +661,14 @@ export default function ChatMessages({
     scrollToLastUserMsg,
   ]);
 
-  // Check if any DB-loaded message already has generatedPlanData
-  const hasDbApplyData = messages.some((m) => m.generatedPlanData);
-
-  const streamingHasApplyData =
-    !isStreaming &&
-    structuredData &&
-    (structuredData as any)?.apply_data &&
-    !hasDbApplyData;
-
-  const handleApply = async (applyScope: ApplyScope, messageId?: string) => {
+  const handleApply = async (messageId: string, sections: ApplySection[]) => {
     if (!onApplyPlan) return;
-    setApplyingMessageId(messageId || "streaming");
+    const sectionsWithOverview = Array.from(
+      new Set([ApplySection.Overview, ...sections]),
+    );
+    setApplyingMessageId(messageId);
     try {
-      await onApplyPlan(applyScope, messageId);
+      await onApplyPlan(messageId, sectionsWithOverview);
     } catch {
       // Error handled by parent
     } finally {
@@ -453,21 +676,60 @@ export default function ChatMessages({
     }
   };
 
-  const handleApplyChangesClick = (messageId?: string) => {
+  const handleApplyChangesClick = (messageId: string, applyData: any) => {
+    const changedSections = getChangedApplySections(applyData);
     setConfirmMessageId(messageId || null);
+    setConfirmSections([
+      ...(hasOverviewData(applyData) ? [ApplySection.Overview] : []),
+      ...changedSections.map((s) => s.enumValue),
+    ]);
     setShowConfirmDialog(true);
   };
 
   const handleConfirmReplace = () => {
     setShowConfirmDialog(false);
-    handleApply(ApplyScope.OnlyChanges, confirmMessageId || undefined);
+    if (confirmMessageId) {
+      handleApply(confirmMessageId, confirmSections);
+    }
+  };
+
+  const handleCustomSectionsClick = (messageId: string, applyData: any) => {
+    const availableSections = getAvailableApplySections(applyData);
+    const changedSections = getChangedApplySections(applyData);
+    setCustomMessageId(messageId);
+    setCustomAvailableSections(availableSections);
+    setCustomSections([
+      ...(hasOverviewData(applyData) ? [ApplySection.Overview] : []),
+      ...changedSections.map((s) => s.enumValue),
+    ]);
+    setShowCustomDialog(true);
+  };
+
+  const handleToggleCustomSection = (section: ApplySection) => {
+    setCustomSections((prev) =>
+      prev.includes(section)
+        ? prev.filter((current) => current !== section)
+        : [...prev, section],
+    );
+  };
+
+  const handleApplyCustomSections = () => {
+    setShowCustomDialog(false);
+    if (customMessageId) {
+      handleApply(customMessageId, customSections);
+    }
   };
 
   const renderApplyButton = (
     messageId: string,
     applyGeneratedPlanAt?: string | null,
+    applyData?: any,
   ) => {
     const isApplying = applyingMessageId === messageId;
+    const changedSections = getChangedApplySections(applyData);
+    const availableSections = getAvailableApplySections(applyData);
+    const hasChangedSections = changedSections.length > 0;
+    const hasAvailableSections = availableSections.length > 0;
     return (
       <div className="flex justify-start pl-8 mt-1.5 animate-in fade-in slide-in-from-bottom-2 duration-300">
         <div className="flex items-center gap-2 p-3 rounded-xl bg-gradient-to-r from-emerald-50 to-green-50 border border-emerald-200">
@@ -506,26 +768,31 @@ export default function ChatMessages({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
               <DropdownMenuItem
-                onClick={() => handleApplyChangesClick(messageId)}
+                onClick={() => handleApplyChangesClick(messageId, applyData)}
+                disabled={!hasChangedSections}
                 className="cursor-pointer"
               >
                 <CheckCircle2 className="w-4 h-4 mr-2 text-emerald-600" />
                 <div>
                   <div className="text-sm font-medium">Apply Changes Only</div>
                   <div className="text-xs text-gray-500">
-                    Apply only what changed in this message
+                    Apply to{" "}
+                    {formatSectionLabels(changedSections, "no sections")}
                   </div>
                 </div>
               </DropdownMenuItem>
               <DropdownMenuItem
-                onClick={() => handleApply(ApplyScope.FullPlan, messageId)}
+                onClick={() => handleCustomSectionsClick(messageId, applyData)}
+                disabled={!hasAvailableSections}
                 className="cursor-pointer"
               >
                 <FilePlus2 className="w-4 h-4 mr-2 text-blue-600" />
                 <div>
-                  <div className="text-sm font-medium">Apply Full Plan</div>
+                  <div className="text-sm font-medium">
+                    Apply Custom Sections
+                  </div>
                   <div className="text-xs text-gray-500">
-                    Apply complete plan up to this point
+                    Choose which sections to apply
                   </div>
                 </div>
               </DropdownMenuItem>
@@ -570,14 +837,19 @@ export default function ChatMessages({
                 {renderMessageWithWidgets(
                   msg.content,
                   parsedData || structuredData,
+                  msg.id,
                 )}
               </div>
             </div>
 
             {/* Per-message Apply button — for messages with plan data */}
             {msg.role === "assistant" &&
-              msg.generatedPlanData &&
-              renderApplyButton(msg.id, msg.applyGeneratedPlanAt)}
+              parsedData?.apply_data &&
+              renderApplyButton(
+                msg.id,
+                msg.applyGeneratedPlanAt,
+                parsedData.apply_data,
+              )}
           </div>
         );
       })}
@@ -590,7 +862,8 @@ export default function ChatMessages({
           </div>
           <div className="max-w-[80%] space-y-2">
             {/* Agent status badge */}
-            {(activeAgents?.length! > 0 || completedAgents?.length! > 0) && (
+            {((activeAgents?.length ?? 0) > 0 ||
+              (completedAgents?.length ?? 0) > 0) && (
               <div className="flex flex-col gap-1.5 mt-1 border-l-2 pl-3 border-blue-200">
                 {completedAgents?.map((agentName) => (
                   <div
@@ -618,7 +891,11 @@ export default function ChatMessages({
             {/* Streamed text content */}
             {streamingContent ? (
               <div className="rounded-2xl rounded-bl-md px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words bg-white text-gray-800 border border-sky-100 shadow-sm">
-                {renderMessageWithWidgets(streamingContent, structuredData)}
+                {renderMessageWithWidgets(
+                  streamingContent,
+                  structuredData,
+                  "streaming",
+                )}
                 <span className="inline-block w-1.5 h-4 bg-blue-500 ml-0.5 animate-pulse rounded-sm" />
               </div>
             ) : (
@@ -643,35 +920,110 @@ export default function ChatMessages({
         </div>
       )}
 
-      {/* Apply button for streaming result (not yet saved to DB) */}
-      {streamingHasApplyData && renderApplyButton("streaming")}
-
-      {/* Confirm replace dialog */}
+      {/* Confirm apply dialog */}
       <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-amber-500" />
-              Replace current plan?
-            </DialogTitle>
-            <DialogDescription>
-              This will <strong>replace all existing data</strong> in your
-              current plan (itinerary, budget, packing lists, notes) with the
-              AI-generated plan. This action cannot be undone.
+        <DialogContent className="sm:max-w-[500px] [&>button]:hidden">
+          <DialogHeader className="relative">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center w-10 h-10 bg-amber-100 rounded-full">
+                <AlertTriangle className="w-5 h-5 text-amber-600" />
+              </div>
+              <DialogTitle className="text-lg font-semibold text-gray-900">
+                Apply changed sections?
+              </DialogTitle>
+            </div>
+            <DialogDescription className="text-gray-700 mt-2 font-medium">
+              This will apply changes to{" "}
+              <strong>
+                {formatApplySectionEnums(confirmSections, "no sections")}
+              </strong>
+              . This action will replace the current plan data for these
+              sections.
             </DialogDescription>
+            <DialogClose asChild>
+              <button
+                className="absolute -top-2 -right-2 p-1.5 rounded-lg hover:bg-gray-100 transition-colors duration-200 cursor-pointer"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5 text-gray-500 hover:text-gray-700" />
+              </button>
+            </DialogClose>
           </DialogHeader>
-          <DialogFooter className="gap-2">
+          <DialogFooter>
             <Button
               variant="outline"
               onClick={() => setShowConfirmDialog(false)}
+              className="bg-gray-50 hover:bg-gray-200"
             >
               Cancel
             </Button>
             <Button
               onClick={handleConfirmReplace}
+              disabled={confirmSections.length === 0}
               className="bg-emerald-600 hover:bg-emerald-700 text-white"
             >
-              Yes, replace plan
+              Apply changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showCustomDialog} onOpenChange={setShowCustomDialog}>
+        <DialogContent className="sm:max-w-[500px] [&>button]:hidden">
+          <DialogHeader className="relative">
+            <DialogTitle>Apply custom sections</DialogTitle>
+            <DialogDescription>
+              Select which sections to apply to your plan.
+            </DialogDescription>
+            <DialogClose asChild>
+              <button
+                className="absolute -top-2 -right-2 p-1.5 rounded-lg hover:bg-gray-100 transition-colors duration-200 cursor-pointer"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5 text-gray-500 hover:text-gray-700" />
+              </button>
+            </DialogClose>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 py-2">
+            {customAvailableSections.map((section) => {
+              const isChecked = customSections.includes(section.enumValue);
+              return (
+                <div
+                  key={section.key}
+                  className="flex items-center gap-3 rounded-lg p-3 bg-gray-100 cursor-pointer hover:bg-gray-200 transition-colors"
+                  onClick={() => handleToggleCustomSection(section.enumValue)}
+                >
+                  {isChecked ? (
+                    <CheckIcon
+                      className="text-white bg-[#2B7FFF] rounded-full p-1"
+                      size={10}
+                      animateOnMount={true}
+                      disableHover={true}
+                    />
+                  ) : (
+                    <Circle size={18} className="text-gray-400" />
+                  )}
+                  <span className="font-medium text-sm text-gray-800 flex-1">
+                    {section.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowCustomDialog(false)}
+              className="bg-gray-50 hover:bg-gray-200"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleApplyCustomSections}
+              disabled={customSections.length === 0}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              Apply selected sections
             </Button>
           </DialogFooter>
         </DialogContent>

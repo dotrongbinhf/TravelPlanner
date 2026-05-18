@@ -3,12 +3,15 @@ import { Star, ExternalLink, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PlaceCarouselWidget } from "./PlaceCarouselWidget";
 import { useItineraryContext } from "@/contexts/ItineraryContext";
+import { getPlaceImage } from "@/lib/utils";
 
 export interface HotelWidgetProps {
   data: any;
+  mapVisible?: boolean;
+  onToggleMap?: () => void;
 }
 
-export function HotelWidget({ data }: HotelWidgetProps) {
+export function HotelWidget({ data, mapVisible = false, onToggleMap }: HotelWidgetProps) {
   if (!data?.segments || data.segments.length === 0) {
     return (
       <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-center gap-3 animate-pulse my-4 shadow-sm">
@@ -38,7 +41,8 @@ export function HotelWidget({ data }: HotelWidgetProps) {
         placeId: item.place_id || item.placeId,
         name: item.name || item.recommend_hotel_name,
         location,
-        source: "hotel"
+        source: "hotel",
+        thumbnail: getPlaceImage(item.thumbnail, "/images/plans/alternative-hotel.jpg")
       });
     }
   };
@@ -48,6 +52,7 @@ export function HotelWidget({ data }: HotelWidgetProps) {
   const recommendedHotel = {
     id: segment.recommend_hotel_name, // Unique key
     name: segment.recommend_hotel_name,
+    placeId: segment.recommend_hotel_placeId || segment.placeId || segment.place_id,
     thumbnail: segment.thumbnail,
     link: segment.link,
     totalRate: segment.totalRate || "Price upon request",
@@ -83,6 +88,20 @@ export function HotelWidget({ data }: HotelWidgetProps) {
           className="w-full h-full object-cover"
         />
       }
+      headerAction={
+        onToggleMap ? (
+          <Button
+            type="button"
+            variant={mapVisible ? "default" : "outline"}
+            size="sm"
+            className="h-7 rounded-lg px-2 text-[11px] font-bold"
+            onClick={onToggleMap}
+          >
+            <MapPin className="w-3 h-3 mr-1" />
+            {mapVisible ? "Hide map" : "Show map"}
+          </Button>
+        ) : undefined
+      }
       items={allHotels}
       renderCard={(hotel: any, index: number, onClick: () => void) => (
         <div
@@ -95,11 +114,13 @@ export function HotelWidget({ data }: HotelWidgetProps) {
         >
           <div className="relative h-[240px] w-full bg-slate-100">
             <img
-              src={
-                hotel.thumbnail ||
-                "https://images.unsplash.com/photo-1566073771259-6a8506099945?w=800&q=80"
-              }
+              src={getPlaceImage(hotel.thumbnail, "/images/plans/alternative-hotel.jpg")}
               alt={hotel.name}
+              onError={(e) => {
+                const img = e.currentTarget;
+                img.onerror = null;
+                img.src = "/images/plans/alternative-place.jpg";
+              }}
               className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
@@ -129,13 +150,15 @@ export function HotelWidget({ data }: HotelWidgetProps) {
       onDetailClose={() => clearPlaceSelection()}
       renderDetail={(selectedHotel: any) => (
         <>
-          <div className="w-full sm:w-3/5 md:w-[60%] relative h-64 sm:h-auto min-h-[300px] shrink-0">
+          <div className="w-full sm:w-[40%] relative h-48 sm:h-auto min-h-[200px] sm:min-h-[300px] shrink-0">
             <img
-              src={
-                selectedHotel.thumbnail ||
-                "https://images.unsplash.com/photo-1566073771259-6a8506099945?w=800&q=80"
-              }
+              src={getPlaceImage(selectedHotel.thumbnail, "/images/plans/alternative-hotel.jpg")}
               alt={selectedHotel.name}
+              onError={(e) => {
+                const img = e.currentTarget;
+                img.onerror = null;
+                img.src = "/images/plans/alternative-place.jpg";
+              }}
               className="absolute inset-0 w-full h-full object-cover"
             />
           </div>
